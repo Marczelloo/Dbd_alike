@@ -3484,29 +3484,115 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         {
             m_ui.Label("Read-only on clients. Host values are authoritative.", m_ui.Theme().colorDanger);
         }
-        if (allowEdit)
+        auto& t = m_gameplayEditing;
+        m_ui.Label("Config Actions", m_ui.Theme().colorAccent);
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("apply_gameplay_btn", "Apply", allowEdit, &m_ui.Theme().colorSuccess, 165.0F))
         {
-            auto& t = m_gameplayEditing;
-            m_ui.SliderFloat("gp_surv_walk", "Survivor Walk", &t.survivorWalkSpeed, 0.5F, 8.0F, "%.2f");
-            m_ui.SliderFloat("gp_surv_sprint", "Survivor Sprint", &t.survivorSprintSpeed, 0.5F, 10.0F, "%.2f");
-            m_ui.SliderFloat("gp_killer_speed", "Killer Speed", &t.killerMoveSpeed, 0.5F, 12.0F, "%.2f");
-            m_ui.SliderFloat("gp_terror", "Terror Radius", &t.terrorRadiusMeters, 4.0F, 80.0F, "%.1f");
-            m_ui.SliderFloat("gp_slow_vault", "Slow Vault", &t.vaultSlowTime, 0.2F, 1.6F, "%.2f");
-            m_ui.SliderFloat("gp_medium_vault", "Medium Vault", &t.vaultMediumTime, 0.2F, 1.2F, "%.2f");
-            m_ui.SliderFloat("gp_fast_vault", "Fast Vault", &t.vaultFastTime, 0.15F, 1.0F, "%.2f");
-            if (m_ui.Button("apply_gameplay_btn", "Apply Gameplay", true, &m_ui.Theme().colorSuccess))
+            ApplyGameplaySettings(m_gameplayEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
             {
-                ApplyGameplaySettings(m_gameplayEditing, false);
-                if (m_multiplayerMode == MultiplayerMode::Host)
+                SendGameplayTuningToClient();
+            }
+            m_gameplayStatus = "Gameplay tuning applied.";
+        }
+        if (m_ui.Button("save_gameplay_btn", "Save To File", allowEdit, nullptr, 165.0F))
+        {
+            const auto previousApplied = m_gameplayApplied;
+            m_gameplayApplied = m_gameplayEditing;
+            const bool saved = SaveGameplayConfig();
+            m_gameplayApplied = previousApplied;
+            m_gameplayStatus = saved ? "Saved to config/gameplay_tuning.json." : "Failed to save gameplay tuning file.";
+        }
+        if (m_ui.Button("load_gameplay_btn", "Load From File", true, nullptr, 165.0F))
+        {
+            if (LoadGameplayConfig())
+            {
+                if (allowEdit)
                 {
-                    SendGameplayTuningToClient();
+                    ApplyGameplaySettings(m_gameplayEditing, false);
+                    if (m_multiplayerMode == MultiplayerMode::Host)
+                    {
+                        SendGameplayTuningToClient();
+                    }
                 }
-                m_gameplayStatus = SaveGameplayConfig() ? "Gameplay tuning saved." : "Gameplay tuning save failed.";
+                m_gameplayStatus = allowEdit ? "Loaded from file and applied." : "Loaded local values (client read-only).";
             }
-            if (!m_gameplayStatus.empty())
+            else
             {
-                m_ui.Label(m_gameplayStatus, m_ui.Theme().colorTextMuted);
+                m_gameplayStatus = "Failed to load config/gameplay_tuning.json.";
             }
+        }
+        if (m_ui.Button("defaults_gameplay_btn", "Set Defaults", allowEdit, &m_ui.Theme().colorDanger, 165.0F))
+        {
+            m_gameplayEditing = game::gameplay::GameplaySystems::GameplayTuning{};
+            ApplyGameplaySettings(m_gameplayEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendGameplayTuningToClient();
+            }
+            m_gameplayStatus = "Defaults applied. Use Save To File to persist.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("Movement", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_surv_walk", "Survivor Walk", &t.survivorWalkSpeed, 0.5F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_surv_sprint", "Survivor Sprint", &t.survivorSprintSpeed, 0.5F, 10.0F, "%.2f");
+        m_ui.SliderFloat("gp_surv_crouch", "Survivor Crouch", &t.survivorCrouchSpeed, 0.1F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_surv_crawl", "Survivor Crawl", &t.survivorCrawlSpeed, 0.1F, 3.0F, "%.2f");
+        m_ui.SliderFloat("gp_killer_speed", "Killer Speed", &t.killerMoveSpeed, 0.5F, 12.0F, "%.2f");
+
+        m_ui.Label("Capsules", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_surv_radius", "Survivor Radius", &t.survivorCapsuleRadius, 0.2F, 1.2F, "%.2f");
+        m_ui.SliderFloat("gp_surv_height", "Survivor Height", &t.survivorCapsuleHeight, 0.9F, 3.0F, "%.2f");
+        m_ui.SliderFloat("gp_killer_radius", "Killer Radius", &t.killerCapsuleRadius, 0.2F, 1.2F, "%.2f");
+        m_ui.SliderFloat("gp_killer_height", "Killer Height", &t.killerCapsuleHeight, 0.9F, 3.0F, "%.2f");
+
+        m_ui.Label("Vault + Terror Radius", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_terror", "Terror Radius", &t.terrorRadiusMeters, 4.0F, 80.0F, "%.1f");
+        m_ui.SliderFloat("gp_terror_chase", "Terror Radius Chase", &t.terrorRadiusChaseMeters, 4.0F, 96.0F, "%.1f");
+        m_ui.SliderFloat("gp_slow_vault", "Slow Vault", &t.vaultSlowTime, 0.2F, 1.6F, "%.2f");
+        m_ui.SliderFloat("gp_medium_vault", "Medium Vault", &t.vaultMediumTime, 0.2F, 1.2F, "%.2f");
+        m_ui.SliderFloat("gp_fast_vault", "Fast Vault", &t.vaultFastTime, 0.15F, 1.0F, "%.2f");
+        m_ui.SliderFloat("gp_fast_vault_dot", "Fast Vault Dot", &t.fastVaultDotThreshold, 0.3F, 0.99F, "%.2f");
+        m_ui.SliderFloat("gp_fast_vault_speed", "Fast Vault Speed Mult", &t.fastVaultSpeedMultiplier, 0.3F, 1.2F, "%.2f");
+        m_ui.SliderFloat("gp_fast_vault_runup", "Fast Vault Runup", &t.fastVaultMinRunup, 0.1F, 4.0F, "%.2f");
+
+        m_ui.Label("Combat", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_short_range", "Short Attack Range", &t.shortAttackRange, 0.5F, 6.0F, "%.2f");
+        m_ui.SliderFloat("gp_short_angle", "Short Attack Angle", &t.shortAttackAngleDegrees, 15.0F, 170.0F, "%.0f");
+        m_ui.SliderFloat("gp_lunge_hold_min", "Lunge Hold Min", &t.lungeHoldMinSeconds, 0.02F, 1.2F, "%.2f");
+        m_ui.SliderFloat("gp_lunge_duration", "Lunge Duration", &t.lungeDurationSeconds, 0.08F, 2.0F, "%.2f");
+        m_ui.SliderFloat("gp_lunge_recover", "Lunge Recover", &t.lungeRecoverSeconds, 0.1F, 3.0F, "%.2f");
+        m_ui.SliderFloat("gp_short_recover", "Short Recover", &t.shortRecoverSeconds, 0.05F, 2.0F, "%.2f");
+        m_ui.SliderFloat("gp_miss_recover", "Miss Recover", &t.missRecoverSeconds, 0.05F, 2.0F, "%.2f");
+        m_ui.SliderFloat("gp_lunge_speed_start", "Lunge Speed Start", &t.lungeSpeedStart, 1.0F, 20.0F, "%.2f");
+        m_ui.SliderFloat("gp_lunge_speed_end", "Lunge Speed End", &t.lungeSpeedEnd, 1.0F, 20.0F, "%.2f");
+
+        m_ui.Label("Healing + Skill Checks", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_heal_duration", "Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
+        m_ui.SliderFloat("gp_skillcheck_min", "Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
+        m_ui.SliderFloat("gp_skillcheck_max", "Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
+
+        m_ui.Label("Map Generation", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_weight_tl", "Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_jgl", "Weight Jungle Long", &t.weightJungleGymLong, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_jgs", "Weight Jungle Short", &t.weightJungleGymShort, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_shack", "Weight Shack", &t.weightShack, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_four", "Weight Four Lane", &t.weightFourLane, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_filla", "Weight Filler A", &t.weightFillerA, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderFloat("gp_weight_fillb", "Weight Filler B", &t.weightFillerB, 0.0F, 5.0F, "%.2f");
+        m_ui.SliderInt("gp_max_loops", "Max Loops", &t.maxLoopsPerMap, 0, 64);
+        m_ui.SliderFloat("gp_min_loop_dist", "Min Loop Distance Tiles", &t.minLoopDistanceTiles, 0.0F, 6.0F, "%.1f");
+
+        m_ui.Label("Networking", m_ui.Theme().colorAccent);
+        m_ui.SliderInt("gp_server_tick", "Server Tick Rate", &t.serverTickRate, 30, 60);
+        m_ui.SliderInt("gp_interp_ms", "Interpolation Buffer (ms)", &t.interpolationBufferMs, 50, 1000);
+
+        m_ui.Label("Tip: Apply for runtime changes, Save To File for persistence.", m_ui.Theme().colorTextMuted);
+        if (!m_gameplayStatus.empty())
+        {
+            m_ui.Label(m_gameplayStatus, m_ui.Theme().colorTextMuted);
         }
     }
 

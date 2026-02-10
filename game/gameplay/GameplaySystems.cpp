@@ -185,6 +185,11 @@ void GameplaySystems::CaptureInputFrame(
             command.lungeHeld = false;
             if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Hooked && controlsEnabled)
             {
+                const glm::vec2 mouseDelta = input.MouseDelta();
+                command.lookDelta += glm::vec2{mouseDelta.x, m_invertLookY ? -mouseDelta.y : mouseDelta.y};
+            }
+            if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Hooked && controlsEnabled)
+            {
                 command.interactPressed =
                     command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
                 command.jumpPressed = command.jumpPressed || input.IsKeyPressed(GLFW_KEY_SPACE);
@@ -206,11 +211,8 @@ void GameplaySystems::CaptureInputFrame(
         command.attackHeld = bindings.IsDown(input, engine::platform::InputAction::AttackShort) ||
                              bindings.IsDown(input, engine::platform::InputAction::AttackLunge);
         command.lungeHeld = bindings.IsDown(input, engine::platform::InputAction::AttackLunge);
-        command.lookDelta += input.MouseDelta();
-        if (m_invertLookY)
-        {
-            command.lookDelta.y = -command.lookDelta.y;
-        }
+        const glm::vec2 mouseDelta = input.MouseDelta();
+        command.lookDelta += glm::vec2{mouseDelta.x, m_invertLookY ? -mouseDelta.y : mouseDelta.y};
 
         command.interactPressed = command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
         command.jumpPressed = command.jumpPressed || input.IsKeyPressed(GLFW_KEY_SPACE);
@@ -315,7 +317,8 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
             inputLocked = true;
         }
 
-        if (!inputLocked && glm::length(command.lookDelta) > 1.0e-5F)
+        const bool allowHookLook = entity == m_survivor && m_survivorState == SurvivorHealthState::Hooked;
+        if ((!inputLocked || allowHookLook) && glm::length(command.lookDelta) > 1.0e-5F)
         {
             const float sensitivity = role == engine::scene::Role::Survivor ? m_survivorLookSensitivity : m_killerLookSensitivity;
             UpdateActorLook(entity, command.lookDelta, sensitivity);
@@ -576,39 +579,76 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
         }
     }
 
-    const bool showFpWeapon =
-        m_controlledRole == ControlledRole::Killer &&
-        ResolveCameraMode() == CameraMode::FirstPerson;
-    if (showFpWeapon)
+    const bool showFpWeapon = m_controlledRole == ControlledRole::Killer && ResolveCameraMode() == CameraMode::FirstPerson;
+    const auto killerTransformIt = transforms.find(m_killer);
+    if (showFpWeapon && m_cameraInitialized && killerTransformIt != transforms.end())
     {
-        const glm::vec3 up{0.0F, 1.0F, 0.0F};
-        glm::vec3 right = glm::cross(m_cameraForward, up);
+        const engine::scene::Transform& killerTransform = killerTransformIt->second;
+        const float killerYaw = killerTransform.rotationEuler.y;
+        const float killerPitch = killerTransform.rotationEuler.x;
+
+        glm::vec3 forward = ForwardFromYawPitch(killerYaw, killerPitch);
+        if (glm::length(forward) < 1.0e-5F)
+        {
+            forward = glm::vec3{0.0F, 0.0F, -1.0F};
+        }
+        forward = glm::normalize(forward);
+
+        glm::vec3 right = glm::cross(forward, glm::vec3{0.0F, 1.0F, 0.0F});
         if (glm::length(right) < 1.0e-5F)
         {
             right = glm::vec3{1.0F, 0.0F, 0.0F};
         }
         right = glm::normalize(right);
+        const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-        float attackAnim = 0.0F;
+        float attackForwardOffset = 0.0F;
+        float attackUpOffset = 0.0F;
+        float attackSideOffset = 0.0F;
+        float attackRollDegrees = 0.0F;
         if (m_killerAttackState == KillerAttackState::ChargingLunge)
         {
-            attackAnim = -0.08F * glm::clamp(m_killerLungeChargeSeconds / std::max(0.01F, m_killerLungeChargeMaxSeconds), 0.0F, 1.0F);
+            const float charge01 = glm::clamp(m_killerLungeChargeSeconds / std::max(0.01F, m_killerLungeChargeMaxSeconds), 0.0F, 1.0F);
+            attackForwardOffset = -0.03F * charge01;
+            attackUpOffset = -0.03F * charge01;
+            attackSideOffset = -0.02F * charge01;
+            attackRollDegrees = -8.0F * charge01;
         }
         else if (m_killerAttackState == KillerAttackState::Lunging)
         {
-            attackAnim = 0.16F;
+            attackForwardOffset = 0.18F;
+            attackUpOffset = -0.08F;
+            attackSideOffset = 0.02F;
+            attackRollDegrees = 18.0F;
         }
         else if (m_killerAttackState == KillerAttackState::Recovering)
         {
-            attackAnim = -0.05F;
+            attackForwardOffset = -0.04F;
+            attackUpOffset = -0.05F;
+            attackSideOffset = -0.01F;
+            attackRollDegrees = -10.0F;
         }
 
+        const float sideOffset = 0.23F;
+        const float forwardOffset = 0.42F;
+        const float downOffset = -0.22F;
         const glm::vec3 weaponCenter =
             m_cameraPosition +
-            m_cameraForward * (0.52F + attackAnim) +
-            right * 0.22F +
-            glm::vec3{0.0F, -0.18F, 0.0F};
-        renderer.DrawBox(weaponCenter, glm::vec3{0.08F, 0.08F, 0.24F}, glm::vec3{0.18F, 0.18F, 0.18F});
+            forward * (forwardOffset + attackForwardOffset) +
+            right * (sideOffset + attackSideOffset) +
+            up * (downOffset + attackUpOffset);
+
+        const glm::vec3 weaponRotationDegrees{
+            glm::degrees(killerPitch) - 12.0F,
+            180.0F - glm::degrees(killerYaw),
+            28.0F + attackRollDegrees,
+        };
+        renderer.DrawOrientedBox(
+            weaponCenter,
+            glm::vec3{0.07F, 0.05F, 0.24F},
+            weaponRotationDegrees,
+            glm::vec3{0.18F, 0.18F, 0.18F}
+        );
     }
 
     if (m_terrorRadiusVisible && m_killer != 0)
@@ -3055,6 +3095,12 @@ void GameplaySystems::UpdateCamera(float deltaSeconds)
         m_cameraPosition = desiredPosition;
         m_cameraTarget = desiredTarget;
         m_cameraInitialized = true;
+    }
+    else if (mode == CameraMode::FirstPerson)
+    {
+        // In first-person keep camera fully locked to actor look to avoid weapon/camera desync.
+        m_cameraPosition = desiredPosition;
+        m_cameraTarget = desiredTarget;
     }
     else
     {
