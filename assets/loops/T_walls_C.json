@@ -1,0 +1,139 @@
+{
+  "asset_version": 1,
+  "id": "T_walls_C",
+  "display_name": "T-Walls C",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [
+      -8.0,
+      0.0,
+      -8.0
+    ],
+    "max": [
+      8.0,
+      2.0,
+      8.0
+    ]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "bar_left",
+      "position": [
+        -1.25,
+        1.0,
+        -1.5
+      ],
+      "half_extents": [
+        3.25,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "bar_right",
+      "position": [
+        4.75,
+        1.0,
+        -1.5
+      ],
+      "half_extents": [
+        0.75,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "stem",
+      "position": [
+        0.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        2.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "window",
+      "name": "window",
+      "position": [
+        -2.0,
+        1.0,
+        -1.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "pallet",
+      "name": "pallet",
+      "position": [
+        3.0,
+        1.0,
+        -1.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "debris",
+      "position": [
+        -4.75,
+        1.0,
+        3.5
+      ],
+      "half_extents": [
+        0.75,
+        1.0,
+        1.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

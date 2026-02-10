@@ -1,0 +1,493 @@
+{
+  "asset_version": 1,
+  "name": "map_v2",
+  "grid": {
+    "width": 8,
+    "height": 8,
+    "tile_size": 16.0
+  },
+  "placements": [
+    {
+      "loop_id": "gym_box_A",
+      "tile": [
+        0,
+        0
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_A",
+      "tile": [
+        2,
+        0
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_A",
+      "tile": [
+        3,
+        0
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_A",
+      "tile": [
+        4,
+        0
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_B",
+      "tile": [
+        6,
+        0
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_A",
+      "tile": [
+        7,
+        0
+      ],
+      "rotation_degrees": 90,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_window_A",
+      "tile": [
+        0,
+        1
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "short_wall_A",
+      "tile": [
+        1,
+        1
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_pallet_A",
+      "tile": [
+        3,
+        1
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "short_wall_B",
+      "tile": [
+        5,
+        1
+      ],
+      "rotation_degrees": 90,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_window_B",
+      "tile": [
+        7,
+        1
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_C",
+      "tile": [
+        1,
+        2
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_B",
+      "tile": [
+        2,
+        2
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_A",
+      "tile": [
+        5,
+        2
+      ],
+      "rotation_degrees": 90,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_B",
+      "tile": [
+        6,
+        2
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_B",
+      "tile": [
+        0,
+        3
+      ],
+      "rotation_degrees": 90,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "gym_box_B",
+      "tile": [
+        3,
+        3
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_pallet_B",
+      "tile": [
+        7,
+        3
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_pallet_A",
+      "tile": [
+        0,
+        4
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "gym_box_A",
+      "tile": [
+        4,
+        4
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_A",
+      "tile": [
+        7,
+        4
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_A",
+      "tile": [
+        1,
+        5
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_B",
+      "tile": [
+        2,
+        5
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_A",
+      "tile": [
+        5,
+        5
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_A",
+      "tile": [
+        6,
+        5
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_window_C",
+      "tile": [
+        0,
+        6
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "short_wall_A",
+      "tile": [
+        2,
+        6
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_pallet_B",
+      "tile": [
+        4,
+        6
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "short_wall_B",
+      "tile": [
+        6,
+        6
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "L_wall_window_A",
+      "tile": [
+        7,
+        6
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_B",
+      "tile": [
+        0,
+        7
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_C",
+      "tile": [
+        1,
+        7
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "debris_pile_A",
+      "tile": [
+        3,
+        7
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "long_wall_B",
+      "tile": [
+        4,
+        7
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "T_walls_B",
+      "tile": [
+        5,
+        7
+      ],
+      "rotation_degrees": 270,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "gym_box_B",
+      "tile": [
+        7,
+        7
+      ],
+      "rotation_degrees": 180,
+      "transform_locked": false
+    }
+  ],
+  "props": [
+    {
+      "type": "rock",
+      "position": [
+        8.0,
+        0.85,
+        8.0
+      ],
+      "half_extents": [
+        0.9,
+        0.9,
+        0.9
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "rock",
+      "position": [
+        -24.0,
+        0.85,
+        -8.0
+      ],
+      "half_extents": [
+        1.1,
+        0.8,
+        1.0
+      ],
+      "yaw_degrees": 30.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "tree",
+      "position": [
+        24.0,
+        0.85,
+        24.0
+      ],
+      "half_extents": [
+        0.6,
+        1.6,
+        0.6
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "tree",
+      "position": [
+        -40.0,
+        0.85,
+        32.0
+      ],
+      "half_extents": [
+        0.6,
+        1.6,
+        0.6
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "obstacle",
+      "position": [
+        32.0,
+        0.85,
+        -24.0
+      ],
+      "half_extents": [
+        1.2,
+        1.0,
+        0.7
+      ],
+      "yaw_degrees": 45.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "tree",
+      "position": [
+        -8.0,
+        0.85,
+        -24.0
+      ],
+      "half_extents": [
+        0.6,
+        1.6,
+        0.6
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "rock",
+      "position": [
+        40.0,
+        0.85,
+        -40.0
+      ],
+      "half_extents": [
+        0.8,
+        0.7,
+        0.9
+      ],
+      "yaw_degrees": 15.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    },
+    {
+      "type": "obstacle",
+      "position": [
+        -32.0,
+        0.85,
+        8.0
+      ],
+      "half_extents": [
+        1.0,
+        0.8,
+        0.6
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false
+    }
+  ],
+  "spawns": {
+    "survivor": [
+      -48.0,
+      1.05,
+      -48.0
+    ],
+    "killer": [
+      48.0,
+      1.05,
+      48.0
+    ]
+  }
+}

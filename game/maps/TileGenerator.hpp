@@ -48,6 +48,7 @@ class TileGenerator
 public:
     struct GenerationSettings
     {
+        // --- Archetype weights (0 = disabled) ---
         float weightTLWalls = 1.0F;
         float weightJungleGymLong = 1.0F;
         float weightJungleGymShort = 1.0F;
@@ -55,8 +56,22 @@ public:
         float weightFourLane = 1.0F;
         float weightFillerA = 1.0F;
         float weightFillerB = 1.0F;
+
+        // --- New v2 loop types ---
+        float weightLongWall = 1.0F;       // Single long wall with window
+        float weightShortWall = 0.8F;      // Single short wall with pallet (unsafe)
+        float weightLWallWindow = 1.2F;    // L-shaped walls, window on long side
+        float weightLWallPallet = 1.0F;    // L-shaped walls, pallet on short side
+        float weightTWalls = 0.9F;         // T-shaped intersecting walls
+        float weightGymBox = 1.1F;         // Rectangular gym enclosure (window + pallet)
+        float weightDebrisPile = 0.6F;     // Cluster of small solids with line-of-sight breaks
+
+        // --- Constraints ---
         int maxLoops = 40;
         float minLoopDistanceTiles = 2.0F;
+        int maxSafePallets = 12;        // Limit strong pallets for balance
+        int maxDeadzoneTiles = 3;       // Max consecutive tiles without a loop before forcing one
+        bool edgeBiasLoops = true;      // Prefer loops near map edges to reduce deadzones
     };
 
     GeneratedMap GenerateTestMap() const;

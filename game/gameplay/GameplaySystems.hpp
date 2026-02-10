@@ -163,8 +163,19 @@ public:
         float weightFourLane = 1.0F;
         float weightFillerA = 1.0F;
         float weightFillerB = 1.0F;
+        // v2 loop types
+        float weightLongWall = 1.0F;
+        float weightShortWall = 0.8F;
+        float weightLWallWindow = 1.2F;
+        float weightLWallPallet = 1.0F;
+        float weightTWalls = 0.9F;
+        float weightGymBox = 1.1F;
+        float weightDebrisPile = 0.6F;
         int maxLoopsPerMap = 40;
         float minLoopDistanceTiles = 2.0F;
+        int maxSafePallets = 12;
+        int maxDeadzoneTiles = 3;
+        bool edgeBiasLoops = true;
 
         int serverTickRate = 60;
         int interpolationBufferMs = 350;

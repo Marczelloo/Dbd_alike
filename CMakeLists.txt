@@ -113,17 +113,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(asym_horror PRIVATE ws2_32)
-endif()
-
-if(MSVC)
-    # Copy discovered runtime DLLs (works for MSVC and many MinGW setups).
-    add_custom_command(TARGET asym_horror POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_RUNTIME_DLLS:asym_horror>
-            $<TARGET_FILE_DIR:asym_horror>
-        COMMAND_EXPAND_LISTS
-    )
+    target_link_libraries(asym_horror PRIVATE ws2_32 winmm)
 endif()
 
 if(MINGW)

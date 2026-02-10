@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "engine/core/App.hpp"
 
 #include <algorithm>
@@ -1514,8 +1515,18 @@ bool App::SerializeGameplayTuning(
     AppendValue(outBuffer, tuning.weightFourLane);
     AppendValue(outBuffer, tuning.weightFillerA);
     AppendValue(outBuffer, tuning.weightFillerB);
+    AppendValue(outBuffer, tuning.weightLongWall);
+    AppendValue(outBuffer, tuning.weightShortWall);
+    AppendValue(outBuffer, tuning.weightLWallWindow);
+    AppendValue(outBuffer, tuning.weightLWallPallet);
+    AppendValue(outBuffer, tuning.weightTWalls);
+    AppendValue(outBuffer, tuning.weightGymBox);
+    AppendValue(outBuffer, tuning.weightDebrisPile);
     AppendValue(outBuffer, tuning.maxLoopsPerMap);
     AppendValue(outBuffer, tuning.minLoopDistanceTiles);
+    AppendValue(outBuffer, tuning.maxSafePallets);
+    AppendValue(outBuffer, tuning.maxDeadzoneTiles);
+    AppendValue(outBuffer, static_cast<std::uint8_t>(tuning.edgeBiasLoops ? 1 : 0));
     AppendValue(outBuffer, tuning.serverTickRate);
     AppendValue(outBuffer, tuning.interpolationBufferMs);
     return true;
@@ -1570,8 +1581,23 @@ bool App::DeserializeGameplayTuning(
            ReadValue(buffer, offset, outTuning.weightFourLane) &&
            ReadValue(buffer, offset, outTuning.weightFillerA) &&
            ReadValue(buffer, offset, outTuning.weightFillerB) &&
+           ReadValue(buffer, offset, outTuning.weightLongWall) &&
+           ReadValue(buffer, offset, outTuning.weightShortWall) &&
+           ReadValue(buffer, offset, outTuning.weightLWallWindow) &&
+           ReadValue(buffer, offset, outTuning.weightLWallPallet) &&
+           ReadValue(buffer, offset, outTuning.weightTWalls) &&
+           ReadValue(buffer, offset, outTuning.weightGymBox) &&
+           ReadValue(buffer, offset, outTuning.weightDebrisPile) &&
            ReadValue(buffer, offset, outTuning.maxLoopsPerMap) &&
            ReadValue(buffer, offset, outTuning.minLoopDistanceTiles) &&
+           [&]() -> bool {
+               if (!ReadValue(buffer, offset, outTuning.maxSafePallets)) return false;
+               if (!ReadValue(buffer, offset, outTuning.maxDeadzoneTiles)) return false;
+               std::uint8_t edgeBias = 0;
+               if (!ReadValue(buffer, offset, edgeBias)) return false;
+               outTuning.edgeBiasLoops = (edgeBias != 0);
+               return true;
+           }() &&
            ReadValue(buffer, offset, outTuning.serverTickRate) &&
            ReadValue(buffer, offset, outTuning.interpolationBufferMs);
 }
@@ -4280,6 +4306,7 @@ void App::DrawSettingsUi(bool* closeSettings)
                 ImGui::SliderFloat("Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
                 ImGui::Separator();
                 ImGui::TextUnformatted("Map Generation Weights");
+                ImGui::TextUnformatted("  Classic Loops:");
                 ImGui::SliderFloat("Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
                 ImGui::SliderFloat("Weight Jungle Long", &t.weightJungleGymLong, 0.0F, 5.0F, "%.2f");
                 ImGui::SliderFloat("Weight Jungle Short", &t.weightJungleGymShort, 0.0F, 5.0F, "%.2f");
@@ -4287,8 +4314,22 @@ void App::DrawSettingsUi(bool* closeSettings)
                 ImGui::SliderFloat("Weight Four Lane", &t.weightFourLane, 0.0F, 5.0F, "%.2f");
                 ImGui::SliderFloat("Weight Filler A", &t.weightFillerA, 0.0F, 5.0F, "%.2f");
                 ImGui::SliderFloat("Weight Filler B", &t.weightFillerB, 0.0F, 5.0F, "%.2f");
+                ImGui::Separator();
+                ImGui::TextUnformatted("  v2 Loop Types:");
+                ImGui::SliderFloat("Weight Long Wall", &t.weightLongWall, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight Short Wall", &t.weightShortWall, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight L-Wall Window", &t.weightLWallWindow, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight L-Wall Pallet", &t.weightLWallPallet, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight T-Walls", &t.weightTWalls, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight Gym Box", &t.weightGymBox, 0.0F, 5.0F, "%.2f");
+                ImGui::SliderFloat("Weight Debris Pile", &t.weightDebrisPile, 0.0F, 5.0F, "%.2f");
+                ImGui::Separator();
+                ImGui::TextUnformatted("  Constraints:");
                 ImGui::SliderInt("Max Loops", &t.maxLoopsPerMap, 0, 64);
                 ImGui::SliderFloat("Min Loop Distance Tiles", &t.minLoopDistanceTiles, 0.0F, 6.0F, "%.1f");
+                ImGui::SliderInt("Max Safe Pallets", &t.maxSafePallets, 0, 64);
+                ImGui::SliderInt("Max Deadzone Tiles", &t.maxDeadzoneTiles, 1, 8);
+                ImGui::Checkbox("Edge Bias Loops", &t.edgeBiasLoops);
                 ImGui::Separator();
                 ImGui::TextUnformatted("Networking");
                 ImGui::SliderInt("Server Tick Rate", &t.serverTickRate, 30, 60);
