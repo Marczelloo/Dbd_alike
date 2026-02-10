@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "hud_scale": 1.0,
+  "top_left_offset": [18, 18],
+  "top_right_offset": [18, 18],
+  "bottom_center_offset": [0, 110],
+  "message_offset": [0, 72]
+}

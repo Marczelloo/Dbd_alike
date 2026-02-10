@@ -1,0 +1,22 @@
+{
+  "asset_version": 1,
+  "base_color": [
+    0.28923264145851135,
+    0.8235294222831726,
+    0.0968858078122139,
+    1.0
+  ],
+  "display_name": "test",
+  "id": "test",
+  "params": {
+    "emissive_strength": 0.3199999928474426,
+    "metallic": 1.0,
+    "roughness": 1.0
+  },
+  "shader_type": "lit",
+  "textures": {
+    "albedo": "",
+    "normal": "",
+    "orm": ""
+  }
+}

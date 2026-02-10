@@ -1,0 +1,139 @@
+{
+  "asset_version": 1,
+  "bounds": {
+    "max": [
+      8.399999618530273,
+      2.0,
+      5.199999809265137
+    ],
+    "min": [
+      -8.050000190734863,
+      0.0,
+      -4.199999809265137
+    ]
+  },
+  "display_name": "TL",
+  "elements": [
+    {
+      "half_extents": [
+        4.0,
+        1.0,
+        0.20000000298023224
+      ],
+      "marker_tag": "",
+      "name": "wall",
+      "pitch_degrees": 0.0,
+      "position": [
+        -2.0,
+        1.0,
+        5.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "wall",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        2.0500001907348633,
+        1.0,
+        0.20000000298023224
+      ],
+      "marker_tag": "",
+      "name": "wall",
+      "pitch_degrees": 0.0,
+      "position": [
+        -6.0,
+        1.0,
+        3.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "wall",
+      "yaw_degrees": -90.0
+    },
+    {
+      "half_extents": [
+        0.800000011920929,
+        0.8999999761581421,
+        0.20000000298023224
+      ],
+      "marker_tag": "",
+      "name": "window",
+      "pitch_degrees": 0.0,
+      "position": [
+        -4.0,
+        1.0,
+        5.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "window",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        4.84999942779541,
+        1.0,
+        0.20000000298023224
+      ],
+      "marker_tag": "",
+      "name": "w1",
+      "pitch_degrees": 0.0,
+      "position": [
+        1.0,
+        1.0,
+        -4.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "wall",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        2.3999998569488525,
+        1.0,
+        0.19999995827674866
+      ],
+      "marker_tag": "",
+      "name": "wall",
+      "pitch_degrees": 0.0,
+      "position": [
+        6.0,
+        1.0,
+        -4.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "wall",
+      "yaw_degrees": -90.0
+    },
+    {
+      "half_extents": [
+        0.800000011920929,
+        0.8999999761581421,
+        0.20000000298023224
+      ],
+      "marker_tag": "",
+      "name": "window",
+      "pitch_degrees": 0.0,
+      "position": [
+        3.0,
+        1.0,
+        -4.0
+      ],
+      "roll_degrees": 0.0,
+      "transform_locked": false,
+      "type": "window",
+      "yaw_degrees": 0.0
+    }
+  ],
+  "footprint": {
+    "height": 1,
+    "width": 2
+  },
+  "id": "TL_LOOP",
+  "manual_bounds": false,
+  "manual_footprint": false
+}

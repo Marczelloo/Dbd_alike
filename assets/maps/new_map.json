@@ -1,0 +1,115 @@
+{
+  "asset_version": 1,
+  "grid": {
+    "height": 64,
+    "tile_size": 16.0,
+    "width": 64
+  },
+  "name": "new_map",
+  "placements": [
+    {
+      "loop_id": "TL_LOOP",
+      "rotation_degrees": 0,
+      "tile": [
+        33,
+        31
+      ],
+      "transform_locked": false
+    },
+    {
+      "loop_id": "TL_LOOP",
+      "rotation_degrees": 0,
+      "tile": [
+        33,
+        29
+      ],
+      "transform_locked": false
+    }
+  ],
+  "props": [
+    {
+      "half_extents": [
+        0.6000000238418579,
+        1.600000023841858,
+        0.6000000238418579
+      ],
+      "pitch_degrees": 0.0,
+      "position": [
+        10.016048431396484,
+        0.8500000238418579,
+        -5.622964859008789
+      ],
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false,
+      "type": "tree",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "pitch_degrees": 0.0,
+      "position": [
+        5.577142715454102,
+        0.8500000238418579,
+        7.142554759979248
+      ],
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false,
+      "type": "rock",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        1.2000000476837158,
+        1.0,
+        0.699999988079071
+      ],
+      "pitch_degrees": 0.0,
+      "position": [
+        21.688705444335938,
+        0.8500000238418579,
+        0.025707244873046875
+      ],
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false,
+      "type": "obstacle",
+      "yaw_degrees": 0.0
+    },
+    {
+      "half_extents": [
+        1.2000000476837158,
+        1.0,
+        0.699999988079071
+      ],
+      "pitch_degrees": 0.0,
+      "position": [
+        22.511905670166016,
+        0.8500000238418579,
+        -11.519491195678711
+      ],
+      "roll_degrees": 0.0,
+      "solid": true,
+      "transform_locked": false,
+      "type": "obstacle",
+      "yaw_degrees": 0.0
+    }
+  ],
+  "spawns": {
+    "killer": [
+      12.0,
+      1.0499999523162842,
+      12.0
+    ],
+    "survivor": [
+      -12.0,
+      1.0499999523162842,
+      -12.0
+    ]
+  }
+}

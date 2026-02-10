@@ -1,0 +1,116 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include <glm/vec3.hpp>
+
+namespace engine::scene
+{
+using Entity = std::uint32_t;
+
+enum class Role
+{
+    Survivor,
+    Killer
+};
+
+enum class PalletState
+{
+    Standing,
+    Dropped,
+    Broken
+};
+
+struct Transform
+{
+    glm::vec3 position{0.0F, 0.0F, 0.0F};
+    glm::vec3 rotationEuler{0.0F, 0.0F, 0.0F};
+    glm::vec3 scale{1.0F, 1.0F, 1.0F};
+    glm::vec3 forward{0.0F, 0.0F, -1.0F};
+};
+
+struct ActorComponent
+{
+    Role role = Role::Survivor;
+    float walkSpeed = 4.0F;
+    float sprintSpeed = 6.0F;
+    float capsuleRadius = 0.45F;
+    float capsuleHeight = 1.8F;
+    float stepHeight = 0.45F;
+    float eyeHeight = 1.55F;
+    bool sprinting = false;
+    float forwardRunupDistance = 0.0F;
+    bool jumpEnabled = false;
+    float jumpVelocity = 6.0F;
+    bool collisionEnabled = true;
+    bool noclipEnabled = false;
+    bool grounded = false;
+    glm::vec3 velocity{0.0F, 0.0F, 0.0F};
+    glm::vec3 lastCollisionNormal{0.0F, 1.0F, 0.0F};
+    float lastPenetrationDepth = 0.0F;
+    bool vaulting = false;
+    float vaultTimer = 0.0F;
+    float vaultDuration = 0.35F;
+    float vaultCooldown = 0.0F;
+    glm::vec3 vaultStart{0.0F};
+    glm::vec3 vaultEnd{0.0F};
+    float vaultArcHeight = 0.55F;
+    std::string lastVaultType = "None";
+    float stunTimer = 0.0F;
+    bool carried = false;
+    bool crouching = false;
+    bool crawling = false;
+};
+
+struct StaticBoxComponent
+{
+    glm::vec3 halfExtents{0.5F};
+    bool solid = true;
+};
+
+struct WindowComponent
+{
+    glm::vec3 halfExtents{0.7F, 1.0F, 0.1F};
+    glm::vec3 normal{0.0F, 0.0F, 1.0F};
+    float survivorVaultTime = 0.35F;
+    float killerVaultMultiplier = 1.6F;
+    bool killerCanVault = true;
+};
+
+struct PalletComponent
+{
+    glm::vec3 halfExtents{0.9F, 0.6F, 0.18F};
+    glm::vec3 standingHalfExtents{0.24F, 1.08F, 1.1F};
+    glm::vec3 droppedHalfExtents{1.1F, 0.58F, 0.34F};
+    float standingCenterY = 1.08F;
+    float droppedCenterY = 0.58F;
+    PalletState state = PalletState::Standing;
+    float breakTimer = 0.0F;
+    float breakDuration = 1.6F;
+    float stunDuration = 1.6F;
+};
+
+struct HookComponent
+{
+    glm::vec3 halfExtents{0.3F, 1.1F, 0.3F};
+    bool occupied = false;
+};
+
+struct GeneratorComponent
+{
+    glm::vec3 halfExtents{0.7F, 0.7F, 0.7F};
+    float progress = 0.0F;
+    bool completed = false;
+};
+
+struct DebugColorComponent
+{
+    glm::vec3 color{1.0F, 1.0F, 1.0F};
+};
+
+struct NameComponent
+{
+    std::string name;
+};
+} // namespace engine::scene

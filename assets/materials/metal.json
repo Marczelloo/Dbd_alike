@@ -1,0 +1,22 @@
+{
+  "asset_version": 1,
+  "base_color": [
+    0.5286908745765686,
+    0.5362240672111511,
+    0.5588235259056091,
+    1.0
+  ],
+  "display_name": "metal",
+  "id": "metal",
+  "params": {
+    "emissive_strength": 0.49000000953674316,
+    "metallic": 1.0,
+    "roughness": 0.1599999964237213
+  },
+  "shader_type": "lit",
+  "textures": {
+    "albedo": "",
+    "normal": "",
+    "orm": ""
+  }
+}

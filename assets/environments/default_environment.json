@@ -1,0 +1,54 @@
+{
+  "asset_version": 1,
+  "clouds": {
+    "coverage": 0.25,
+    "density": 0.44999998807907104,
+    "enabled": true,
+    "speed": 0.25
+  },
+  "directional_light": {
+    "color": [
+      1.0,
+      0.9700000286102295,
+      0.8999999761581421
+    ],
+    "direction": [
+      0.44999998807907104,
+      1.0,
+      0.30000001192092896
+    ],
+    "intensity": 1.0
+  },
+  "display_name": "Default Environment",
+  "fog": {
+    "color": [
+      0.550000011920929,
+      0.6200000047683716,
+      0.699999988079071
+    ],
+    "density": 0.012000000104308128,
+    "enabled": true,
+    "end": 120.0,
+    "start": 20.0
+  },
+  "graphics": {
+    "bloom": true,
+    "exposure": 1.7000000476837158,
+    "shadow_distance": 80.0,
+    "shadow_quality": 1,
+    "tone_mapping": true
+  },
+  "id": "default_environment",
+  "sky": {
+    "bottom_color": [
+      0.10999999940395355,
+      0.14000000059604645,
+      0.18000000715255737
+    ],
+    "top_color": [
+      0.4399999976158142,
+      0.5799999833106995,
+      0.7799999713897705
+    ]
+  }
+}
