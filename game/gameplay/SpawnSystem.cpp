@@ -460,29 +460,55 @@ std::vector<SpawnPoint> SpawnCalculator::SelectSplitSpawns(
     std::mt19937& rng
 ) const
 {
-    // Shroud of Separation: maximize distances between survivors
+    // Shroud of Separation: MAXIMIZE distances between survivors
+    // Each survivor should be as far as possible from all others
+    // This is the opposite of clustered - we want maximum entropy
+    
     std::vector<SpawnPoint> result;
     std::vector<SpawnPoint> remaining = candidateSpawns;
 
-    // Greedy algorithm: pick furthest from previously selected
+    // Greedy algorithm: each pick maximizes minimum distance to already selected
     for (int i = 0; i < 4 && !remaining.empty(); ++i)
     {
         SpawnPoint bestSpawn = remaining[0];
-        float bestScore = 0.0F;
+        float bestScore = std::numeric_limits<float>::lowest();
 
         for (const auto& candidate : remaining)
         {
             float score = 0.0F;
+            float minDistanceToSelected = std::numeric_limits<float>::max();
 
-            // Distance to killer (prefer far)
-            float distToKiller = Distance(candidate.position, killerSpawn.position);
-            score += distToKiller * 0.3F;
-
-            // Distance from already selected survivors (maximize)
-            for (const auto& selected : result)
+            // Primary: maximize MINIMUM distance to any already selected survivor
+            // This ensures we're not just adding far points, but spreading evenly
+            if (!result.empty())
             {
-                float distFromSelected = Distance(candidate.position, selected.position);
-                score += distFromSelected * 2.0F;
+                for (const auto& selected : result)
+                {
+                    float dist = Distance(candidate.position, selected.position);
+                    minDistanceToSelected = std::min(minDistanceToSelected, dist);
+                }
+                // Higher score for larger minimum distance (the key metric)
+                score += minDistanceToSelected * 5.0F; // Strong weight on spreading
+            }
+            else
+            {
+                // First survivor: prefer far from killer
+                float distToKiller = Distance(candidate.position, killerSpawn.position);
+                score += distToKiller * 2.0F;
+            }
+
+            // Secondary: prefer moderate distance to killer (20-45m)
+            float distToKiller = Distance(candidate.position, killerSpawn.position);
+            if (distToKiller >= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MIN &&
+                distToKiller <= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MAX)
+            {
+                score += 15.0F; // Bonus for ideal killer distance
+            }
+
+            // Tertiary: small bonus for being near edge (more spread potential)
+            if (candidate.position.length() > 20.0F)
+            {
+                score += 5.0F;
             }
 
             if (score > bestScore)
@@ -562,13 +588,24 @@ std::vector<SpawnPoint> SpawnCalculator::SelectSpreadSpawns(
     std::mt19937& rng
 ) const
 {
-    // Pre-9.0.0 behavior: more distributed but still generator-linked
-    // Survivors spread across different generator regions
+    // Pre-9.0.0 behavior: survivors spread across different generator regions
+    // Unlike Split (which maximizes entropy), Spread focuses on GEN distribution
+    // Each survivor should be near a DIFFERENT generator when possible
     
     std::vector<SpawnPoint> result;
     std::vector<SpawnPoint> remaining = candidateSpawns;
 
-    // Prioritize spawns near different generators
+    // Sort generators by distance from killer (furthest first)
+    // This helps prioritize "2nd furthest gen" heuristic
+    std::vector<std::pair<float, size_t>> sortedGens;
+    for (size_t i = 0; i < generators.size(); ++i)
+    {
+        float dist = Distance(generators[i].position, killerSpawn.position);
+        sortedGens.push_back({dist, i});
+    }
+    std::sort(sortedGens.begin(), sortedGens.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+
     std::vector<bool> genUsed(generators.size(), false);
 
     for (int i = 0; i < 4 && !remaining.empty(); ++i)
@@ -577,14 +614,13 @@ std::vector<SpawnPoint> SpawnCalculator::SelectSpreadSpawns(
         float bestScore = -1.0F;
         int bestGenIndex = -1;
 
-        for (size_t j = 0; j < remaining.size(); ++j)
+        for (const auto& candidate : remaining)
         {
-            const auto& candidate = remaining[j];
+            float score = 0.0F;
+            int closestGenIndex = -1;
+            float minGenDist = std::numeric_limits<float>::max();
             
             // Find closest unused generator
-            float minGenDist = std::numeric_limits<float>::max();
-            int closestGenIndex = -1;
-            
             for (size_t g = 0; g < generators.size(); ++g)
             {
                 if (genUsed[g]) continue;
@@ -597,18 +633,56 @@ std::vector<SpawnPoint> SpawnCalculator::SelectSpreadSpawns(
                 }
             }
 
-            // Score: prefer close to unused generators, far from killer
-            float distToKiller = Distance(candidate.position, killerSpawn.position);
-            float score = distToKiller * 0.5F;
-
+            // PRIMARY: Proximity to unused generators (Spread = gen-linked)
             if (closestGenIndex >= 0)
             {
-                score += (100.0F - minGenDist) * 2.0F; // Prefer near unused generators
+                // Strong bonus for being near an unused generator
+                if (minGenDist < SpawnConstants::GEN_PROXIMITY_THRESHOLD)
+                {
+                    score += 100.0F; // High base score for near-gen spawn
+                    score += (SpawnConstants::GEN_PROXIMITY_THRESHOLD - minGenDist) * 3.0F;
+                }
+                else
+                {
+                    // Still acceptable but less ideal
+                    score += 50.0F - minGenDist;
+                }
+                
+                // Bonus for generators in "sweet spot" (2nd furthest range)
+                float distToKillerForGen = Distance(generators[closestGenIndex].position, killerSpawn.position);
+                if (distToKillerForGen >= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MIN &&
+                    distToKillerForGen <= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MAX)
+                {
+                    score += 40.0F; // Sweet spot generator bonus
+                }
             }
             else
             {
-                // All gens used, just pick far from killer
-                score = distToKiller;
+                // All generators used, fallback to distance from killer
+                float distToKiller = Distance(candidate.position, killerSpawn.position);
+                score = distToKiller * 0.5F;
+            }
+
+            // SECONDARY: Moderate distance from other survivors (not max like Split)
+            // We want spread but not maximum entropy
+            float minDistToSelected = std::numeric_limits<float>::max();
+            for (const auto& selected : result)
+            {
+                float dist = Distance(candidate.position, selected.position);
+                minDistToSelected = std::min(minDistToSelected, dist);
+            }
+            
+            if (!result.empty())
+            {
+                // Bonus for being at least 15m from other survivors (soft constraint)
+                if (minDistToSelected >= 15.0F)
+                {
+                    score += 20.0F;
+                }
+                else if (minDistToSelected < 8.0F)
+                {
+                    score -= 30.0F; // Penalty for being too close
+                }
             }
 
             if (score > bestScore)
@@ -653,42 +727,104 @@ SpawnPoint SpawnCalculator::FindClusterCenter(
         return SpawnPoint{};
     }
 
-    // DBD heuristic: survivors spawn near "medium-far" generators
-    // Not the closest, not the furthest, but in the sweet spot
+    // DBD community heuristic: "go to the 2nd furthest generator"
+    // Survivors tend to spawn near medium-far generators, not the closest or furthest
+    // This prevents immediate chases while allowing reasonable early game pressure
     
     std::vector<SpawnPoint> preferred;
     std::vector<float> weights;
+
+    // Sort generators by distance from killer spawn
+    std::vector<std::pair<float, size_t>> genDistances;
+    for (size_t i = 0; i < generators.size(); ++i)
+    {
+        float dist = Distance(generators[i].position, killerSpawn.position);
+        genDistances.push_back({dist, i});
+    }
+    std::sort(genDistances.begin(), genDistances.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; }); // Furthest first
+
+    // Identify "2nd furthest" range (sweet spot)
+    float sweetSpotMin = 0.0F;
+    float sweetSpotMax = std::numeric_limits<float>::max();
+    
+    if (genDistances.size() >= 3)
+    {
+        // Sweet spot is between 2nd-4th furthest generators
+        // This avoids the furthest (too far) and closest (too close)
+        size_t startIdx = std::min(size_t(1), genDistances.size() - 1);
+        size_t endIdx = std::min(size_t(3), genDistances.size() - 1);
+        sweetSpotMin = genDistances[endIdx].first;
+        sweetSpotMax = genDistances[startIdx].first;
+    }
+    else if (genDistances.size() == 2)
+    {
+        // With only 2 gens, prefer the further one
+        sweetSpotMin = genDistances[1].first * 0.8F;
+        sweetSpotMax = genDistances[0].first * 1.2F;
+    }
 
     for (const auto& spawn : candidateSpawns)
     {
         float distToKiller = Distance(spawn.position, killerSpawn.position);
         
-        // Find closest generator
+        // Find closest generator to this spawn
         float minGenDist = std::numeric_limits<float>::max();
-        for (const auto& gen : generators)
+        int closestGenIndex = -1;
+        
+        for (size_t i = 0; i < generators.size(); ++i)
         {
-            float dist = Distance(spawn.position, gen.position);
-            minGenDist = std::min(minGenDist, dist);
+            float dist = Distance(spawn.position, generators[i].position);
+            if (dist < minGenDist)
+            {
+                minGenDist = dist;
+                closestGenIndex = static_cast<int>(i);
+            }
         }
 
-        // Prefer spawns with moderate distance to killer (20-40m)
-        // and close to generators
         float weight = spawn.quality;
 
-        if (distToKiller >= 20.0F && distToKiller <= 40.0F && minGenDist < 15.0F)
+        // PRIMARY FACTOR: Distance to killer (must be in sweet spot)
+        bool inKillerSweetSpot = distToKiller >= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MIN &&
+                                 distToKiller <= SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MAX;
+        
+        if (inKillerSweetSpot)
         {
-            weight *= 2.0F; // Sweet spot
+            weight *= 3.0F; // Strong bonus for ideal killer distance
         }
-        else if (distToKiller < 20.0F || minGenDist > 25.0F)
+        else if (distToKiller < SpawnConstants::GEN_DISTANCE_SWEET_SPOT_MIN)
         {
-            weight *= 0.3F; // Less ideal
+            weight *= 0.2F; // Too close to killer
+        }
+        // Above sweet spot is acceptable (far spawns are fine)
+
+        // SECONDARY FACTOR: Proximity to sweet spot generators
+        if (closestGenIndex >= 0)
+        {
+            float distToThatGen = Distance(generators[closestGenIndex].position, killerSpawn.position);
+            
+            // Bonus if near a generator in the sweet spot range
+            if (distToThatGen >= sweetSpotMin * 0.8F && distToThatGen <= sweetSpotMax * 1.2F)
+            {
+                weight *= 2.5F; // Near ideal generator (2nd furthest range)
+            }
+            else if (distToThatGen < sweetSpotMin * 0.5F)
+            {
+                weight *= 0.5F; // Too close to killer's generators
+            }
+        }
+
+        // TERTIARY FACTOR: Must be reasonably close to some generator
+        if (minGenDist <= SpawnConstants::GEN_PROXIMITY_THRESHOLD)
+        {
+            weight *= 1.5F; // Spawn is actually near a generator
         }
 
         preferred.push_back(spawn);
         weights.push_back(weight);
     }
 
-    // Weighted random selection
+    // Weighted random selection from top candidates
     std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
     return preferred[dist(rng)];
 }
@@ -718,13 +854,18 @@ std::vector<SpawnPoint> SpawnCalculator::FindPointsWithinRadius(
         {
             float score = spawn.quality;
             
-            // Prefer same floor
+            // Prefer same floor (multi-floor support)
             if (preferSameFloor)
             {
                 float yDiff = std::abs(spawn.position.y - center.y);
-                if (yDiff < 1.0F)
+                if (yDiff < SpawnConstants::FLOOR_HEIGHT_TOLERANCE)
                 {
-                    score *= 2.0F;
+                    score *= 3.0F; // Increased bonus for same floor
+                }
+                else
+                {
+                    // Penalty for different floor, but not disqualifying
+                    score *= 0.4F;
                 }
             }
 
@@ -732,7 +873,7 @@ std::vector<SpawnPoint> SpawnCalculator::FindPointsWithinRadius(
         }
     }
 
-    // Sort by score
+    // Sort by score descending
     std::sort(scored.begin(), scored.end(),
         [](const SpawnScore& a, const SpawnScore& b) {
             return a.score > b.score;
@@ -747,10 +888,19 @@ std::vector<SpawnPoint> SpawnCalculator::FindPointsWithinRadius(
         result.push_back(scored[i].spawn);
     }
 
-    // Add some randomness within top tier
-    if (result.size() > 1)
+    // Add some randomness within top tier to avoid predictable patterns
+    if (count > targetCount && count > 1)
     {
-        std::shuffle(result.begin(), result.end(), rng);
+        // Shuffle top 3 if we have more candidates than needed
+        if (count >= 3)
+        {
+            std::uniform_int_distribution<int> shuffleDist(0, std::min(2, count - 1));
+            int swapIdx = shuffleDist(rng);
+            if (swapIdx != 0)
+            {
+                std::swap(result[0], result[swapIdx]);
+            }
+        }
     }
 
     return result;
@@ -834,7 +984,7 @@ std::vector<SpawnPoint> SpawnPointGenerator::GenerateKillerSpawns(
 {
     std::vector<SpawnPoint> spawns;
 
-    // Generate spawns at tile centers, marking central ones
+    // Generate spawns at tile centers with improved edge/center classification
     for (size_t i = 0; i < tileCenters.size(); ++i)
     {
         SpawnPoint spawn;
@@ -843,29 +993,42 @@ std::vector<SpawnPoint> SpawnPointGenerator::GenerateKillerSpawns(
         spawn.floorId = 0;
         spawn.quality = 1.0F;
         
-        // Mark as center if within threshold radius
+        // Calculate distance from map center
         float distFromCenter = std::sqrt(
             std::pow(tileCenters[i].x - bounds.center.x, 2) +
             std::pow(tileCenters[i].z - bounds.center.z, 2)
         );
+        
+        // Improved center detection: central 30% of map
         spawn.isMapCenter = (distFromCenter < bounds.maxDistanceFromCenter * 0.3F);
+        
+        // Quality bonus for edge spawns (better for killer positioning)
+        if (!spawn.isMapCenter && distFromCenter > bounds.maxDistanceFromCenter * 0.6F)
+        {
+            spawn.quality = 1.3F; // Edge spawns preferred
+        }
+        else if (spawn.isMapCenter)
+        {
+            spawn.quality = 0.7F; // Center spawns less preferred (Patch 9.0.0)
+        }
 
         spawns.push_back(spawn);
     }
 
-    // Ensure we have some edge spawns
-    if (spawns.size() > 4)
+    // Ensure we have good distribution: limit center spawns, promote edge spawns
+    if (spawns.size() > 6)
     {
-        // Keep 2-3 center spawns and mark rest as potential edge spawns
         int centerCount = 0;
         for (auto& spawn : spawns)
         {
             if (spawn.isMapCenter)
             {
                 centerCount++;
+                // Only keep top 2-3 center spawns
                 if (centerCount > 2)
                 {
                     spawn.isMapCenter = false;
+                    spawn.quality = std::max(spawn.quality, 1.0F); // Restore quality
                 }
             }
         }
@@ -882,7 +1045,7 @@ std::vector<SpawnPoint> SpawnPointGenerator::GenerateSurvivorSpawns(
 {
     std::vector<SpawnPoint> spawns;
 
-    // Generate spawns near generators
+    // Generate spawns at tile centers with enhanced generator proximity logic
     for (size_t i = 0; i < tileCenters.size(); ++i)
     {
         SpawnPoint spawn;
@@ -891,7 +1054,10 @@ std::vector<SpawnPoint> SpawnPointGenerator::GenerateSurvivorSpawns(
         spawn.floorId = 0;
         spawn.quality = 1.0F;
 
-        // Check if near generator
+        // Check proximity to each generator and calculate quality bonus
+        float minGenDist = std::numeric_limits<float>::max();
+        bool nearGen = false;
+        
         for (const auto& gen : generators)
         {
             float dist = std::sqrt(
@@ -899,15 +1065,72 @@ std::vector<SpawnPoint> SpawnPointGenerator::GenerateSurvivorSpawns(
                 std::pow(tileCenters[i].y - gen.position.y, 2) +
                 std::pow(tileCenters[i].z - gen.position.z, 2)
             );
-            if (dist < 10.0F)
+            
+            minGenDist = std::min(minGenDist, dist);
+            
+            // Near generator: within 12m (DBD's "near a gen" range)
+            if (dist < 12.0F)
             {
-                spawn.isNearGenerator = true;
-                spawn.quality = 1.5F; // Prefer spawns near generators
-                break;
+                nearGen = true;
             }
         }
 
+        spawn.isNearGenerator = nearGen;
+        
+        // Quality based on generator proximity (DBD: survivors spawn near gens)
+        if (nearGen)
+        {
+            // Sweet spot: 5-10m from generator (close but not ON it)
+            if (minGenDist >= 5.0F && minGenDist <= 10.0F)
+            {
+                spawn.quality = 2.0F; // Ideal survivor spawn distance
+            }
+            else if (minGenDist < 5.0F)
+            {
+                spawn.quality = 1.5F; // Very close, still good
+            }
+            else
+            {
+                spawn.quality = 1.8F; // Within 12m range
+            }
+        }
+        else if (minGenDist < 20.0F)
+        {
+            spawn.quality = 1.2F; // Somewhat near, acceptable
+        }
+        else
+        {
+            spawn.quality = 0.8F; // Far from generators, less ideal
+        }
+
         spawns.push_back(spawn);
+    }
+
+    // Add additional spawn points around generators for more variety
+    // This helps ensure we have enough valid spawn points after filtering
+    for (const auto& gen : generators)
+    {
+        // Generate 2-3 points around each generator at different angles
+        const int pointsPerGen = 3;
+        for (int i = 0; i < pointsPerGen; ++i)
+        {
+            float angle = (2.0F * 3.14159F * static_cast<float>(i)) / static_cast<float>(pointsPerGen);
+            float offsetDist = 6.0F + static_cast<float>(i) * 2.0F; // 6m, 8m, 10m
+            
+            SpawnPoint spawn;
+            spawn.position = glm::vec3{
+                gen.position.x + std::cos(angle) * offsetDist,
+                gen.position.y,
+                gen.position.z + std::sin(angle) * offsetDist
+            };
+            spawn.tileId = -1; // Not tied to a specific tile
+            spawn.floorId = 0;
+            spawn.isNearGenerator = true;
+            spawn.quality = 1.8F; // High quality gen-proximate spawn
+            spawn.isMapCenter = false;
+            
+            spawns.push_back(spawn);
+        }
     }
 
     return spawns;

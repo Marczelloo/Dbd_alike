@@ -31,6 +31,14 @@ namespace SpawnConstants
     constexpr float MIN_INTER_SURVIVOR_DISTANCE = 3.0F;     // Prevent overlap
     constexpr float MAX_MAP_SIZE_FOR_CENTER_RULE = 40.0F;   // "Small map" threshold
     constexpr float KILLER_CENTER_RADIUS_THRESHOLD = 10.0F; // Avoid center within this
+    
+    // Nowe: generator heuristics (DBD community "2nd furthest gen")
+    constexpr float GEN_DISTANCE_SWEET_SPOT_MIN = 20.0F;    // Minimum ideal distance from killer
+    constexpr float GEN_DISTANCE_SWEET_SPOT_MAX = 45.0F;    // Maximum ideal distance from killer
+    constexpr float GEN_PROXIMITY_THRESHOLD = 18.0F;        // Max distance to be "near" a generator
+    
+    // Nowe: floor handling for multi-floor maps
+    constexpr float FLOOR_HEIGHT_TOLERANCE = 2.5F;          // Max Y difference to be considered "same floor"
 }
 
 // ============================================================================
