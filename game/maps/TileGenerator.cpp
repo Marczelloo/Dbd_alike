@@ -18,11 +18,13 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include "game/gameplay/SpawnSystem.hpp"
+
 namespace game::maps
 {
 namespace
 {
-constexpr int kGridSize = 8;
+constexpr int kGridSize = 12;  // Reduced from 16 (map was too large)
 constexpr float kTileSize = 16.0F;
 constexpr float kTileLocalMin = 0.0F;
 constexpr float kTileLocalMax = 15.0F;
@@ -1045,8 +1047,9 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
     map.killerSpawn = glm::vec3{firstTileCenter + (kGridSize - 1) * kTileSize + 6.5F, 1.05F, firstTileCenter + (kGridSize - 1) * kTileSize + 6.5F};
 
     std::unordered_map<int, TileArchetype> forced;
-    forced.emplace(1 * kGridSize + 1, TileArchetype::Shack);
-    forced.emplace(6 * kGridSize + 6, TileArchetype::LTWalls);
+    // Position shack and LTWalls for 12x12 grid (spread apart)
+    forced.emplace(3 * kGridSize + 3, TileArchetype::Shack);
+    forced.emplace(8 * kGridSize + 8, TileArchetype::LTWalls);
 
     // Track loop positions for generator placement (always exactly 5)
     std::vector<glm::vec3> loopCenters;
@@ -1350,6 +1353,12 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
         map.generatorSpawns.push_back(pos);
     }
 
+    if (settings.disableWindowsAndPallets)
+    {
+        map.windows.clear();
+        map.pallets.clear();
+    }
+
     return map;
 }
 
@@ -1369,4 +1378,81 @@ GeneratedMap TileGenerator::GenerateCollisionTestMap() const
     map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F}, glm::vec3{22.0F, 0.05F, 22.0F}, 0, 0});
     return map;
 }
+
+void TileGenerator::CalculateDbdSpawns(GeneratedMap& map, unsigned int seed) const
+{
+    using namespace game::gameplay;
+    
+    // Build spawn points from tile centers
+    std::vector<SpawnPoint> killerSpawnPoints;
+    std::vector<SpawnPoint> survivorSpawnPoints;
+    
+    // Extract tile centers from debug tiles
+    std::vector<glm::vec3> tileCenters;
+    for (const auto& tile : map.tiles)
+    {
+        tileCenters.push_back(tile.center);
+    }
+    
+    // Calculate map bounds
+    game::gameplay::MapBounds bounds;
+    if (!tileCenters.empty())
+    {
+        glm::vec3 minPos = tileCenters[0];
+        glm::vec3 maxPos = tileCenters[0];
+        
+        for (const auto& center : tileCenters)
+        {
+            minPos.x = std::min(minPos.x, center.x);
+            minPos.z = std::min(minPos.z, center.z);
+            maxPos.x = std::max(maxPos.x, center.x);
+            maxPos.z = std::max(maxPos.z, center.z);
+        }
+        
+        bounds.center = (minPos + maxPos) * 0.5F;
+        bounds.maxDistanceFromCenter = 0.0F;
+        for (const auto& center : tileCenters)
+        {
+            glm::vec2 diff = glm::vec2(center.x, center.z) - glm::vec2(bounds.center.x, bounds.center.z);
+            float dist = glm::length(diff);
+            bounds.maxDistanceFromCenter = std::max(bounds.maxDistanceFromCenter, dist);
+        }
+    }
+    
+    // Generate killer spawn points from tile centers
+    killerSpawnPoints = SpawnPointGenerator::GenerateKillerSpawns(tileCenters, bounds);
+    
+    // Build generator locations
+    std::vector<GeneratorLocation> generators;
+    for (size_t i = 0; i < map.generatorSpawns.size(); ++i)
+    {
+        generators.push_back(GeneratorLocation{map.generatorSpawns[i], static_cast<int>(i)});
+    }
+    
+    // Generate survivor spawn points
+    survivorSpawnPoints = SpawnPointGenerator::GenerateSurvivorSpawns(tileCenters, generators, bounds);
+    
+    // Calculate spawns using DBD-inspired system
+    SpawnCalculator calculator;
+    SpawnOfferings offerings; // Use default (clustered) spawn mode
+    SpawnResult result = calculator.CalculateSpawns(killerSpawnPoints, survivorSpawnPoints, generators, offerings, seed);
+    
+    // Apply results to map
+    map.killerSpawn = result.killerSpawn;
+    map.survivorSpawns.clear();
+    for (const auto& spawn : result.survivorSpawns)
+    {
+        map.survivorSpawns.push_back(spawn);
+    }
+    
+    // For backward compatibility, set single survivor spawn to first position
+    if (!map.survivorSpawns.empty())
+    {
+        map.survivorSpawn = map.survivorSpawns[0];
+    }
+    
+    // Enable DBD spawn system
+    map.useDbdSpawns = true;
+}
+
 } // namespace game::maps

@@ -26,7 +26,7 @@ struct EnvironmentSettings
     float cloudSpeed = 0.25F;
 
     glm::vec3 directionalLightDirection{0.45F, 1.0F, 0.3F};
-    glm::vec3 directionalLightColor{1.0F, 0.97F, 0.9F};
+    glm::vec3 directionalLightColor{1.0F, 1.0F, 1.0F};
     float directionalLightIntensity = 1.0F;
 
     bool fogEnabled = false;

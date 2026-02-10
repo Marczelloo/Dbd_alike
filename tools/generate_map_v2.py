@@ -10,61 +10,61 @@ def p(loop_id, tx, ty, rot=0):
     return {"loop_id": loop_id, "tile": [tx, ty], "rotation_degrees": rot, "transform_locked": False}
 
 # Layout plan (8x8 grid):
-# Mix of strong (gym_box, L_wall_window), medium (T_walls, L_wall_pallet, long_wall),
-# and weak (short_wall, debris_pile) loops with empty tiles for breathing room.
-# ~40 placements for good density without overcrowding.
+# FEW pallets, more window/stone loops for variety
+# Only 1-2 pallets total, more gym_box and L_wall_window loops
+# ~42 placements for good density.
 placements = [
     # Row 0 — top edge: strong/medium border
     p("gym_box_A",       0, 0, 0),
     p("T_walls_A",       2, 0, 0),
-    p("debris_pile_A",   3, 0, 0),
+    p("L_wall_window_A", 3, 0, 0),
     p("long_wall_A",     4, 0, 0),
     p("T_walls_B",       6, 0, 0),
-    p("debris_pile_A",   7, 0, 90),
+    p("gym_box_B",       7, 0, 90),
 
     # Row 1
-    p("L_wall_window_A", 0, 1, 0),
+    p("L_wall_window_B", 0, 1, 0),
     p("short_wall_A",    1, 1, 0),
-    p("L_wall_pallet_A", 3, 1, 0),
+    p("T_walls_C",       3, 1, 0),
     p("short_wall_B",    5, 1, 90),
-    p("L_wall_window_B", 7, 1, 0),
+    p("L_wall_window_C", 7, 1, 0),
 
     # Row 2
-    p("T_walls_C",       1, 2, 0),
+    p("gym_box_B",       1, 2, 0),
     p("long_wall_B",     2, 2, 0),
-    p("long_wall_A",     5, 2, 90),
+    p("L_wall_pallet_A", 5, 2, 0),  # ONLY PALLET 1
     p("debris_pile_B",   6, 2, 0),
 
-    # Row 3 — mid area: gym + space
-    p("debris_pile_B",   0, 3, 90),
-    p("gym_box_B",       3, 3, 0),
-    p("L_wall_pallet_B", 7, 3, 0),
+    # Row 3 — mid area: gym + windows
+    p("L_wall_window_A", 0, 3, 90),
+    p("gym_box_A",       3, 3, 0),
+    p("long_wall_A",     7, 3, 0),
 
     # Row 4 — mid area mirror
-    p("L_wall_pallet_A", 0, 4, 180),
-    p("gym_box_A",       4, 4, 180),
-    p("debris_pile_A",   7, 4, 180),
+    p("debris_pile_A",   0, 4, 0),
+    p("gym_box_B",       4, 4, 180),
+    p("L_wall_window_B", 7, 4, 180),
 
     # Row 5
-    p("debris_pile_A",   1, 5, 270),
+    p("debris_pile_B",   1, 5, 270),
     p("long_wall_B",     2, 5, 180),
-    p("long_wall_A",     5, 5, 270),
+    p("T_walls_C",       5, 5, 270),
     p("T_walls_A",       6, 5, 180),
 
     # Row 6
     p("L_wall_window_C", 0, 6, 0),
-    p("short_wall_A",    2, 6, 180),
-    p("L_wall_pallet_B", 4, 6, 270),
+    p("gym_box_A",       2, 6, 180),
+    p("short_wall_A",    4, 6, 270),
     p("short_wall_B",    6, 6, 270),
-    p("L_wall_window_A", 7, 6, 180),
+    p("long_wall_A",     7, 6, 180),
 
     # Row 7 — bottom edge: strong/medium border
-    p("debris_pile_B",   0, 7, 180),
+    p("gym_box_B",       0, 7, 180),
     p("T_walls_C",       1, 7, 180),
-    p("debris_pile_A",   3, 7, 270),
+    p("L_wall_window_A", 3, 7, 270),
     p("long_wall_B",     4, 7, 270),
     p("T_walls_B",       5, 7, 270),
-    p("gym_box_B",       7, 7, 180),
+    p("gym_box_A",       7, 7, 180),
 ]
 
 # Count elements for report

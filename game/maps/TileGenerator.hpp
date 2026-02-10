@@ -4,6 +4,13 @@
 
 #include <glm/vec3.hpp>
 
+// Forward declaration for spawn system integration
+namespace game::gameplay
+{
+class SpawnCalculator;
+struct SpawnResult;
+}
+
 namespace game::maps
 {
 struct BoxSpawn
@@ -40,8 +47,14 @@ struct GeneratedMap
     std::vector<PalletSpawn> pallets;
     std::vector<glm::vec3> generatorSpawns; // Positions for generators (always 5)
     std::vector<TileDebug> tiles;
+    
+    // Legacy single spawn points (kept for backward compatibility)
     glm::vec3 survivorSpawn{0.0F};
     glm::vec3 killerSpawn{0.0F};
+    
+    // DBD-inspired spawn system support
+    std::vector<glm::vec3> survivorSpawns; // 4 survivor spawn positions
+    bool useDbdSpawns = false; // Enable/disable new spawn system
 };
 
 class TileGenerator
@@ -73,11 +86,15 @@ public:
         int maxSafePallets = 12;        // Limit strong pallets for balance
         int maxDeadzoneTiles = 3;       // Max consecutive tiles without a loop before forcing one
         bool edgeBiasLoops = true;      // Prefer loops near map edges to reduce deadzones
+        bool disableWindowsAndPallets = false; // Remove windows/pallets after layout
     };
 
     GeneratedMap GenerateTestMap() const;
     GeneratedMap GenerateMainMap(unsigned int seed) const;
     GeneratedMap GenerateMainMap(unsigned int seed, const GenerationSettings& settings) const;
     GeneratedMap GenerateCollisionTestMap() const;
+
+    // DBD-inspired spawn calculation
+    void CalculateDbdSpawns(GeneratedMap& map, unsigned int seed) const;
 };
 } // namespace game::maps

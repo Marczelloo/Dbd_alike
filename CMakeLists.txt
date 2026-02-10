@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Enable GLM experimental extensions
+add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
+
 option(BUILD_IMGUI "Build Dear ImGui for debug UI/console" ON)
 option(USE_GLFW_STATIC "Build GLFW as a static library" ON)
 
@@ -83,6 +86,7 @@ set(ENGINE_SOURCES
     engine/ui/UiSystem.cpp
     game/maps/TileGenerator.cpp
     game/gameplay/GameplaySystems.cpp
+    game/gameplay/SpawnSystem.cpp
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp
