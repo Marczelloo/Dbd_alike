@@ -1,4 +1,5 @@
 #include "game/gameplay/GameplaySystems.hpp"
+#include "game/gameplay/SpawnSystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -511,14 +512,15 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
             continue;
         }
 
-        glm::vec3 generatorColor{0.2F, 0.75F, 0.95F};
+        // Green color scheme for generators
+        glm::vec3 generatorColor{0.2F, 0.8F, 0.2F};  // Standard green
         if (generator.completed)
         {
-            generatorColor = glm::vec3{0.15F, 0.95F, 0.2F};
+            generatorColor = glm::vec3{0.0F, 0.5F, 0.0F};  // Dark green
         }
         else if (entity == m_activeRepairGenerator)
         {
-            generatorColor = glm::vec3{0.95F, 0.95F, 0.2F};
+            generatorColor = glm::vec3{0.4F, 1.0F, 0.4F};  // Bright green
         }
 
         renderer.DrawBox(transformIt->second.position, generator.halfExtents, generatorColor);
@@ -688,7 +690,9 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
             glm::vec3 triggerColor{0.2F, 0.6F, 1.0F};
             if (trigger.kind == engine::physics::TriggerKind::Interaction)
             {
-                triggerColor = glm::vec3{1.0F, 0.8F, 0.2F};
+                // Check if this trigger belongs to a generator
+                const auto isGenerator = m_world.Generators().contains(trigger.entity);
+                triggerColor = isGenerator ? glm::vec3{0.2F, 0.8F, 0.2F} : glm::vec3{1.0F, 0.8F, 0.2F};
             }
             else if (trigger.kind == engine::physics::TriggerKind::Chase)
             {
@@ -995,6 +999,21 @@ void GameplaySystems::RegenerateLoops(unsigned int seed)
     if (m_currentMap == MapType::Main && m_activeMapName == "main")
     {
         BuildSceneFromMap(MapType::Main, m_generationSeed);
+    }
+}
+
+void GameplaySystems::SetDbdSpawnsEnabled(bool enabled)
+{
+    m_dbdSpawnsEnabled = enabled;
+    // Regenerate current map with new spawn settings
+    if (m_currentMap == MapType::Main && m_activeMapName == "main")
+    {
+        BuildSceneFromMap(MapType::Main, m_generationSeed);
+        AddRuntimeMessage(std::string("DBD spawns ") + (enabled ? "enabled" : "disabled"), 2.0F);
+    }
+    else
+    {
+        AddRuntimeMessage("Load main map first to use DBD spawns", 2.0F);
     }
 }
 
@@ -1494,6 +1513,24 @@ void GameplaySystems::ApplyGameplayTuning(const GameplayTuning& tuning)
     m_generationSettings.maxSafePallets = m_tuning.maxSafePallets;
     m_generationSettings.maxDeadzoneTiles = m_tuning.maxDeadzoneTiles;
     m_generationSettings.edgeBiasLoops = m_tuning.edgeBiasLoops;
+    m_generationSettings.disableWindowsAndPallets = m_tuning.disableWindowsAndPallets;
+
+    if (m_generationSettings.disableWindowsAndPallets)
+    {
+        // Zero out loop types that rely on windows/pallets
+        m_generationSettings.weightJungleGymLong = 0.0F;
+        m_generationSettings.weightJungleGymShort = 0.0F;
+        m_generationSettings.weightLWallWindow = 0.0F;
+        m_generationSettings.weightLWallPallet = 0.0F;
+        m_generationSettings.weightShortWall = 0.0F;
+        m_generationSettings.weightGymBox = 0.0F;
+
+        // Boost wall-only loop types
+        m_generationSettings.weightLongWall = 1.6F;
+        m_generationSettings.weightTWalls = 1.4F;
+        m_generationSettings.weightDebrisPile = 1.2F;
+        m_generationSettings.weightTLWalls = 1.2F;
+    }
 
     auto applyRole = [&](engine::scene::Entity entity, bool survivor) {
         auto actorIt = m_world.Actors().find(entity);
@@ -1790,6 +1827,11 @@ void GameplaySystems::BuildSceneFromMap(MapType mapType, unsigned int seed)
     else if (mapType == MapType::Main)
     {
         generated = generator.GenerateMainMap(seed, m_generationSettings);
+        // Apply DBD-inspired spawn system if enabled
+        if (m_dbdSpawnsEnabled)
+        {
+            generator.CalculateDbdSpawns(generated, seed);
+        }
     }
     else
     {
@@ -1977,17 +2019,10 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         m_world.Names()[hookEntity] = engine::scene::NameComponent{"hook"};
     }
 
-    const std::array<glm::vec3, 5> generatorOffsets{
-        glm::vec3{-11.0F, 1.0F, -9.0F},
-        glm::vec3{11.0F, 1.0F, -9.0F},
-        glm::vec3{-11.0F, 1.0F, 9.0F},
-        glm::vec3{11.0F, 1.0F, 9.0F},
-        glm::vec3{0.0F, 1.0F, 12.0F},
-    };
-    for (const glm::vec3& offset : generatorOffsets)
+    // Spawn generators at positions from the map (attached to loops)
+    for (const glm::vec3& generatorPos : generated.generatorSpawns)
     {
         const engine::scene::Entity generatorEntity = m_world.CreateEntity();
-        const glm::vec3 generatorPos = (generated.survivorSpawn + generated.killerSpawn) * 0.5F + offset;
         m_world.Transforms()[generatorEntity] = engine::scene::Transform{
             generatorPos,
             glm::vec3{0.0F},
@@ -1998,7 +2033,17 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         m_world.Names()[generatorEntity] = engine::scene::NameComponent{"generator"};
     }
 
-    m_survivor = SpawnActor(m_world, engine::scene::Role::Survivor, generated.survivorSpawn, glm::vec3{0.2F, 0.95F, 0.2F});
+    // Use DBD-inspired spawn system if enabled, otherwise use legacy spawns
+    if (generated.useDbdSpawns && !generated.survivorSpawns.empty())
+    {
+        // Use new spawn system positions (currently single survivor for testing)
+        m_survivor = SpawnActor(m_world, engine::scene::Role::Survivor, generated.survivorSpawns[0], glm::vec3{0.2F, 0.95F, 0.2F});
+    }
+    else
+    {
+        // Legacy spawn system
+        m_survivor = SpawnActor(m_world, engine::scene::Role::Survivor, generated.survivorSpawn, glm::vec3{0.2F, 0.95F, 0.2F});
+    }
     m_killer = SpawnActor(m_world, engine::scene::Role::Killer, generated.killerSpawn, glm::vec3{0.95F, 0.2F, 0.2F});
     ApplyGameplayTuning(m_tuning);
     SetRoleSpeedPercent("survivor", m_survivorSpeedPercent);
@@ -2114,7 +2159,7 @@ void GameplaySystems::RebuildPhysicsWorld()
         m_physics.AddTrigger(engine::physics::TriggerVolume{
             .entity = entity,
             .center = transformIt->second.position,
-            .halfExtents = generator.halfExtents + glm::vec3{0.7F, 0.45F, 0.7F},
+            .halfExtents = generator.halfExtents + glm::vec3{0.3F, 0.2F, 0.3F},  // Zmniejszone: 0.7->0.3, 0.45->0.2
             .kind = engine::physics::TriggerKind::Interaction,
         });
     }

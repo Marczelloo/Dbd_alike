@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -281,7 +282,7 @@ private:
     std::string m_sessionRoleName = "survivor";
     std::string m_sessionMapName = "main";
     game::gameplay::GameplaySystems::MapType m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
-    unsigned int m_sessionSeed = 1337U;
+    unsigned int m_sessionSeed = std::random_device{}();
 
     std::string m_remoteRoleName = "killer";
     std::string m_pendingRemoteRoleRequest = "survivor";

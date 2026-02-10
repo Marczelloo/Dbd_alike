@@ -26,7 +26,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_A",
+      "loop_id": "L_wall_window_A",
       "tile": [
         3,
         0
@@ -53,7 +53,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_A",
+      "loop_id": "gym_box_B",
       "tile": [
         7,
         0
@@ -62,7 +62,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_window_A",
+      "loop_id": "L_wall_window_B",
       "tile": [
         0,
         1
@@ -80,7 +80,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_pallet_A",
+      "loop_id": "T_walls_C",
       "tile": [
         3,
         1
@@ -98,7 +98,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_window_B",
+      "loop_id": "L_wall_window_C",
       "tile": [
         7,
         1
@@ -107,7 +107,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "T_walls_C",
+      "loop_id": "gym_box_B",
       "tile": [
         1,
         2
@@ -125,12 +125,12 @@
       "transform_locked": false
     },
     {
-      "loop_id": "long_wall_A",
+      "loop_id": "L_wall_pallet_A",
       "tile": [
         5,
         2
       ],
-      "rotation_degrees": 90,
+      "rotation_degrees": 0,
       "transform_locked": false
     },
     {
@@ -143,7 +143,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_B",
+      "loop_id": "L_wall_window_A",
       "tile": [
         0,
         3
@@ -152,7 +152,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "gym_box_B",
+      "loop_id": "gym_box_A",
       "tile": [
         3,
         3
@@ -161,7 +161,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_pallet_B",
+      "loop_id": "long_wall_A",
       "tile": [
         7,
         3
@@ -170,16 +170,16 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_pallet_A",
+      "loop_id": "debris_pile_A",
       "tile": [
         0,
         4
       ],
-      "rotation_degrees": 180,
+      "rotation_degrees": 0,
       "transform_locked": false
     },
     {
-      "loop_id": "gym_box_A",
+      "loop_id": "gym_box_B",
       "tile": [
         4,
         4
@@ -188,7 +188,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_A",
+      "loop_id": "L_wall_window_B",
       "tile": [
         7,
         4
@@ -197,7 +197,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_A",
+      "loop_id": "debris_pile_B",
       "tile": [
         1,
         5
@@ -215,7 +215,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "long_wall_A",
+      "loop_id": "T_walls_C",
       "tile": [
         5,
         5
@@ -242,7 +242,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "short_wall_A",
+      "loop_id": "gym_box_A",
       "tile": [
         2,
         6
@@ -251,7 +251,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_pallet_B",
+      "loop_id": "short_wall_A",
       "tile": [
         4,
         6
@@ -269,7 +269,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "L_wall_window_A",
+      "loop_id": "long_wall_A",
       "tile": [
         7,
         6
@@ -278,7 +278,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_B",
+      "loop_id": "gym_box_B",
       "tile": [
         0,
         7
@@ -296,7 +296,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "debris_pile_A",
+      "loop_id": "L_wall_window_A",
       "tile": [
         3,
         7
@@ -323,7 +323,7 @@
       "transform_locked": false
     },
     {
-      "loop_id": "gym_box_B",
+      "loop_id": "gym_box_A",
       "tile": [
         7,
         7

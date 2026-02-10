@@ -661,6 +661,24 @@ struct DeveloperConsole::Impl
             }
         });
 
+        RegisterCommand("dbd_spawns on|off", "Enable/disable DBD-inspired spawn system", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: dbd_spawns on|off");
+                return;
+            }
+
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+
+            context.gameplay->SetDbdSpawnsEnabled(enabled);
+            AddLog(std::string("DBD spawns ") + (enabled ? "enabled." : "disabled."));
+        });
+
         RegisterCommand("set_chase on|off", "Force chase state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {

@@ -99,7 +99,7 @@ struct HookComponent
 
 struct GeneratorComponent
 {
-    glm::vec3 halfExtents{0.7F, 0.7F, 0.7F};
+    glm::vec3 halfExtents{0.35F, 0.6F, 0.35F};  // Zmniejszone: 0.7->0.35 (XZ), 0.7->0.6 (Y)
     float progress = 0.0F;
     bool completed = false;
 };

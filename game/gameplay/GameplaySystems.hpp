@@ -171,11 +171,12 @@ public:
         float weightTWalls = 0.9F;
         float weightGymBox = 1.1F;
         float weightDebrisPile = 0.6F;
-        int maxLoopsPerMap = 40;
-        float minLoopDistanceTiles = 2.0F;
-        int maxSafePallets = 12;
+        int maxLoopsPerMap = 110;  // More loops for 12x12 map
+        float minLoopDistanceTiles = 1.5F;
+        int maxSafePallets = 0;   // No pallets
         int maxDeadzoneTiles = 3;
         bool edgeBiasLoops = true;
+        bool disableWindowsAndPallets = false;
 
         int serverTickRate = 60;
         int interpolationBufferMs = 350;
@@ -259,6 +260,7 @@ public:
     void LoadMap(const std::string& mapName);
     void RegenerateLoops();
     void RegenerateLoops(unsigned int seed);
+    void SetDbdSpawnsEnabled(bool enabled);
 
     void SpawnSurvivor();
     void SpawnKiller();
@@ -521,7 +523,7 @@ private:
 
     MapType m_currentMap = MapType::Test;
     std::string m_activeMapName = "test";
-    unsigned int m_generationSeed = 1337U;
+    unsigned int m_generationSeed = std::random_device{}();
 
     engine::scene::Entity m_survivor = 0;
     engine::scene::Entity m_killer = 0;
@@ -545,6 +547,7 @@ private:
     bool m_noClipEnabled = false;
     bool m_quitRequested = false;
     bool m_networkAuthorityMode = false;
+    bool m_dbdSpawnsEnabled = false;
 
     RoleCommand m_localSurvivorCommand{};
     RoleCommand m_localKillerCommand{};
