@@ -1282,21 +1282,59 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
             selected.push_back(loopCenters[indices[i]]);
         }
 
-        // Spread selected generators: first pick the most spread out subset
+        // Spread selected generators: pick most spread out positions, avoiding windows/pallets
         if (static_cast<int>(selected.size()) > targetCount)
         {
-            // Simple greedy spread: start with first, then pick furthest each time
+            // Advanced greedy spread: maximize distance between generators AND avoid vaults
+            const float minDistanceFromVault = 4.0F; // Minimalna odległość od okna/palety
+            
+            auto getScoreForCandidate = [&](const glm::vec3& candidate, const std::vector<glm::vec3>& placed) -> float {
+                float score = 0.0F;
+                
+                // 1. Minimal distance to already placed generators (HIGHER is better)
+                float minGenDist = std::numeric_limits<float>::max();
+                for (const glm::vec3& placedGen : placed)
+                {
+                    float d = glm::length(candidate - placedGen);
+                    minGenDist = std::min(minGenDist, d);
+                }
+                score += minGenDist * 2.0F; // Waga 2x dla rozrzucenia
+                
+                // 2. Minimal distance to windows/pallets (LOWER is better, subtract from score)
+                float minVaultDist = std::numeric_limits<float>::max();
+                
+                for (const WindowSpawn& win : map.windows)
+                {
+                    float d = glm::length(glm::vec2(candidate.x, candidate.z) - glm::vec2(win.center.x, win.center.z));
+                    minVaultDist = std::min(minVaultDist, d);
+                }
+                for (const PalletSpawn& pal : map.pallets)
+                {
+                    float d = glm::length(glm::vec2(candidate.x, candidate.z) - glm::vec2(pal.center.x, pal.center.z));
+                    minVaultDist = std::min(minVaultDist, d);
+                }
+                
+                // Kara za bycie blisko okna/palety
+                if (minVaultDist < minDistanceFromVault)
+                {
+                    score -= (minDistanceFromVault - minVaultDist) * 10.0F; // Silna kara
+                }
+                
+                return score;
+            };
+            
             std::vector<glm::vec3> spread;
-            spread.push_back(selected[0]);
+            spread.push_back(selected[0]); // Start with highest priority
 
             while (spread.size() < static_cast<std::size_t>(targetCount))
             {
-                float bestDist = -1.0F;
+                float bestScore = -std::numeric_limits<float>::max();
                 std::size_t bestIdx = 0;
 
                 for (std::size_t i = 0; i < selected.size(); ++i)
                 {
                     const glm::vec3& candidate = selected[i];
+                    
                     // Skip if already selected
                     bool alreadyUsed = false;
                     for (const glm::vec3& used : spread)
@@ -1309,17 +1347,10 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
                     }
                     if (alreadyUsed) continue;
 
-                    // Find min distance to already selected
-                    float minDist = std::numeric_limits<float>::max();
-                    for (const glm::vec3& used : spread)
+                    float score = getScoreForCandidate(candidate, spread);
+                    if (score > bestScore)
                     {
-                        const float d = glm::length(candidate - used);
-                        minDist = std::min(minDist, d);
-                    }
-
-                    if (minDist > bestDist)
-                    {
-                        bestDist = minDist;
+                        bestScore = score;
                         bestIdx = i;
                     }
                 }
@@ -1330,10 +1361,71 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
             selected = spread;
         }
 
-        // Add generator spawns (offset slightly from loop center to avoid clipping)
+        // Add generator spawns with collision avoidance
+        // Generator half extents: {0.35, 0.6, 0.35}
+        const glm::vec3 genHalfExtents{0.35F, 0.6F, 0.35F};
+        const float clearance = 0.1F; // Dodatkowy odstęp od ścian
+        const glm::vec3 effectiveHalfExtents = genHalfExtents + glm::vec3{clearance};
+
         for (const glm::vec3& loopPos : selected)
         {
-            map.generatorSpawns.push_back(loopPos + glm::vec3{0.0F, 1.0F, 0.0F});
+            glm::vec3 genPos = loopPos + glm::vec3{0.0F, 1.0F, 0.0F};
+            
+            // Sprawdź kolizję z istniejącymi ścianami w tym tile
+            bool collisionFound = true;
+            int attempts = 0;
+            const int maxAttempts = 8;
+            
+            // Próbuj przesunąć generator w różnych kierunkach
+            const std::vector<glm::vec2> offsetDirs = {
+                {0.0F, 0.0F},    // Centrum
+                {1.5F, 0.0F},    // Prawo
+                {-1.5F, 0.0F},   // Lewo
+                {0.0F, 1.5F},    // Przód
+                {0.0F, -1.5F},   // Tył
+                {1.0F, 1.0F},
+                {-1.0F, 1.0F},
+                {1.0F, -1.0F},
+                {-1.0F, -1.0F}
+            };
+            
+            for (int dirIdx = 0; dirIdx < static_cast<int>(offsetDirs.size()) && collisionFound; ++dirIdx)
+            {
+                const glm::vec3 testPos = glm::vec3{
+                    loopPos.x + offsetDirs[dirIdx].x,
+                    1.0F,
+                    loopPos.z + offsetDirs[dirIdx].y
+                };
+                
+                collisionFound = false;
+                
+                // Sprawdź kolizję z każdą ścianą
+                for (const BoxSpawn& wall : map.walls)
+                {
+                    // AABB collision test
+                    const glm::vec3 minA = testPos - effectiveHalfExtents;
+                    const glm::vec3 maxA = testPos + effectiveHalfExtents;
+                    const glm::vec3 minB = wall.center - wall.halfExtents;
+                    const glm::vec3 maxB = wall.center + wall.halfExtents;
+                    
+                    if (minA.x < maxB.x && maxA.x > minB.x &&
+                        minA.y < maxB.y && maxA.y > minB.y &&
+                        minA.z < maxB.z && maxA.z > minB.z)
+                    {
+                        collisionFound = true;
+                        break;
+                    }
+                }
+                
+                if (!collisionFound)
+                {
+                    genPos = testPos;
+                }
+                
+                ++attempts;
+            }
+            
+            map.generatorSpawns.push_back(genPos);
         }
     }
 

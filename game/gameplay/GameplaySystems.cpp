@@ -2159,7 +2159,7 @@ void GameplaySystems::RebuildPhysicsWorld()
         m_physics.AddTrigger(engine::physics::TriggerVolume{
             .entity = entity,
             .center = transformIt->second.position,
-            .halfExtents = generator.halfExtents + glm::vec3{0.7F, 0.45F, 0.7F},
+            .halfExtents = generator.halfExtents + glm::vec3{0.3F, 0.2F, 0.3F},  // Zmniejszone: 0.7->0.3, 0.45->0.2
             .kind = engine::physics::TriggerKind::Interaction,
         });
     }
