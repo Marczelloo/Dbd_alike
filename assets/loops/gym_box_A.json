@@ -1,0 +1,177 @@
+{
+  "asset_version": 1,
+  "id": "gym_box_A",
+  "display_name": "Gym Box A",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [
+      -8.0,
+      0.0,
+      -8.0
+    ],
+    "max": [
+      8.0,
+      2.0,
+      8.0
+    ]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "wall_left",
+      "position": [
+        -3.5,
+        1.0,
+        0.5
+      ],
+      "half_extents": [
+        4.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "wall_right_top",
+      "position": [
+        4.5,
+        1.0,
+        -2.0
+      ],
+      "half_extents": [
+        1.5,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "wall_right_bot",
+      "position": [
+        4.5,
+        1.0,
+        3.0
+      ],
+      "half_extents": [
+        1.5,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "wall_top_left",
+      "position": [
+        -1.5,
+        1.0,
+        4.5
+      ],
+      "half_extents": [
+        2.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "wall_top_right",
+      "position": [
+        3.5,
+        1.0,
+        4.5
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "wall_bottom",
+      "position": [
+        0.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        4.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "window",
+      "name": "window",
+      "position": [
+        -3.5,
+        1.0,
+        0.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "pallet",
+      "name": "pallet",
+      "position": [
+        4.5,
+        1.0,
+        0.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

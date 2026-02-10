@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "engine/net/LanDiscovery.hpp"
 
 #include <algorithm>

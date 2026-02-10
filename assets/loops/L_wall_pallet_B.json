@@ -1,0 +1,101 @@
+{
+  "asset_version": 1,
+  "id": "L_wall_pallet_B",
+  "display_name": "L-Wall Pallet B",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [
+      -8.0,
+      0.0,
+      -8.0
+    ],
+    "max": [
+      8.0,
+      2.0,
+      8.0
+    ]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "wall_vert",
+      "position": [
+        4.5,
+        1.0,
+        1.0
+      ],
+      "half_extents": [
+        4.5,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": -90.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "arm_left",
+      "position": [
+        -0.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "arm_right",
+      "position": [
+        3.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "pallet",
+      "name": "pallet",
+      "position": [
+        1.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

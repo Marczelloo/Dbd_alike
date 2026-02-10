@@ -40,6 +40,14 @@ enum class TileArchetype
     FourLane = 4,
     FillerA = 5,
     FillerB = 6,
+    // --- New v2 loop types ---
+    LongWall = 7,       // Single long wall with window
+    ShortWall = 8,      // Single short wall with unsafe pallet
+    LWallWindow = 9,    // L-shaped walls, window on long side (safe loop)
+    LWallPallet = 10,   // L-shaped walls, pallet on short side
+    TWalls = 11,        // T-shaped intersecting walls
+    GymBox = 12,        // Rectangular gym (window + pallet)
+    DebrisPile = 13,    // Cluster of small solids for LOS breaks
 };
 
 struct LocalPoint
@@ -325,9 +333,11 @@ void AddSolid(StructureLayout& layout, LocalPoint min, LocalPoint max)
     StructureLayout layout;
     AddWall(layout, LocalPoint{2.0F, 2.0F}, LocalPoint{2.0F, 14.0F});
     AddWall(layout, LocalPoint{2.0F, 14.0F}, LocalPoint{8.0F, 14.0F});
-    AddWall(layout, LocalPoint{10.0F, 2.0F}, LocalPoint{10.0F, 10.0F});
+    // Split wall for pallet gap: two segments with gap at Y=6
+    AddWall(layout, LocalPoint{10.0F, 2.0F}, LocalPoint{10.0F, 5.0F});
+    AddWall(layout, LocalPoint{10.0F, 7.0F}, LocalPoint{10.0F, 10.0F});
     AddWindow(layout, LocalPoint{2.0F, 8.0F});
-    AddPallet(layout, LocalPoint{10.0F, 2.0F});
+    AddPallet(layout, LocalPoint{10.0F, 6.0F});
     return layout;
 }
 
@@ -335,7 +345,9 @@ void AddSolid(StructureLayout& layout, LocalPoint min, LocalPoint max)
 {
     StructureLayout layout;
     AddWall(layout, LocalPoint{6.0F, 4.0F}, LocalPoint{10.0F, 4.0F});
-    AddWall(layout, LocalPoint{4.0F, 8.0F}, LocalPoint{12.0F, 8.0F});
+    // Split horizontal wall for pallet gap at X=8
+    AddWall(layout, LocalPoint{4.0F, 8.0F}, LocalPoint{7.0F, 8.0F});
+    AddWall(layout, LocalPoint{9.0F, 8.0F}, LocalPoint{12.0F, 8.0F});
     AddWall(layout, LocalPoint{4.0F, 8.0F}, LocalPoint{4.0F, 12.0F});
     AddWall(layout, LocalPoint{12.0F, 8.0F}, LocalPoint{12.0F, 12.0F});
     AddWindow(layout, LocalPoint{8.0F, 4.0F});
@@ -349,10 +361,12 @@ void AddSolid(StructureLayout& layout, LocalPoint min, LocalPoint max)
     StructureLayout layout;
     AddWall(layout, LocalPoint{2.0F, 2.0F}, LocalPoint{2.0F, 14.0F});
     AddWall(layout, LocalPoint{6.0F, 2.0F}, LocalPoint{6.0F, 14.0F});
-    AddWall(layout, LocalPoint{10.0F, 2.0F}, LocalPoint{10.0F, 14.0F});
+    // Split third lane wall for pallet gap at Y=8
+    AddWall(layout, LocalPoint{10.0F, 2.0F}, LocalPoint{10.0F, 7.0F});
+    AddWall(layout, LocalPoint{10.0F, 9.0F}, LocalPoint{10.0F, 14.0F});
     AddWall(layout, LocalPoint{14.0F, 2.0F}, LocalPoint{14.0F, 14.0F});
     AddWindow(layout, LocalPoint{6.0F, 8.0F});
-    AddPallet(layout, LocalPoint{10.0F, 4.0F});
+    AddPallet(layout, LocalPoint{10.0F, 8.0F});
     return layout;
 }
 
@@ -368,9 +382,317 @@ void AddSolid(StructureLayout& layout, LocalPoint min, LocalPoint max)
 [[nodiscard]] StructureLayout BuildFillerLayoutB()
 {
     StructureLayout layout;
-    AddWall(layout, LocalPoint{4.0F, 8.0F}, LocalPoint{12.0F, 8.0F});
-    AddPallet(layout, LocalPoint{13.0F, 8.0F});
+    // Wall with gap at right end for pallet
+    AddWall(layout, LocalPoint{4.0F, 8.0F}, LocalPoint{11.0F, 8.0F});
+    AddWall(layout, LocalPoint{13.0F, 8.0F}, LocalPoint{14.5F, 8.0F});
+    AddPallet(layout, LocalPoint{12.0F, 8.0F});
     return layout;
+}
+
+// ============================================================
+// New v2 loop layouts with variation support
+// ============================================================
+
+// --- LongWall: single long wall with window, survivor runs around ends ---
+[[nodiscard]] StructureLayout BuildLongWallLayoutA()
+{
+    StructureLayout layout;
+    // Long horizontal wall spanning most of the tile
+    AddWall(layout, LocalPoint{2.0F, 8.0F}, LocalPoint{14.0F, 8.0F});
+    AddWindow(layout, LocalPoint{8.0F, 8.0F}); // Window at center
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildLongWallLayoutB()
+{
+    StructureLayout layout;
+    // Slightly offset long wall with window near one end
+    AddWall(layout, LocalPoint{1.5F, 7.0F}, LocalPoint{13.5F, 7.0F});
+    AddWindow(layout, LocalPoint{4.0F, 7.0F}); // Window near left end
+    // Small debris at other end for visual interest
+    AddSolid(layout, LocalPoint{12.0F, 10.0F}, LocalPoint{13.5F, 11.5F});
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickLongWallLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? BuildLongWallLayoutA() : BuildLongWallLayoutB();
+}
+
+// --- ShortWall: short wall with unsafe pallet in gap, weak loop ---
+[[nodiscard]] StructureLayout BuildShortWallLayoutA()
+{
+    StructureLayout layout;
+    // Split wall for pallet gap at X=8
+    AddWall(layout, LocalPoint{5.0F, 8.0F}, LocalPoint{7.0F, 8.0F});
+    AddWall(layout, LocalPoint{9.0F, 8.0F}, LocalPoint{11.0F, 8.0F});
+    AddPallet(layout, LocalPoint{8.0F, 8.0F});
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildShortWallLayoutB()
+{
+    StructureLayout layout;
+    // Wall with pallet gap near the right end
+    AddWall(layout, LocalPoint{4.5F, 7.0F}, LocalPoint{9.5F, 7.0F});
+    AddWall(layout, LocalPoint{11.5F, 7.0F}, LocalPoint{13.0F, 7.0F});
+    AddPallet(layout, LocalPoint{10.5F, 7.0F});
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickShortWallLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? BuildShortWallLayoutA() : BuildShortWallLayoutB();
+}
+
+// --- LWallWindow: L-shaped walls with window on long side (strong/safe loop) ---
+[[nodiscard]] StructureLayout BuildLWallWindowLayoutA()
+{
+    StructureLayout layout;
+    // Vertical wall (long side)
+    AddWall(layout, LocalPoint{4.0F, 3.0F}, LocalPoint{4.0F, 13.0F});
+    // Horizontal wall (short side, forming the L)
+    AddWall(layout, LocalPoint{4.0F, 13.0F}, LocalPoint{10.0F, 13.0F});
+    // Window on the long vertical wall
+    AddWindow(layout, LocalPoint{4.0F, 8.0F});
+    layout.entranceDirection = glm::vec2{1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildLWallWindowLayoutB()
+{
+    StructureLayout layout;
+    // Mirror: vertical wall on right
+    AddWall(layout, LocalPoint{12.0F, 3.0F}, LocalPoint{12.0F, 13.0F});
+    // Horizontal wall going left
+    AddWall(layout, LocalPoint{6.0F, 3.0F}, LocalPoint{12.0F, 3.0F});
+    AddWindow(layout, LocalPoint{12.0F, 8.0F});
+    layout.entranceDirection = glm::vec2{-1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildLWallWindowLayoutC()
+{
+    StructureLayout layout;
+    // Wider L with window and debris
+    AddWall(layout, LocalPoint{3.0F, 2.0F}, LocalPoint{3.0F, 12.0F});
+    AddWall(layout, LocalPoint{3.0F, 12.0F}, LocalPoint{9.0F, 12.0F});
+    AddWindow(layout, LocalPoint{3.0F, 7.0F});
+    // Small debris piece for additional LOS break
+    AddSolid(layout, LocalPoint{10.0F, 5.0F}, LocalPoint{11.5F, 7.0F});
+    layout.entranceDirection = glm::vec2{1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickLWallWindowLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 2);
+    switch (dist(rng))
+    {
+        case 0: return BuildLWallWindowLayoutA();
+        case 1: return BuildLWallWindowLayoutB();
+        default: return BuildLWallWindowLayoutC();
+    }
+}
+
+// --- LWallPallet: L-shaped walls with pallet gap on short side ---
+[[nodiscard]] StructureLayout BuildLWallPalletLayoutA()
+{
+    StructureLayout layout;
+    AddWall(layout, LocalPoint{4.0F, 3.0F}, LocalPoint{4.0F, 12.0F});
+    // Split horizontal L-arm for pallet gap at X=7
+    AddWall(layout, LocalPoint{4.0F, 12.0F}, LocalPoint{6.0F, 12.0F});
+    AddWall(layout, LocalPoint{8.0F, 12.0F}, LocalPoint{10.0F, 12.0F});
+    AddPallet(layout, LocalPoint{7.0F, 12.0F});
+    layout.entranceDirection = glm::vec2{1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildLWallPalletLayoutB()
+{
+    StructureLayout layout;
+    AddWall(layout, LocalPoint{12.0F, 4.0F}, LocalPoint{12.0F, 13.0F});
+    // Split horizontal arm for pallet gap at X=9
+    AddWall(layout, LocalPoint{6.0F, 4.0F}, LocalPoint{8.0F, 4.0F});
+    AddWall(layout, LocalPoint{10.0F, 4.0F}, LocalPoint{12.0F, 4.0F});
+    AddPallet(layout, LocalPoint{9.0F, 4.0F});
+    layout.entranceDirection = glm::vec2{-1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickLWallPalletLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? BuildLWallPalletLayoutA() : BuildLWallPalletLayoutB();
+}
+
+// --- TWalls: T-shaped structure with multiple pathing options ---
+[[nodiscard]] StructureLayout BuildTWallsLayoutA()
+{
+    StructureLayout layout;
+    // Horizontal wall split for pallet gap at X=11
+    AddWall(layout, LocalPoint{2.0F, 8.0F}, LocalPoint{10.0F, 8.0F});
+    AddWall(layout, LocalPoint{12.0F, 8.0F}, LocalPoint{14.0F, 8.0F});
+    // Vertical stem going up
+    AddWall(layout, LocalPoint{8.0F, 8.0F}, LocalPoint{8.0F, 14.0F});
+    AddWindow(layout, LocalPoint{5.0F, 8.0F});
+    AddPallet(layout, LocalPoint{11.0F, 8.0F});
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildTWallsLayoutB()
+{
+    StructureLayout layout;
+    // Vertical wall split for pallet gap at Y=11
+    AddWall(layout, LocalPoint{8.0F, 2.0F}, LocalPoint{8.0F, 10.0F});
+    AddWall(layout, LocalPoint{8.0F, 12.0F}, LocalPoint{8.0F, 14.0F});
+    // Horizontal stem going right
+    AddWall(layout, LocalPoint{8.0F, 8.0F}, LocalPoint{14.0F, 8.0F});
+    AddWindow(layout, LocalPoint{8.0F, 5.0F});
+    AddPallet(layout, LocalPoint{8.0F, 11.0F});
+    layout.entranceDirection = glm::vec2{-1.0F, 0.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildTWallsLayoutC()
+{
+    StructureLayout layout;
+    // Horizontal wall split for pallet gap at X=10.5
+    AddWall(layout, LocalPoint{3.0F, 6.0F}, LocalPoint{9.5F, 6.0F});
+    AddWall(layout, LocalPoint{11.5F, 6.0F}, LocalPoint{13.0F, 6.0F});
+    // Stem going down
+    AddWall(layout, LocalPoint{8.0F, 2.0F}, LocalPoint{8.0F, 6.0F});
+    AddWindow(layout, LocalPoint{5.5F, 6.0F});
+    AddPallet(layout, LocalPoint{10.5F, 6.0F});
+    AddSolid(layout, LocalPoint{2.0F, 10.0F}, LocalPoint{3.5F, 12.0F});
+    layout.entranceDirection = glm::vec2{0.0F, 1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickTWallsLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 2);
+    switch (dist(rng))
+    {
+        case 0: return BuildTWallsLayoutA();
+        case 1: return BuildTWallsLayoutB();
+        default: return BuildTWallsLayoutC();
+    }
+}
+
+// --- GymBox: rectangular enclosure with window + pallet (strong loop) ---
+[[nodiscard]] StructureLayout BuildGymBoxLayoutA()
+{
+    StructureLayout layout;
+    // Left wall
+    AddWall(layout, LocalPoint{4.0F, 4.0F}, LocalPoint{4.0F, 12.0F});
+    // Right wall split for pallet gap at Y=8
+    AddWall(layout, LocalPoint{12.0F, 4.0F}, LocalPoint{12.0F, 7.0F});
+    AddWall(layout, LocalPoint{12.0F, 9.0F}, LocalPoint{12.0F, 12.0F});
+    // Top wall with entrance gap
+    AddWall(layout, LocalPoint{4.0F, 12.0F}, LocalPoint{8.0F, 12.0F});
+    AddWall(layout, LocalPoint{10.0F, 12.0F}, LocalPoint{12.0F, 12.0F});
+    // Bottom wall
+    AddWall(layout, LocalPoint{4.0F, 4.0F}, LocalPoint{12.0F, 4.0F});
+    AddWindow(layout, LocalPoint{4.0F, 8.0F});
+    AddPallet(layout, LocalPoint{12.0F, 8.0F});
+    layout.entranceDirection = glm::vec2{0.0F, 1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildGymBoxLayoutB()
+{
+    StructureLayout layout;
+    // Slightly smaller gym with different opening
+    AddWall(layout, LocalPoint{5.0F, 5.0F}, LocalPoint{5.0F, 11.0F});
+    AddWall(layout, LocalPoint{11.0F, 5.0F}, LocalPoint{11.0F, 11.0F});
+    AddWall(layout, LocalPoint{5.0F, 11.0F}, LocalPoint{11.0F, 11.0F});
+    AddWall(layout, LocalPoint{5.0F, 5.0F}, LocalPoint{7.0F, 5.0F});  // Bottom left
+    AddWall(layout, LocalPoint{9.0F, 5.0F}, LocalPoint{11.0F, 5.0F}); // Bottom right (gap)
+    AddWindow(layout, LocalPoint{11.0F, 8.0F});
+    AddPallet(layout, LocalPoint{8.0F, 5.0F}); // Pallet at bottom entrance
+    layout.entranceDirection = glm::vec2{0.0F, -1.0F};
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickGymBoxLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? BuildGymBoxLayoutA() : BuildGymBoxLayoutB();
+}
+
+// --- DebrisPile: cluster of obstacles for line-of-sight breaks (weak filler loop) ---
+[[nodiscard]] StructureLayout BuildDebrisPileLayoutA()
+{
+    StructureLayout layout;
+    AddSolid(layout, LocalPoint{3.0F, 6.0F}, LocalPoint{5.0F, 10.0F});
+    AddSolid(layout, LocalPoint{7.0F, 4.0F}, LocalPoint{9.0F, 7.0F});
+    AddSolid(layout, LocalPoint{10.0F, 9.0F}, LocalPoint{13.0F, 11.0F});
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildDebrisPileLayoutB()
+{
+    StructureLayout layout;
+    AddSolid(layout, LocalPoint{4.0F, 3.0F}, LocalPoint{6.5F, 5.5F});
+    // Two solids forming a narrow corridor for the pallet
+    AddSolid(layout, LocalPoint{5.5F, 7.0F}, LocalPoint{6.5F, 11.0F});
+    AddSolid(layout, LocalPoint{8.5F, 7.0F}, LocalPoint{10.0F, 11.0F});
+    AddSolid(layout, LocalPoint{11.0F, 3.0F}, LocalPoint{13.0F, 5.0F});
+    AddPallet(layout, LocalPoint{7.5F, 9.0F});
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickDebrisPileLayout(std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? BuildDebrisPileLayoutA() : BuildDebrisPileLayoutB();
+}
+
+// Also add variations to existing layouts
+[[nodiscard]] StructureLayout BuildLTWallsLayoutV2()
+{
+    StructureLayout layout;
+    // Variant: mirrored L and T with different spacing
+    AddWall(layout, LocalPoint{3.0F, 2.0F}, LocalPoint{3.0F, 9.0F});
+    AddWall(layout, LocalPoint{3.0F, 9.0F}, LocalPoint{7.0F, 9.0F});
+    AddWall(layout, LocalPoint{9.0F, 2.0F}, LocalPoint{13.0F, 2.0F});
+    AddWall(layout, LocalPoint{13.0F, 2.0F}, LocalPoint{13.0F, 11.0F});
+    AddWindow(layout, LocalPoint{3.0F, 5.5F});
+    AddWindow(layout, LocalPoint{13.0F, 6.5F});
+    return layout;
+}
+
+[[nodiscard]] StructureLayout BuildJungleGymLongV2()
+{
+    StructureLayout layout;
+    AddWall(layout, LocalPoint{3.0F, 2.0F}, LocalPoint{3.0F, 13.0F});
+    AddWall(layout, LocalPoint{3.0F, 13.0F}, LocalPoint{9.0F, 13.0F});
+    // Split wall for pallet gap at Y=7
+    AddWall(layout, LocalPoint{11.0F, 3.0F}, LocalPoint{11.0F, 6.0F});
+    AddWall(layout, LocalPoint{11.0F, 8.0F}, LocalPoint{11.0F, 11.0F});
+    AddWindow(layout, LocalPoint{3.0F, 7.5F});
+    AddPallet(layout, LocalPoint{11.0F, 7.0F});
+    return layout;
+}
+
+[[nodiscard]] StructureLayout PickLTWallsLayout(std::mt19937& rng, const StructureLayout& original)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? original : BuildLTWallsLayoutV2();
+}
+
+[[nodiscard]] StructureLayout PickJungleLongLayout(std::mt19937& rng, const StructureLayout& original)
+{
+    std::uniform_int_distribution<int> dist(0, 1);
+    return dist(rng) == 0 ? original : BuildJungleGymLongV2();
 }
 
 [[nodiscard]] bool IsMazeArchetype(TileArchetype archetype)
@@ -379,7 +701,29 @@ void AddSolid(StructureLayout& layout, LocalPoint min, LocalPoint max)
            archetype == TileArchetype::JungleGymShort ||
            archetype == TileArchetype::FourLane ||
            archetype == TileArchetype::LTWalls ||
-           archetype == TileArchetype::Shack;
+           archetype == TileArchetype::Shack ||
+           archetype == TileArchetype::LongWall ||
+           archetype == TileArchetype::ShortWall ||
+           archetype == TileArchetype::LWallWindow ||
+           archetype == TileArchetype::LWallPallet ||
+           archetype == TileArchetype::TWalls ||
+           archetype == TileArchetype::GymBox;
+}
+
+// Returns true if the archetype has a "safe" pallet (requires killer to go around a long wall).
+[[nodiscard]] bool HasSafePallet(TileArchetype archetype)
+{
+    return archetype == TileArchetype::LWallPallet ||
+           archetype == TileArchetype::GymBox ||
+           archetype == TileArchetype::JungleGymLong;
+}
+
+// Returns true if the archetype is a filler / non-loopable / debris type.
+[[nodiscard]] bool IsFillerArchetype(TileArchetype archetype)
+{
+    return archetype == TileArchetype::FillerA ||
+           archetype == TileArchetype::FillerB ||
+           archetype == TileArchetype::DebrisPile;
 }
 
 [[nodiscard]] float DistancePointToSegment(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b)
@@ -564,12 +908,17 @@ void EmitLayout(GeneratedMap& map, const StructureLayout& layout, const glm::vec
     const std::vector<std::pair<TileArchetype, float>> weighted{
         {TileArchetype::FillerA, settings.weightFillerA},
         {TileArchetype::FillerB, settings.weightFillerB},
+        {TileArchetype::DebrisPile, settings.weightDebrisPile},
     };
     return PickWeightedArchetype(rng, weighted, TileArchetype::FillerA);
 }
 
-[[nodiscard]] const StructureLayout& LayoutForArchetype(
+// For archetype types that use variation, we generate a fresh layout.
+// For legacy types we return a reference to the pre-built layout.
+// This function always returns a copy (by value) so the caller can rotate freely.
+[[nodiscard]] StructureLayout PickLayoutForArchetype(
     TileArchetype archetype,
+    std::mt19937& rng,
     const StructureLayout& jungleLong,
     const StructureLayout& jungleShort,
     const StructureLayout& ltwalls,
@@ -581,13 +930,20 @@ void EmitLayout(GeneratedMap& map, const StructureLayout& layout, const glm::vec
 {
     switch (archetype)
     {
-        case TileArchetype::JungleGymLong: return jungleLong;
+        case TileArchetype::JungleGymLong: return PickJungleLongLayout(rng, jungleLong);
         case TileArchetype::JungleGymShort: return jungleShort;
-        case TileArchetype::LTWalls: return ltwalls;
+        case TileArchetype::LTWalls: return PickLTWallsLayout(rng, ltwalls);
         case TileArchetype::Shack: return shack;
         case TileArchetype::FourLane: return fourLane;
         case TileArchetype::FillerA: return fillerA;
         case TileArchetype::FillerB: return fillerB;
+        case TileArchetype::LongWall: return PickLongWallLayout(rng);
+        case TileArchetype::ShortWall: return PickShortWallLayout(rng);
+        case TileArchetype::LWallWindow: return PickLWallWindowLayout(rng);
+        case TileArchetype::LWallPallet: return PickLWallPalletLayout(rng);
+        case TileArchetype::TWalls: return PickTWallsLayout(rng);
+        case TileArchetype::GymBox: return PickGymBoxLayout(rng);
+        case TileArchetype::DebrisPile: return PickDebrisPileLayout(rng);
         default: return fillerA;
     }
 }
@@ -622,6 +978,16 @@ void MaybeDebugPrintLayouts(
     fourLane.DebugPrint("FourLane");
     fillerA.DebugPrint("FillerA");
     fillerB.DebugPrint("FillerB");
+
+    // Also print samples of new v2 layouts
+    std::mt19937 sampleRng(42);
+    PickLongWallLayout(sampleRng).DebugPrint("LongWall (sample)");
+    PickShortWallLayout(sampleRng).DebugPrint("ShortWall (sample)");
+    PickLWallWindowLayout(sampleRng).DebugPrint("LWallWindow (sample)");
+    PickLWallPalletLayout(sampleRng).DebugPrint("LWallPallet (sample)");
+    PickTWallsLayout(sampleRng).DebugPrint("TWalls (sample)");
+    PickGymBoxLayout(sampleRng).DebugPrint("GymBox (sample)");
+    PickDebrisPileLayout(sampleRng).DebugPrint("DebrisPile (sample)");
 }
 } // namespace
 
@@ -681,6 +1047,7 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
     forced.emplace(1 * kGridSize + 1, TileArchetype::Shack);
     forced.emplace(6 * kGridSize + 6, TileArchetype::LTWalls);
 
+    // Build full weighted candidate list including v2 types.
     const std::vector<std::pair<TileArchetype, float>> allWeights{
         {TileArchetype::LTWalls, settings.weightTLWalls},
         {TileArchetype::JungleGymLong, settings.weightJungleGymLong},
@@ -689,14 +1056,35 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
         {TileArchetype::FourLane, settings.weightFourLane},
         {TileArchetype::FillerA, settings.weightFillerA},
         {TileArchetype::FillerB, settings.weightFillerB},
+        // v2 types:
+        {TileArchetype::LongWall, settings.weightLongWall},
+        {TileArchetype::ShortWall, settings.weightShortWall},
+        {TileArchetype::LWallWindow, settings.weightLWallWindow},
+        {TileArchetype::LWallPallet, settings.weightLWallPallet},
+        {TileArchetype::TWalls, settings.weightTWalls},
+        {TileArchetype::GymBox, settings.weightGymBox},
+        {TileArchetype::DebrisPile, settings.weightDebrisPile},
     };
 
     std::vector<glm::ivec2> mazeTiles;
     int loopsPlaced = 0;
+    int safePalletsPlaced = 0;
     const int maxLoops = std::max(0, settings.maxLoops);
+    const int maxSafePallets = std::max(0, settings.maxSafePallets);
     const float minLoopDistanceTiles = std::max(0.0F, settings.minLoopDistanceTiles);
+    const int maxDeadzone = std::max(1, settings.maxDeadzoneTiles);
+
+    // Track consecutive filler tiles (for deadzone prevention)
+    int consecutiveFillerInRow = 0;
+
+    // Edge bias: tiles on the outer ring get a loop bonus.
+    auto isEdgeTile = [](int x, int z) {
+        return x == 0 || x == kGridSize - 1 || z == 0 || z == kGridSize - 1;
+    };
+
     for (int z = 0; z < kGridSize; ++z)
     {
+        consecutiveFillerInRow = 0;
         for (int x = 0; x < kGridSize; ++x)
         {
             const int key = z * kGridSize + x;
@@ -721,25 +1109,93 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
 
             if (!forcedTile && IsMazeArchetype(archetype))
             {
+                // --- Constraint: max loops ---
                 if (loopsPlaced >= maxLoops)
                 {
                     archetype = PickFillerArchetype(rng, settings);
                 }
 
+                // --- Constraint: min distance between loops ---
                 const float nearestMaze = GetDistanceToNearestMaze(tileCoord, mazeTiles);
                 if (nearestMaze < minLoopDistanceTiles)
                 {
                     archetype = PickFillerArchetype(rng, settings);
                 }
+
+                // --- Constraint: safe pallet budget ---
+                if (IsMazeArchetype(archetype) && HasSafePallet(archetype) && safePalletsPlaced >= maxSafePallets)
+                {
+                    // Try to substitute with a non-safe-pallet loop type
+                    const std::vector<std::pair<TileArchetype, float>> unsafeOnlyWeights{
+                        {TileArchetype::LTWalls, settings.weightTLWalls},
+                        {TileArchetype::JungleGymShort, settings.weightJungleGymShort},
+                        {TileArchetype::FourLane, settings.weightFourLane},
+                        {TileArchetype::LongWall, settings.weightLongWall},
+                        {TileArchetype::ShortWall, settings.weightShortWall},
+                        {TileArchetype::LWallWindow, settings.weightLWallWindow},
+                        {TileArchetype::TWalls, settings.weightTWalls},
+                    };
+                    archetype = PickWeightedArchetype(rng, unsafeOnlyWeights, TileArchetype::LongWall);
+                }
             }
 
+            // --- Constraint: deadzone prevention ---
+            if (!forcedTile && IsFillerArchetype(archetype))
+            {
+                ++consecutiveFillerInRow;
+                if (consecutiveFillerInRow >= maxDeadzone && loopsPlaced < maxLoops)
+                {
+                    // Force a loop tile to break the deadzone
+                    const float nearestMaze = GetDistanceToNearestMaze(tileCoord, mazeTiles);
+                    if (nearestMaze >= 1.0F) // Allow tighter packing to prevent deadzones
+                    {
+                        // Pick a simpler loop type for forced placement
+                        const std::vector<std::pair<TileArchetype, float>> simpleLoops{
+                            {TileArchetype::LongWall, 2.0F},
+                            {TileArchetype::ShortWall, 2.0F},
+                            {TileArchetype::LWallWindow, 1.5F},
+                            {TileArchetype::FillerA, 1.0F},
+                        };
+                        archetype = PickWeightedArchetype(rng, simpleLoops, TileArchetype::LongWall);
+                    }
+                }
+            }
+            else
+            {
+                consecutiveFillerInRow = 0;
+            }
+
+            // --- Edge bias: boost loop probability near edges ---
+            if (!forcedTile && settings.edgeBiasLoops && isEdgeTile(x, z) &&
+                IsFillerArchetype(archetype) && loopsPlaced < maxLoops)
+            {
+                // 40% chance to upgrade edge filler to a loop
+                std::uniform_real_distribution<float> edgeDist(0.0F, 1.0F);
+                if (edgeDist(rng) < 0.4F)
+                {
+                    const float nearestMaze = GetDistanceToNearestMaze(tileCoord, mazeTiles);
+                    if (nearestMaze >= minLoopDistanceTiles)
+                    {
+                        const std::vector<std::pair<TileArchetype, float>> edgeLoops{
+                            {TileArchetype::LongWall, 2.0F},
+                            {TileArchetype::LWallWindow, 1.5F},
+                            {TileArchetype::ShortWall, 1.0F},
+                        };
+                        archetype = PickWeightedArchetype(rng, edgeLoops, TileArchetype::LongWall);
+                    }
+                }
+            }
+
+            // --- Rotation selection ---
             int rotation = PickRandomRotation(rng);
-            if (archetype == TileArchetype::JungleGymShort)
+            if (archetype == TileArchetype::JungleGymShort || archetype == TileArchetype::GymBox)
             {
                 rotation = PickShortLayoutRotationFacingCenter(jungleShort, tileCenter, rng);
             }
 
-            const StructureLayout& base = LayoutForArchetype(archetype, jungleLong, jungleShort, ltwalls, shack, fourLane, fillerA, fillerB);
+            // Pick layout with archetype-specific variation
+            const StructureLayout base = PickLayoutForArchetype(
+                archetype, rng, jungleLong, jungleShort, ltwalls, shack, fourLane, fillerA, fillerB);
             const StructureLayout rotated = base.ApplyRotation(rotation);
             EmitLayout(map, rotated, tileCenter);
 
@@ -747,6 +1203,10 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
             {
                 mazeTiles.push_back(tileCoord);
                 ++loopsPlaced;
+                if (HasSafePallet(archetype))
+                {
+                    ++safePalletsPlaced;
+                }
             }
 
             map.tiles.push_back(GeneratedMap::TileDebug{
@@ -757,6 +1217,13 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
             });
         }
     }
+
+    // Log generation stats
+    std::cout << "[TileGen] Seed=" << seed
+              << " loops=" << loopsPlaced
+              << " safePallets=" << safePalletsPlaced
+              << " tiles=" << kGridSize * kGridSize
+              << "\n";
 
     return map;
 }

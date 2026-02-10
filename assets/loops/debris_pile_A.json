@@ -1,0 +1,82 @@
+{
+  "asset_version": 1,
+  "id": "debris_pile_A",
+  "display_name": "Debris Pile A",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [
+      -8.0,
+      0.0,
+      -8.0
+    ],
+    "max": [
+      8.0,
+      2.0,
+      8.0
+    ]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "rock1",
+      "position": [
+        -3.5,
+        1.0,
+        0.5
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        2.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "rock2",
+      "position": [
+        0.5,
+        1.0,
+        -2.0
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        1.5
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "rock3",
+      "position": [
+        4.0,
+        1.0,
+        2.5
+      ],
+      "half_extents": [
+        1.5,
+        1.0,
+        1.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

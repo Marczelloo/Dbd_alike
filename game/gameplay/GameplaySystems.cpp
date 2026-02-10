@@ -894,6 +894,13 @@ HudState GameplaySystems::BuildHudState() const
                 case 4: hud.activeLoopArchetype = "FourLane"; break;
                 case 5: hud.activeLoopArchetype = "FillerA"; break;
                 case 6: hud.activeLoopArchetype = "FillerB"; break;
+                case 7: hud.activeLoopArchetype = "LongWall"; break;
+                case 8: hud.activeLoopArchetype = "ShortWall"; break;
+                case 9: hud.activeLoopArchetype = "LWallWindow"; break;
+                case 10: hud.activeLoopArchetype = "LWallPallet"; break;
+                case 11: hud.activeLoopArchetype = "TWalls"; break;
+                case 12: hud.activeLoopArchetype = "GymBox"; break;
+                case 13: hud.activeLoopArchetype = "DebrisPile"; break;
                 default: hud.activeLoopArchetype = "Unknown"; break;
             }
         }
@@ -1438,8 +1445,17 @@ void GameplaySystems::ApplyGameplayTuning(const GameplayTuning& tuning)
     m_tuning.weightFourLane = std::max(0.0F, m_tuning.weightFourLane);
     m_tuning.weightFillerA = std::max(0.0F, m_tuning.weightFillerA);
     m_tuning.weightFillerB = std::max(0.0F, m_tuning.weightFillerB);
+    m_tuning.weightLongWall = std::max(0.0F, m_tuning.weightLongWall);
+    m_tuning.weightShortWall = std::max(0.0F, m_tuning.weightShortWall);
+    m_tuning.weightLWallWindow = std::max(0.0F, m_tuning.weightLWallWindow);
+    m_tuning.weightLWallPallet = std::max(0.0F, m_tuning.weightLWallPallet);
+    m_tuning.weightTWalls = std::max(0.0F, m_tuning.weightTWalls);
+    m_tuning.weightGymBox = std::max(0.0F, m_tuning.weightGymBox);
+    m_tuning.weightDebrisPile = std::max(0.0F, m_tuning.weightDebrisPile);
     m_tuning.maxLoopsPerMap = glm::clamp(m_tuning.maxLoopsPerMap, 0, 64);
     m_tuning.minLoopDistanceTiles = glm::clamp(m_tuning.minLoopDistanceTiles, 0.0F, 8.0F);
+    m_tuning.maxSafePallets = glm::clamp(m_tuning.maxSafePallets, 0, 64);
+    m_tuning.maxDeadzoneTiles = glm::clamp(m_tuning.maxDeadzoneTiles, 1, 8);
 
     m_tuning.serverTickRate = (m_tuning.serverTickRate <= 30) ? 30 : 60;
     m_tuning.interpolationBufferMs = glm::clamp(m_tuning.interpolationBufferMs, 50, 1000);
@@ -1466,8 +1482,18 @@ void GameplaySystems::ApplyGameplayTuning(const GameplayTuning& tuning)
     m_generationSettings.weightFourLane = m_tuning.weightFourLane;
     m_generationSettings.weightFillerA = m_tuning.weightFillerA;
     m_generationSettings.weightFillerB = m_tuning.weightFillerB;
+    m_generationSettings.weightLongWall = m_tuning.weightLongWall;
+    m_generationSettings.weightShortWall = m_tuning.weightShortWall;
+    m_generationSettings.weightLWallWindow = m_tuning.weightLWallWindow;
+    m_generationSettings.weightLWallPallet = m_tuning.weightLWallPallet;
+    m_generationSettings.weightTWalls = m_tuning.weightTWalls;
+    m_generationSettings.weightGymBox = m_tuning.weightGymBox;
+    m_generationSettings.weightDebrisPile = m_tuning.weightDebrisPile;
     m_generationSettings.maxLoops = m_tuning.maxLoopsPerMap;
     m_generationSettings.minLoopDistanceTiles = m_tuning.minLoopDistanceTiles;
+    m_generationSettings.maxSafePallets = m_tuning.maxSafePallets;
+    m_generationSettings.maxDeadzoneTiles = m_tuning.maxDeadzoneTiles;
+    m_generationSettings.edgeBiasLoops = m_tuning.edgeBiasLoops;
 
     auto applyRole = [&](engine::scene::Entity entity, bool survivor) {
         auto actorIt = m_world.Actors().find(entity);

@@ -1,0 +1,120 @@
+{
+  "asset_version": 1,
+  "id": "debris_pile_B",
+  "display_name": "Debris Pile B",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [
+      -8.0,
+      0.0,
+      -8.0
+    ],
+    "max": [
+      8.0,
+      2.0,
+      8.0
+    ]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "rock_nw",
+      "position": [
+        -2.25,
+        1.0,
+        -3.25
+      ],
+      "half_extents": [
+        1.25,
+        1.0,
+        1.25
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "corridor_left",
+      "position": [
+        -1.5,
+        1.0,
+        1.5
+      ],
+      "half_extents": [
+        0.5,
+        1.0,
+        2.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "corridor_right",
+      "position": [
+        1.75,
+        1.0,
+        1.5
+      ],
+      "half_extents": [
+        0.75,
+        1.0,
+        2.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "wall",
+      "name": "rock_ne",
+      "position": [
+        4.5,
+        1.0,
+        -3.5
+      ],
+      "half_extents": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    },
+    {
+      "type": "pallet",
+      "name": "pallet",
+      "position": [
+        0.0,
+        1.0,
+        1.5
+      ],
+      "half_extents": [
+        0.8,
+        0.9,
+        0.2
+      ],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}
