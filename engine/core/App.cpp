@@ -804,6 +804,8 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     m_gameplay.LoadMap(normalizedMap);
     if (normalizedMap == "main")
     {
+        // Generate new random seed for each solo session
+        m_sessionSeed = std::random_device{}();
         m_gameplay.RegenerateLoops(m_sessionSeed);
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
     }
@@ -855,6 +857,8 @@ bool App::StartHostSession(const std::string& mapName, const std::string& roleNa
     m_gameplay.LoadMap(normalizedMap);
     if (normalizedMap == "main")
     {
+        // Generate new random seed for each host session
+        m_sessionSeed = std::random_device{}();
         m_gameplay.RegenerateLoops(m_sessionSeed);
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
     }

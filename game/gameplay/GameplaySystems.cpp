@@ -1977,17 +1977,10 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         m_world.Names()[hookEntity] = engine::scene::NameComponent{"hook"};
     }
 
-    const std::array<glm::vec3, 5> generatorOffsets{
-        glm::vec3{-11.0F, 1.0F, -9.0F},
-        glm::vec3{11.0F, 1.0F, -9.0F},
-        glm::vec3{-11.0F, 1.0F, 9.0F},
-        glm::vec3{11.0F, 1.0F, 9.0F},
-        glm::vec3{0.0F, 1.0F, 12.0F},
-    };
-    for (const glm::vec3& offset : generatorOffsets)
+    // Spawn generators at positions from the map (attached to loops)
+    for (const glm::vec3& generatorPos : generated.generatorSpawns)
     {
         const engine::scene::Entity generatorEntity = m_world.CreateEntity();
-        const glm::vec3 generatorPos = (generated.survivorSpawn + generated.killerSpawn) * 0.5F + offset;
         m_world.Transforms()[generatorEntity] = engine::scene::Transform{
             generatorPos,
             glm::vec3{0.0F},

@@ -38,6 +38,7 @@ struct GeneratedMap
     std::vector<BoxSpawn> walls;
     std::vector<WindowSpawn> windows;
     std::vector<PalletSpawn> pallets;
+    std::vector<glm::vec3> generatorSpawns; // Positions for generators (always 5)
     std::vector<TileDebug> tiles;
     glm::vec3 survivorSpawn{0.0F};
     glm::vec3 killerSpawn{0.0F};

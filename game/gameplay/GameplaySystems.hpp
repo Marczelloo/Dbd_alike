@@ -521,7 +521,7 @@ private:
 
     MapType m_currentMap = MapType::Test;
     std::string m_activeMapName = "test";
-    unsigned int m_generationSeed = 1337U;
+    unsigned int m_generationSeed = std::random_device{}();
 
     engine::scene::Entity m_survivor = 0;
     engine::scene::Entity m_killer = 0;

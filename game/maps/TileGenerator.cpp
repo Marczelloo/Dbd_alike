@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -1047,6 +1048,10 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
     forced.emplace(1 * kGridSize + 1, TileArchetype::Shack);
     forced.emplace(6 * kGridSize + 6, TileArchetype::LTWalls);
 
+    // Track loop positions for generator placement (always exactly 5)
+    std::vector<glm::vec3> loopCenters;
+    std::vector<int> loopPriorities; // Higher = better for generator
+
     // Build full weighted candidate list including v2 types.
     const std::vector<std::pair<TileArchetype, float>> allWeights{
         {TileArchetype::LTWalls, settings.weightTLWalls},
@@ -1207,6 +1212,21 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
                 {
                     ++safePalletsPlaced;
                 }
+
+                // Track loop for generator placement (higher priority for complex loops)
+                loopCenters.push_back(tileCenter);
+                int priority = 1;
+                if (archetype == TileArchetype::JungleGymLong || archetype == TileArchetype::GymBox ||
+                    archetype == TileArchetype::LTWalls || archetype == TileArchetype::FourLane)
+                {
+                    priority = 3; // Strong loops
+                }
+                else if (archetype == TileArchetype::LWallWindow || archetype == TileArchetype::LWallPallet ||
+                         archetype == TileArchetype::TWalls)
+                {
+                    priority = 2; // Medium loops
+                }
+                loopPriorities.push_back(priority);
             }
 
             map.tiles.push_back(GeneratedMap::TileDebug{
@@ -1224,6 +1244,111 @@ GeneratedMap TileGenerator::GenerateMainMap(unsigned int seed, const GenerationS
               << " safePallets=" << safePalletsPlaced
               << " tiles=" << kGridSize * kGridSize
               << "\n";
+
+    // --- Place exactly 5 generators at loop positions ---
+    // Strategy: pick highest priority loops, then spread them across the map
+    if (loopCenters.empty())
+    {
+        // Fallback: place at map center if no loops
+        map.generatorSpawns.push_back(glm::vec3{0.0F, 1.0F, 0.0F});
+    }
+    else
+    {
+        // Sort loops by priority (highest first)
+        std::vector<std::size_t> indices(loopCenters.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::stable_sort(indices.begin(), indices.end(),
+            [&loopPriorities](std::size_t a, std::size_t b) {
+                return loopPriorities[a] > loopPriorities[b];
+            });
+
+        // Pick top 5 (or all if fewer)
+        const int targetCount = 5;
+        const int pickCount = std::min(targetCount, static_cast<int>(loopCenters.size()));
+
+        // First add highest priority loops
+        std::vector<glm::vec3> selected;
+        for (int i = 0; i < pickCount; ++i)
+        {
+            selected.push_back(loopCenters[indices[i]]);
+        }
+
+        // If we need more, add remaining loops (shouldn't happen with proper weights)
+        for (std::size_t i = pickCount; i < indices.size() && static_cast<int>(selected.size()) < targetCount; ++i)
+        {
+            selected.push_back(loopCenters[indices[i]]);
+        }
+
+        // Spread selected generators: first pick the most spread out subset
+        if (static_cast<int>(selected.size()) > targetCount)
+        {
+            // Simple greedy spread: start with first, then pick furthest each time
+            std::vector<glm::vec3> spread;
+            spread.push_back(selected[0]);
+
+            while (spread.size() < static_cast<std::size_t>(targetCount))
+            {
+                float bestDist = -1.0F;
+                std::size_t bestIdx = 0;
+
+                for (std::size_t i = 0; i < selected.size(); ++i)
+                {
+                    const glm::vec3& candidate = selected[i];
+                    // Skip if already selected
+                    bool alreadyUsed = false;
+                    for (const glm::vec3& used : spread)
+                    {
+                        if (glm::length(candidate - used) < 0.1F)
+                        {
+                            alreadyUsed = true;
+                            break;
+                        }
+                    }
+                    if (alreadyUsed) continue;
+
+                    // Find min distance to already selected
+                    float minDist = std::numeric_limits<float>::max();
+                    for (const glm::vec3& used : spread)
+                    {
+                        const float d = glm::length(candidate - used);
+                        minDist = std::min(minDist, d);
+                    }
+
+                    if (minDist > bestDist)
+                    {
+                        bestDist = minDist;
+                        bestIdx = i;
+                    }
+                }
+
+                spread.push_back(selected[bestIdx]);
+            }
+
+            selected = spread;
+        }
+
+        // Add generator spawns (offset slightly from loop center to avoid clipping)
+        for (const glm::vec3& loopPos : selected)
+        {
+            map.generatorSpawns.push_back(loopPos + glm::vec3{0.0F, 1.0F, 0.0F});
+        }
+    }
+
+    // Always ensure exactly 5 generators (fill with center positions if needed)
+    while (static_cast<int>(map.generatorSpawns.size()) < 5)
+    {
+        const float mapHalf = kGridSize * kTileSize * 0.5F;
+        const glm::vec3 center{0.0F, 1.0F, 0.0F};
+        // Spread around center
+        const int idx = static_cast<int>(map.generatorSpawns.size());
+        const float offset = 8.0F * static_cast<float>(idx);
+        const glm::vec3 pos = center + glm::vec3{
+            (idx % 2 == 0 ? offset : -offset),
+            0.0F,
+            (idx % 3 == 0 ? offset : -offset)
+        };
+        map.generatorSpawns.push_back(pos);
+    }
 
     return map;
 }
