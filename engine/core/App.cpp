@@ -3911,7 +3911,7 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
     const bool showStats = m_showStatsWindow && showOverlay;
     const bool showControls = m_showControlsWindow && showOverlay;
 
-    // Perk debug panel (from main branch)
+    // Perk debug panel
     if (hudState.debugDrawEnabled)
     {
         const engine::ui::UiRect perkPanel{
