@@ -112,6 +112,12 @@ struct HudState
     float timeSinceLOS = 0.0F;     // Time since killer had LOS
     float timeSinceCenterFOV = 0.0F; // Time since survivor was in center FOV
 
+    // Bloodlust state
+    int bloodlustTier = 0;          // Current bloodlust tier (0-3)
+    float bloodlustSpeedMultiplier = 1.0F; // Speed multiplier from bloodlust
+    float killerBaseSpeed = 0.0F;    // Killer's base movement speed
+    float killerCurrentSpeed = 0.0F;  // Killer's current speed after all multipliers
+
     bool collisionEnabled = true;
     bool debugDrawEnabled = true;
     bool physicsDebugEnabled = false;
@@ -357,6 +363,12 @@ public:
     void SetTerrorRadius(float meters);
     [[nodiscard]] bool TerrorRadiusVisualizationEnabled() const { return m_terrorRadiusVisible; }
 
+    // Bloodlust system
+    void ResetBloodlust();
+    void SetBloodlustTier(int tier);
+    [[nodiscard]] int GetBloodlustTier() const { return m_bloodlust.tier; }
+    [[nodiscard]] float GetBloodlustSpeedMultiplier() const;
+
     [[nodiscard]] bool DebugDrawEnabled() const { return m_debugDrawEnabled; }
 
     void SetNetworkAuthorityMode(bool enabled);
@@ -469,6 +481,13 @@ private:
         float lostCenterFOVTimeout = 8.0F;  // DBD-like: 8s lost center FOV timeout
     };
 
+    struct BloodlustState
+    {
+        int tier = 0;                          // 0-3 (0 = none, 1/2/3 = active tiers)
+        float timeInChase = 0.0F;              // Time spent in current chase (for tier thresholds)
+        float lastTierChangeTime = 0.0F;        // When the last tier change occurred
+    };
+
     struct TimedMessage
     {
         std::string text;
@@ -537,6 +556,7 @@ private:
     void UpdateKillerAttack(const RoleCommand& killerCommand, float fixedDt);
     void UpdatePalletBreak(float fixedDt);
     void UpdateChaseState(float fixedDt);
+    void UpdateBloodlust(float fixedDt);
     void UpdateCamera(float deltaSeconds);
 
     [[nodiscard]] CameraMode ResolveCameraMode() const;
@@ -627,6 +647,7 @@ private:
 
     ChaseState m_chase;
     std::optional<bool> m_forcedChase;
+    BloodlustState m_bloodlust{};
 
     InteractionCandidate m_interactionCandidate{};
     float m_interactionPromptHoldSeconds = 0.0F;

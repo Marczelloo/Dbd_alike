@@ -1009,6 +1009,46 @@ struct DeveloperConsole::Impl
             AddLog("Time Since Center FOV: " + std::to_string(hudState.timeSinceCenterFOV) + " s");
         });
 
+        RegisterCommand("bloodlust_reset", "Reset bloodlust to tier 0", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            context.gameplay->ResetBloodlust();
+            AddLog("Bloodlust reset to tier 0");
+        });
+
+        RegisterCommand("bloodlust_set <0|1|2|3>", "Set bloodlust tier directly", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: bloodlust_set <0|1|2|3>");
+                return;
+            }
+            const int tier = ParseIntOr(0, tokens[1]);
+            if (tier < 0 || tier > 3)
+            {
+                AddLog("Tier must be between 0 and 3");
+                return;
+            }
+            context.gameplay->SetBloodlustTier(tier);
+            AddLog("Bloodlust tier set to " + std::to_string(tier));
+        });
+
+        RegisterCommand("bloodlust_dump", "Print bloodlust state and speed info", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const auto hudState = context.gameplay->BuildHudState();
+            AddLog("=== Bloodlust State ===");
+            AddLog("Tier: " + std::to_string(hudState.bloodlustTier));
+            AddLog("Speed Multiplier: " + std::to_string(hudState.bloodlustSpeedMultiplier));
+            AddLog("Killer Base Speed: " + std::to_string(hudState.killerBaseSpeed) + " m/s");
+            AddLog("Killer Current Speed: " + std::to_string(hudState.killerCurrentSpeed) + " m/s");
+        });
+
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -1363,6 +1403,10 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         ImGui::Text("Move: %s", hudState.movementStateName.c_str());
         ImGui::Text("Camera: %s", hudState.cameraModeName.c_str());
         ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
+        if (hudState.roleName == "Killer" && hudState.bloodlustTier > 0)
+        {
+            ImGui::Text("Bloodlust: T%d (%.0f%% speed)", hudState.bloodlustTier, hudState.bloodlustSpeedMultiplier * 100.0F);
+        }
         ImGui::Text("Render: %s", hudState.renderModeName.c_str());
         ImGui::Text("Attack: %s", hudState.killerAttackStateName.c_str());
         if (hudState.roleName == "Killer")

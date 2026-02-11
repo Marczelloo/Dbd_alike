@@ -386,6 +386,7 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
 
     RebuildPhysicsWorld();
     UpdateChaseState(fixedDt);
+    UpdateBloodlust(fixedDt);
     UpdateInteractionCandidate();
 
     m_localSurvivorCommand.lookDelta = glm::vec2{0.0F};
@@ -994,6 +995,12 @@ HudState GameplaySystems::BuildHudState() const
     const auto survivorActorIt = m_world.Actors().find(m_survivor);
     hud.survivorSprinting = (survivorActorIt != m_world.Actors().end()) && survivorActorIt->second.sprinting;
 
+    // Bloodlust state
+    hud.bloodlustTier = m_bloodlust.tier;
+    hud.bloodlustSpeedMultiplier = GetBloodlustSpeedMultiplier();
+    hud.killerBaseSpeed = m_tuning.killerMoveSpeed;
+    hud.killerCurrentSpeed = m_tuning.killerMoveSpeed * m_killerSpeedPercent * hud.bloodlustSpeedMultiplier;
+
     hud.collisionEnabled = m_collisionEnabled;
     hud.debugDrawEnabled = m_debugDrawEnabled;
     hud.physicsDebugEnabled = m_physicsDebugEnabled;
@@ -1415,8 +1422,11 @@ void GameplaySystems::SetRoleSpeedPercent(const std::string& roleName, float per
         auto it = m_world.Actors().find(m_killer);
         if (it != m_world.Actors().end())
         {
-            it->second.walkSpeed = m_tuning.killerMoveSpeed * m_killerSpeedPercent;
-            it->second.sprintSpeed = m_tuning.killerMoveSpeed * m_killerSpeedPercent;
+            // Apply bloodlust multiplier ON TOP of base speed
+            const float bloodlustMult = GetBloodlustSpeedMultiplier();
+            const float finalSpeed = m_tuning.killerMoveSpeed * m_killerSpeedPercent * bloodlustMult;
+            it->second.walkSpeed = finalSpeed;
+            it->second.sprintSpeed = finalSpeed;
         }
     }
 }
@@ -3214,6 +3224,13 @@ void GameplaySystems::UpdatePalletBreak(float fixedDt)
             SpawnGameplayFx("dust_puff", transformIt->second.position + glm::vec3{0.0F, 0.2F, 0.0F}, glm::vec3{0.0F, 1.0F, 0.0F}, netMode);
             transformIt->second.position.y = -20.0F;
         }
+
+        // Reset bloodlust on pallet break (DBD-like)
+        if (m_bloodlust.tier > 0)
+        {
+            ResetBloodlust();
+        }
+
         AddRuntimeMessage("Pallet: dropped -> broken", 2.0F);
         m_killerBreakingPallet = 0;
     }
@@ -4373,6 +4390,12 @@ void GameplaySystems::TryStunKillerFromPallet(engine::scene::Entity palletEntity
         return;
     }
 
+    // Reset bloodlust on pallet stun (DBD-like)
+    if (m_bloodlust.tier > 0)
+    {
+        ResetBloodlust();
+    }
+
     killerIt->second.stunTimer = std::max(killerIt->second.stunTimer, palletIt->second.stunDuration);
     killerIt->second.velocity = glm::vec3{0.0F};
     AddRuntimeMessage("Killer stunned by pallet", 1.8F);
@@ -5032,6 +5055,12 @@ void GameplaySystems::ApplyKillerAttackAftermath(bool hit, bool lungeAttack)
 
 void GameplaySystems::ApplySurvivorHit()
 {
+    // Reset bloodlust on hit (DBD-like)
+    if (m_bloodlust.tier > 0)
+    {
+        ResetBloodlust();
+    }
+
     if (m_survivorState == SurvivorHealthState::Healthy)
     {
         SetSurvivorState(SurvivorHealthState::Injured, "Killer hit");
@@ -5392,4 +5421,89 @@ bool GameplaySystems::IsSurvivorInKillerCenterFOV(
     constexpr float centerFovDegrees = 35.0F;
     return IsSurvivorInKillerFOV(killerPos, killerForward, survivorPos, centerFovDegrees * 2.0F);
 }
+
+//==============================================================================
+// Bloodlust System (DBD-like)
+//==============================================================================
+
+void GameplaySystems::ResetBloodlust()
+{
+    const int oldTier = m_bloodlust.tier;
+    m_bloodlust.tier = 0;
+    m_bloodlust.timeInChase = 0.0F;
+    m_bloodlust.lastTierChangeTime = 0.0F;
+
+    // Re-apply speed to remove bloodlust bonus
+    SetRoleSpeedPercent("killer", m_killerSpeedPercent);
+
+    if (oldTier > 0)
+    {
+        AddRuntimeMessage("Bloodlust reset", 1.0F);
+    }
+}
+
+void GameplaySystems::SetBloodlustTier(int tier)
+{
+    const int clampedTier = glm::clamp(tier, 0, 3);
+    if (m_bloodlust.tier != clampedTier)
+    {
+        m_bloodlust.tier = clampedTier;
+        m_bloodlust.lastTierChangeTime = m_elapsedSeconds;
+        AddRuntimeMessage("Bloodlust tier " + std::to_string(clampedTier), 1.0F);
+    }
+}
+
+float GameplaySystems::GetBloodlustSpeedMultiplier() const
+{
+    // DBD-like bloodlust tiers
+    // Tier 0: 100% (no bonus)
+    // Tier 1: 120% (at 15s in chase)
+    // Tier 2: 125% (at 25s in chase)
+    // Tier 3: 130% (at 35s in chase)
+    switch (m_bloodlust.tier)
+    {
+        case 1: return 1.20F;
+        case 2: return 1.25F;
+        case 3: return 1.30F;
+        default: return 1.0F;
+    }
+}
+
+void GameplaySystems::UpdateBloodlust(float fixedDt)
+{
+    // Bloodlust only progresses during active chase
+    if (!m_chase.isChasing)
+    {
+        // Reset immediately when chase ends
+        if (m_bloodlust.tier > 0 || m_bloodlust.timeInChase > 0.0F)
+        {
+            ResetBloodlust();
+        }
+        return;
+    }
+
+    // Only server-authoritative mode should compute bloodlust
+    // For now, we always compute (will be replicated in multiplayer)
+
+    m_bloodlust.timeInChase += fixedDt;
+
+    // DBD-like tier thresholds
+    // Tier 1: 15s → 120% speed
+    // Tier 2: 25s → 125% speed
+    // Tier 3: 35s → 130% speed
+    const int newTier = [this]() -> int {
+        if (m_bloodlust.timeInChase >= 35.0F) return 3;
+        if (m_bloodlust.timeInChase >= 25.0F) return 2;
+        if (m_bloodlust.timeInChase >= 15.0F) return 1;
+        return 0;
+    }();
+
+    if (newTier != m_bloodlust.tier)
+    {
+        SetBloodlustTier(newTier);
+        // Apply new speed multiplier
+        SetRoleSpeedPercent("killer", m_killerSpeedPercent);
+    }
+}
+
 } // namespace game::gameplay
