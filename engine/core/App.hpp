@@ -233,6 +233,7 @@ private:
     bool LoadTerrorRadiusProfile(const std::string& killerId);
     void StopTerrorRadiusAudio();
     void UpdateTerrorRadiusAudio(float deltaSeconds);
+    [[nodiscard]] std::string DumpTerrorRadiusState() const;
     void SendGameplayTuningToClient();
     void ApplyMapEnvironment(const std::string& mapName);
 
@@ -362,6 +363,14 @@ private:
     std::vector<audio::AudioSystem::SoundHandle> m_debugAudioLoops;
     audio::AudioSystem::SoundHandle m_sessionAmbienceLoop = 0;
 
+    enum class TerrorRadiusBand
+    {
+        Outside,
+        Far,   // Outer edge of TR (0.66R < dist <= R)
+        Mid,    // Middle of TR (0.33R < dist <= 0.66R)
+        Close   // Close to killer (0 <= dist <= 0.33R)
+    };
+
     struct TerrorRadiusLayerAudio
     {
         std::string clip;
@@ -376,12 +385,14 @@ private:
     struct TerrorRadiusProfileAudio
     {
         std::string killerId = "default_killer";
-        float baseRadius = 24.0F;
+        float baseRadius = 32.0F;       // DBD-like: 32m default TR radius
+        float smoothingTime = 0.25F;      // Crossfade duration 0.15-0.35s
         std::vector<TerrorRadiusLayerAudio> layers;
         bool loaded = false;
     };
 
     TerrorRadiusProfileAudio m_terrorAudioProfile{};
+    TerrorRadiusBand m_currentBand = TerrorRadiusBand::Outside;
     bool m_terrorAudioDebug = false;
 
     std::ofstream m_networkLogFile;

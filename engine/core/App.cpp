@@ -899,6 +899,9 @@ bool App::Run()
             }
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         };
+        context.terrorRadiusDump = [this]() -> std::string {
+            return DumpTerrorRadiusState();
+        };
         context.audioPlay = [this](const std::string& clip, const std::string& busName, bool loop) {
             const audio::AudioSystem::Bus bus = AudioBusFromName(busName);
             const audio::AudioSystem::PlayOptions options{};
@@ -3043,7 +3046,8 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
         json defaults;
         defaults["asset_version"] = 1;
         defaults["killer_id"] = m_terrorAudioProfile.killerId;
-        defaults["base_radius"] = 24.0F;
+        defaults["base_radius"] = 32.0F;  // DBD-like: 32m default TR radius
+        defaults["smoothing_time"] = 0.25F; // Crossfade duration 0.15-0.35s
         defaults["layers"] = json::array({
             json{{"clip", "tr_far"}, {"fade_in_start", 0.0F}, {"fade_in_end", 0.45F}, {"gain", 0.15F}},
             json{{"clip", "tr_mid"}, {"fade_in_start", 0.25F}, {"fade_in_end", 0.75F}, {"gain", 0.2F}},
@@ -3076,6 +3080,10 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
     if (root.contains("base_radius") && root["base_radius"].is_number())
     {
         m_terrorAudioProfile.baseRadius = glm::clamp(root["base_radius"].get<float>(), 4.0F, 120.0F);
+    }
+    if (root.contains("smoothing_time") && root["smoothing_time"].is_number())
+    {
+        m_terrorAudioProfile.smoothingTime = glm::clamp(root["smoothing_time"].get<float>(), 0.15F, 0.35F);
     }
     if (root.contains("layers") && root["layers"].is_array())
     {
@@ -3162,50 +3170,175 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 
     const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
     const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
-    float intensity = 0.0F;
-    bool chaseActive = false;
+
+    if (!hasSurvivor || !hasKiller)
+    {
+        // Fade out all layers if one entity is missing
+        for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            layer.currentVolume = 0.0F;
+            if (layer.handle != 0)
+            {
+                (void)m_audio.SetHandleVolume(layer.handle, 0.0F);
+            }
+        }
+        m_currentBand = TerrorRadiusBand::Outside;
+        return;
+    }
+
+    // Calculate XZ (horizontal) distance from Survivor to Killer
+    const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
+    const glm::vec3 killer = m_gameplay.RolePosition("killer");
+    const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
+    const float distance = glm::length(delta);
+    const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
+    const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+
+    // DBD-like stepped bands (no gradient!)
+    // FAR:  0.66R < dist <= R       (outer edge, weakest)
+    // MID:  0.33R < dist <= 0.66R   (middle)
+    // CLOSE: 0 <= dist <= 0.33R       (closest, strongest)
+    TerrorRadiusBand newBand = TerrorRadiusBand::Outside;
+    if (distance <= radius * 0.333333F)
+    {
+        newBand = TerrorRadiusBand::Close;
+    }
+    else if (distance <= radius * 0.666667F)
+    {
+        newBand = TerrorRadiusBand::Mid;
+    }
+    else if (distance <= radius)
+    {
+        newBand = TerrorRadiusBand::Far;
+    }
+    else
+    {
+        newBand = TerrorRadiusBand::Outside;
+    }
+
+    m_currentBand = newBand;
+
+    // Smoothing factor based on configured smoothing time (0.15-0.35s)
+    const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
+
+    // Update each layer based on stepped band logic and chase override
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        float targetVolume = 0.0F;
+
+        // Chase layer (tr_chase) - only plays during chase
+        if (layer.chaseOnly)
+        {
+            targetVolume = chaseActive ? layer.gain : 0.0F;
+        }
+        // Distance-based layers (tr_far, tr_mid, tr_close)
+        else
+        {
+            // Stepped band logic - each layer is fully ON or OFF based on its designated band
+            // Layer names must contain "far", "mid", "close" to identify their band
+            const std::string lowerClip = [&layer]() {
+                std::string lower = layer.clip;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return lower;
+            }();
+
+            if (lowerClip.find("far") != std::string::npos)
+            {
+                // FAR layer: ON only in FAR band (or during chase for ambience)
+                targetVolume = (newBand == TerrorRadiusBand::Far) ? layer.gain : 0.0F;
+            }
+            else if (lowerClip.find("mid") != std::string::npos)
+            {
+                // MID layer: ON only in MID band
+                targetVolume = (newBand == TerrorRadiusBand::Mid) ? layer.gain : 0.0F;
+            }
+            else if (lowerClip.find("close") != std::string::npos)
+            {
+                // CLOSE layer: ON in CLOSE band, BUT SUPPRESSED during chase (replaced by chase music)
+                if (chaseActive)
+                {
+                    targetVolume = 0.0F; // Chase override - suppress close layer
+                }
+                else
+                {
+                    targetVolume = (newBand == TerrorRadiusBand::Close) ? layer.gain : 0.0F;
+                }
+            }
+            else
+            {
+                // Unknown layer - use old gradient behavior as fallback
+                const float intensity = glm::clamp(1.0F - distance / radius, 0.0F, 1.0F);
+                if (layer.fadeInEnd <= layer.fadeInStart + 1.0e-4F)
+                {
+                    targetVolume = intensity >= layer.fadeInStart ? layer.gain : 0.0F;
+                }
+                else
+                {
+                    targetVolume = glm::clamp((intensity - layer.fadeInStart) / (layer.fadeInEnd - layer.fadeInStart), 0.0F, 1.0F) * layer.gain;
+                }
+            }
+        }
+
+        // Apply smoothing only on transitions (prevent pops)
+        layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, smooth);
+        if (layer.handle != 0)
+        {
+            (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
+        }
+    }
+}
+
+std::string App::DumpTerrorRadiusState() const
+{
+    std::string out = "=== Terror Radius State ===\n";
+
+    // Band name
+    const char* bandName = "OUTSIDE";
+    switch (m_currentBand)
+    {
+        case TerrorRadiusBand::Outside: bandName = "OUTSIDE"; break;
+        case TerrorRadiusBand::Far: bandName = "FAR"; break;
+        case TerrorRadiusBand::Mid: bandName = "MID"; break;
+        case TerrorRadiusBand::Close: bandName = "CLOSE"; break;
+    }
+    out += "Band: ";
+    out += bandName;
+    out += "\n";
+
+    // Radius
+    out += "Base Radius: " + std::to_string(m_terrorAudioProfile.baseRadius) + " m\n";
+    out += "Smoothing Time: " + std::to_string(m_terrorAudioProfile.smoothingTime) + " s\n";
+
+    // Distance info
+    const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
+    const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
     if (hasSurvivor && hasKiller)
     {
         const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
         const glm::vec3 killer = m_gameplay.RolePosition("killer");
         const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
         const float distance = glm::length(delta);
-        const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
-        intensity = glm::clamp(1.0F - distance / radius, 0.0F, 1.0F);
-        chaseActive = m_gameplay.BuildHudState().chaseActive;
+        out += "Distance: " + std::to_string(distance) + " m\n";
     }
 
-    // Always update layers even if one entity is missing
-    // (intensity will be 0, which fades all audio out)
+    // Chase state
+    const auto hudState = m_gameplay.BuildHudState();
+    out += std::string("Chase Active: ") + (hudState.chaseActive ? "YES" : "NO") + "\n";
 
-    const float smooth = glm::clamp(deltaSeconds * 8.0F, 0.0F, 1.0F);
-
-    // Debug: terror radius debug state (now toggled via console command)
-    // Visual cone drawing is in GameplaySystems.cpp::RenderDebug()
-
-    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    // Per-layer volumes
+    out += "Layer Volumes:\n";
+    for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
     {
-        float w = 0.0F;
-        if (layer.fadeInEnd <= layer.fadeInStart + 1.0e-4F)
+        out += "  [" + layer.clip + "] " + std::to_string(layer.currentVolume) + " / " + std::to_string(layer.gain);
+        if (layer.chaseOnly)
         {
-            w = intensity >= layer.fadeInStart ? 1.0F : 0.0F;
+            out += " (chase_only)";
         }
-        else
-        {
-            w = glm::clamp((intensity - layer.fadeInStart) / (layer.fadeInEnd - layer.fadeInStart), 0.0F, 1.0F);
-        }
-        if (layer.chaseOnly && !chaseActive)
-        {
-            w = 0.0F;
-        }
-
-        const float target = w * layer.gain;
-        layer.currentVolume = glm::mix(layer.currentVolume, target, smooth);
-        if (layer.handle != 0)
-        {
-            (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
-        }
+        out += "\n";
     }
+
+    return out;
 }
 
 void App::ApplyGraphicsSettings(const GraphicsSettings& settings, bool startAutoConfirm)

@@ -728,6 +728,35 @@ struct DeveloperConsole::Impl
             AddLog(std::string("Terror radius audio debug ") + (enabled ? "enabled." : "disabled."));
         });
 
+        RegisterCommand("tr_dump", "Print terror radius state, band, per-layer volumes", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.terrorRadiusDump == nullptr)
+            {
+                AddLog("Terror radius dump not available.");
+                return;
+            }
+            AddLog(context.terrorRadiusDump());
+        });
+
+        // Alias for tr_set
+        RegisterCommand("tr_radius <m>", "Set terror radius (alias for tr_set)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() != 2)
+            {
+                AddLog("Usage: tr_radius <meters>");
+                return;
+            }
+
+            const float meters = std::max(1.0F, ParseFloatOr(32.0F, tokens[1]));
+            if (context.gameplay != nullptr)
+            {
+                context.gameplay->SetTerrorRadius(meters);
+            }
+            if (context.setTerrorRadiusMeters)
+            {
+                context.setTerrorRadiusMeters(meters);
+            }
+            AddLog("Terror radius set to " + std::to_string(meters) + " m");
+        });
+
         RegisterCommand("regen_loops [seed]", "Regenerate loop layout on main map (optional deterministic seed)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr)
             {
