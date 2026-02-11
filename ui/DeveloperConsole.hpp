@@ -54,6 +54,7 @@ struct ConsoleContext
     std::function<void(float)> setTerrorRadiusMeters;
     std::function<void(const std::string&)> requestRoleChange;
     std::function<std::string()> playerDump;
+    std::function<std::string()> sceneDump;
     std::function<void(const std::string&)> spawnRoleHere;
     std::function<void(const std::string&, int)> spawnRoleAt;
     std::function<std::string()> listSpawns;

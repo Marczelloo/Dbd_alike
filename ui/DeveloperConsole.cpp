@@ -103,7 +103,7 @@ std::string CommandCategoryForUsage(const std::string& usage)
         command == "noclip" || command == "tr_vis" || command == "tr_set" || command == "set_chase" ||
         command == "cam_mode" || command == "control_role" || command == "set_role" ||
         command == "fx_spawn" || command == "fx_stop_all" || command == "fx_list" ||
-        command == "player_dump")
+        command == "player_dump" || command == "scene_dump")
     {
         return "Debug";
     }
@@ -960,6 +960,13 @@ struct DeveloperConsole::Impl
             if (context.playerDump)
             {
                 AddLog(context.playerDump());
+            }
+        });
+
+        RegisterCommand("scene_dump", "Print current scene entities summary", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.sceneDump)
+            {
+                AddLog(context.sceneDump());
             }
         });
 
