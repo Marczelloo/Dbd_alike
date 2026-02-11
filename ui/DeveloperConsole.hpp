@@ -14,6 +14,11 @@ class GameplaySystems;
 struct HudState;
 }
 
+namespace game::gameplay::perks
+{
+class PerkSystem;
+}
+
 namespace ui
 {
 struct ConsoleContext
