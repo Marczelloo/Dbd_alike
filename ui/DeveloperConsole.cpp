@@ -1415,6 +1415,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             ImGui::End();
         }
 
+        // Debug overlay: always draw perks at top-left when F2 is active
         if (context.gameplay != nullptr && !hudState.debugActors.empty())
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1469,6 +1470,52 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                     drawList->AddLine(screen, endScreen, IM_COL32(80, 180, 255, 230), 2.0F);
                 }
             }
+        }
+
+        // Render perk debug info (top-left corner below runtime message) - always when debug mode is on
+        if (context.gameplay != nullptr && !hudState.debugActors.empty())
+        {
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImDrawList* drawList = ImGui::GetForegroundDrawList();
+
+            // Render perk debug info (top-left corner below runtime message)
+            const ImVec2 perkOrigin(viewport->Pos.x + 16.0F, viewport->Pos.y + 88.0F);
+            const float lineHeight = 18.0F;
+            float perkY = perkOrigin.y;
+            
+            const auto drawPerkSection = [&](const std::string& label, const std::vector<game::gameplay::HudState::ActivePerkDebug>& perks, float mod) {
+                drawList->AddText(perkOrigin, IM_COL32(200, 200, 200, 255), (label + " (x" + std::to_string(mod).substr(0, 4) + ")").c_str());
+                perkY += lineHeight;
+                
+                if (perks.empty())
+                {
+                    drawList->AddText(ImVec2(perkOrigin.x, perkY), IM_COL32(120, 120, 120, 255), "  [none]");
+                    perkY += lineHeight;
+                }
+                else
+                {
+                    for (const auto& perk : perks)
+                    {
+                        const ImU32 color = perk.isActive ? IM_COL32(120, 255, 120, 255) : IM_COL32(180, 180, 180, 255);
+                        const std::string status = perk.isActive ? "ACTIVE" : "PASSIVE";
+                        std::string extra;
+                        if (perk.isActive && perk.activeRemainingSeconds > 0.01F)
+                        {
+                            extra = " (" + std::to_string(perk.activeRemainingSeconds).substr(0, 3) + "s)";
+                        }
+                        if (!perk.isActive && perk.cooldownRemainingSeconds > 0.01F)
+                        {
+                            extra = " (CD " + std::to_string(perk.cooldownRemainingSeconds).substr(0, 3) + "s)";
+                        }
+                        drawList->AddText(ImVec2(perkOrigin.x, perkY), color, ("  " + perk.name + " [" + status + "]" + extra).c_str());
+                        perkY += lineHeight;
+                    }
+                }
+                perkY += 8.0F; // spacing between sections
+            };
+            
+            drawPerkSection("SURVIVOR PERKS", hudState.activePerksSurvivor, hudState.speedModifierSurvivor);
+            drawPerkSection("KILLER PERKS", hudState.activePerksKiller, hudState.speedModifierKiller);
         }
 
         }

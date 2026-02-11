@@ -40,6 +40,7 @@ namespace game::gameplay::perks
 {
 struct PerkLoadout;
 class PerkSystem;
+struct PerkEffect;
 }
 
 // Forward declarations
@@ -120,6 +121,21 @@ struct HudState
     int fxActiveInstances = 0;
     int fxActiveParticles = 0;
     float fxCpuMs = 0.0F;
+
+    // Perks debug info
+    struct ActivePerkDebug
+    {
+        std::string id;
+        std::string name;
+        bool isActive = false;
+        float activeRemainingSeconds = 0.0F;
+        float cooldownRemainingSeconds = 0.0F;
+        int stacks = 0;
+    };
+    std::vector<ActivePerkDebug> activePerksSurvivor;
+    std::vector<ActivePerkDebug> activePerksKiller;
+    float speedModifierSurvivor = 1.0F;
+    float speedModifierKiller = 1.0F;
 };
 
 class GameplaySystems

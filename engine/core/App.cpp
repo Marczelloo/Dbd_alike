@@ -3778,6 +3778,64 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
     );
     m_ui.EndPanel();
 
+    if (hudState.debugDrawEnabled)
+    {
+        const engine::ui::UiRect perkPanel{
+            m_hudLayout.topLeftOffset.x * scale,
+            (m_hudLayout.topLeftOffset.y + 270.0F) * scale,
+            420.0F * scale,
+            240.0F * scale,
+        };
+        m_ui.BeginPanel("hud_perks_debug", perkPanel, true);
+        const std::string survMod = std::to_string(hudState.speedModifierSurvivor).substr(0, 4);
+        const std::string killMod = std::to_string(hudState.speedModifierKiller).substr(0, 4);
+        m_ui.Label("Perks Debug", 1.0F);
+        m_ui.Label("Survivor (x" + survMod + ")", m_ui.Theme().colorTextMuted);
+        if (hudState.activePerksSurvivor.empty())
+        {
+            m_ui.Label("  [none]", m_ui.Theme().colorTextMuted);
+        }
+        else
+        {
+            for (const auto& perk : hudState.activePerksSurvivor)
+            {
+                std::string line = "  " + perk.name + " [" + std::string(perk.isActive ? "ACTIVE" : "PASSIVE") + "]";
+                if (perk.isActive && perk.activeRemainingSeconds > 0.01F)
+                {
+                    line += " (" + std::to_string(perk.activeRemainingSeconds).substr(0, 3) + "s)";
+                }
+                else if (!perk.isActive && perk.cooldownRemainingSeconds > 0.01F)
+                {
+                    line += " (CD " + std::to_string(perk.cooldownRemainingSeconds).substr(0, 3) + "s)";
+                }
+                m_ui.Label(line, perk.isActive ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+            }
+        }
+
+        m_ui.Label("Killer (x" + killMod + ")", m_ui.Theme().colorTextMuted);
+        if (hudState.activePerksKiller.empty())
+        {
+            m_ui.Label("  [none]", m_ui.Theme().colorTextMuted);
+        }
+        else
+        {
+            for (const auto& perk : hudState.activePerksKiller)
+            {
+                std::string line = "  " + perk.name + " [" + std::string(perk.isActive ? "ACTIVE" : "PASSIVE") + "]";
+                if (perk.isActive && perk.activeRemainingSeconds > 0.01F)
+                {
+                    line += " (" + std::to_string(perk.activeRemainingSeconds).substr(0, 3) + "s)";
+                }
+                else if (!perk.isActive && perk.cooldownRemainingSeconds > 0.01F)
+                {
+                    line += " (CD " + std::to_string(perk.cooldownRemainingSeconds).substr(0, 3) + "s)";
+                }
+                m_ui.Label(line, perk.isActive ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+            }
+        }
+        m_ui.EndPanel();
+    }
+
     const engine::ui::UiRect topRight{
         static_cast<float>(m_ui.ScreenWidth()) - (360.0F * scale) - m_hudLayout.topRightOffset.x * scale,
         m_hudLayout.topRightOffset.y * scale,
