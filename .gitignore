@@ -60,6 +60,8 @@ logs/
 config/controls.json
 config/graphics.json
 config/gameplay_tuning.json
+config/editor_layout.json
+config/audio.json
 
 # ----------------------------
 # OS files
@@ -67,3 +69,5 @@ config/gameplay_tuning.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+prompt.md

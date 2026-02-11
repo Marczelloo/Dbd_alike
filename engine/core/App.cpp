@@ -719,6 +719,16 @@ bool App::Run()
         context.playerDump = [this]() {
             return PlayerDump();
         };
+        context.sceneDump = [this]() {
+            if (m_appMode == AppMode::Editor)
+            {
+                return m_levelEditor.SceneDump();
+            }
+            std::ostringstream oss;
+            oss << "GameplaySceneDump\n";
+            oss << " mode=in_game";
+            return oss.str();
+        };
 
         context.spawnRoleHere = [this](const std::string& roleName) {
             const bool ok = m_gameplay.SpawnRoleHere(roleName);
