@@ -52,6 +52,7 @@ constexpr std::uint8_t kPacketHello = 4;
 constexpr std::uint8_t kPacketReject = 5;
 constexpr std::uint8_t kPacketGameplayTuning = 6;
 constexpr std::uint8_t kPacketRoleChangeRequest = 7;
+constexpr std::uint8_t kPacketFxSpawn = 8;
 
 constexpr int kProtocolVersion = 1;
 constexpr const char* kBuildId = "dev-2026-02-09";
@@ -204,6 +205,66 @@ bool ReadValue(const std::vector<std::uint8_t>& buffer, std::size_t& offset, T& 
     offset += sizeof(T);
     return true;
 }
+
+bool SerializeFxSpawnEvent(const engine::fx::FxSpawnEvent& event, std::vector<std::uint8_t>& outBuffer)
+{
+    outBuffer.clear();
+    outBuffer.reserve(1 + sizeof(std::uint16_t) + event.assetId.size() + sizeof(float) * 6 + sizeof(std::uint8_t));
+    AppendValue(outBuffer, kPacketFxSpawn);
+
+    const std::uint16_t length = static_cast<std::uint16_t>(std::min<std::size_t>(event.assetId.size(), 4096));
+    AppendValue(outBuffer, length);
+    outBuffer.insert(outBuffer.end(), event.assetId.begin(), event.assetId.begin() + length);
+
+    AppendValue(outBuffer, event.position.x);
+    AppendValue(outBuffer, event.position.y);
+    AppendValue(outBuffer, event.position.z);
+    AppendValue(outBuffer, event.forward.x);
+    AppendValue(outBuffer, event.forward.y);
+    AppendValue(outBuffer, event.forward.z);
+    AppendValue(outBuffer, static_cast<std::uint8_t>(event.netMode));
+    return true;
+}
+
+bool DeserializeFxSpawnEvent(const std::vector<std::uint8_t>& buffer, engine::fx::FxSpawnEvent& outEvent)
+{
+    std::size_t offset = 0;
+    std::uint8_t type = 0;
+    if (!ReadValue(buffer, offset, type) || type != kPacketFxSpawn)
+    {
+        return false;
+    }
+
+    std::uint16_t length = 0;
+    if (!ReadValue(buffer, offset, length))
+    {
+        return false;
+    }
+    if (offset + length > buffer.size())
+    {
+        return false;
+    }
+    outEvent.assetId.assign(reinterpret_cast<const char*>(buffer.data() + offset), length);
+    offset += length;
+
+    if (!ReadValue(buffer, offset, outEvent.position.x) ||
+        !ReadValue(buffer, offset, outEvent.position.y) ||
+        !ReadValue(buffer, offset, outEvent.position.z) ||
+        !ReadValue(buffer, offset, outEvent.forward.x) ||
+        !ReadValue(buffer, offset, outEvent.forward.y) ||
+        !ReadValue(buffer, offset, outEvent.forward.z))
+    {
+        return false;
+    }
+
+    std::uint8_t modeByte = 0;
+    if (!ReadValue(buffer, offset, modeByte))
+    {
+        return false;
+    }
+    outEvent.netMode = static_cast<engine::fx::FxNetMode>(modeByte);
+    return true;
+}
 } // namespace
 
 bool App::Run()
@@ -234,6 +295,9 @@ bool App::Run()
     {
         return false;
     }
+    m_window.SetFileDropCallback([this](const std::vector<std::string>& paths) {
+        m_pendingDroppedFiles.insert(m_pendingDroppedFiles.end(), paths.begin(), paths.end());
+    });
 
     if (m_graphicsApplied.displayMode == DisplayModeSetting::Borderless)
     {
@@ -267,6 +331,19 @@ bool App::Run()
     m_window.SetResizeCallback([this](int width, int height) { m_renderer.SetViewport(width, height); });
 
     m_gameplay.Initialize(m_eventBus);
+    m_gameplay.SetFxReplicationCallback([this](const engine::fx::FxSpawnEvent& event) {
+        if (m_multiplayerMode != MultiplayerMode::Host || !m_network.IsConnected())
+        {
+            return;
+        }
+
+        std::vector<std::uint8_t> payload;
+        if (!SerializeFxSpawnEvent(event, payload))
+        {
+            return;
+        }
+        m_network.SendReliable(payload.data(), payload.size());
+    });
     m_gameplay.ApplyGameplayTuning(m_gameplayApplied);
     ApplyControlsSettings();
     m_gameplay.SetRenderModeLabel(RenderModeToText(m_renderer.GetRenderMode()));
@@ -290,6 +367,11 @@ bool App::Run()
 
         m_window.PollEvents();
         m_input.Update(m_window.NativeHandle());
+        if (!m_pendingDroppedFiles.empty())
+        {
+            m_levelEditor.QueueExternalDroppedFiles(m_pendingDroppedFiles);
+            m_pendingDroppedFiles.clear();
+        }
 
         if (!m_settingsMenuOpen && m_actionBindings.IsPressed(m_input, platform::InputAction::ToggleConsole))
         {
@@ -427,20 +509,29 @@ bool App::Run()
         glm::mat4 viewProjection{1.0F};
         if (inGame)
         {
+            m_renderer.SetLightingEnabled(true);
             m_gameplay.Render(m_renderer);
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
             viewProjection = m_gameplay.BuildViewProjection(aspect);
+            m_renderer.SetCameraWorldPosition(m_gameplay.CameraPosition());
         }
         else if (inEditor)
         {
+            m_renderer.SetLightingEnabled(m_levelEditor.EditorLightingEnabled());
             m_renderer.SetEnvironmentSettings(m_levelEditor.CurrentEnvironmentSettings());
             m_levelEditor.Render(m_renderer);
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
+            m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
+        }
+        else
+        {
+            m_renderer.SetLightingEnabled(true);
+            m_renderer.SetCameraWorldPosition(glm::vec3{0.0F, 2.0F, 0.0F});
         }
         m_renderer.EndFrame(viewProjection);
 
@@ -1172,6 +1263,18 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         m_connectedEndpoint = m_joinTargetIp + ":" + std::to_string(m_joinTargetPort);
         m_menuNetStatus = "Assigned role: " + m_sessionRoleName + ".";
         TransitionNetworkState(NetworkState::Connected, "Assigned role: " + m_sessionRoleName);
+        return;
+    }
+
+    if (payload[0] == kPacketFxSpawn && m_multiplayerMode == MultiplayerMode::Client)
+    {
+        engine::fx::FxSpawnEvent event;
+        if (!DeserializeFxSpawnEvent(payload, event))
+        {
+            return;
+        }
+
+        m_gameplay.SpawnReplicatedFx(event);
         return;
     }
 

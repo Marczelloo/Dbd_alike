@@ -11,9 +11,19 @@
 
 namespace engine::assets
 {
+struct MeshSurfaceData
+{
+    render::MeshGeometry geometry;
+    std::vector<unsigned char> albedoPixels;
+    int albedoWidth = 0;
+    int albedoHeight = 0;
+    int albedoChannels = 0;
+};
+
 struct MeshData
 {
     render::MeshGeometry geometry;
+    std::vector<MeshSurfaceData> surfaces;
     glm::vec3 boundsMin{0.0F};
     glm::vec3 boundsMax{0.0F};
     bool loaded = false;

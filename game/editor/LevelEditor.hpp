@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <optional>
+#include <array>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -11,6 +14,7 @@
 
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/MeshLibrary.hpp"
+#include "engine/fx/FxSystem.hpp"
 #include "engine/platform/Input.hpp"
 #include "engine/render/Renderer.hpp"
 #include "game/editor/LevelAssets.hpp"
@@ -31,6 +35,22 @@ public:
         Translate,
         Rotate,
         Scale
+    };
+
+    enum class MaterialLabViewMode
+    {
+        Off,
+        Overlay,
+        Dedicated
+    };
+
+    enum class UiWorkspace
+    {
+        All,
+        Mesh,
+        Map,
+        Lighting,
+        FxEnv
     };
 
     void Initialize();
@@ -54,11 +74,14 @@ public:
     [[nodiscard]] std::optional<engine::render::RenderMode> ConsumeRequestedRenderMode();
     [[nodiscard]] bool DebugViewEnabled() const { return m_debugView; }
     void SetDebugViewEnabled(bool enabled) { m_debugView = enabled; }
+    [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
+    [[nodiscard]] bool EditorLightingEnabled() const { return m_materialLabLightingEnabled; }
 
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
     [[nodiscard]] Mode CurrentMode() const { return m_mode; }
     [[nodiscard]] const std::string& CurrentMapName() const { return m_map.name; }
     [[nodiscard]] engine::render::EnvironmentSettings CurrentEnvironmentSettings() const;
+    void QueueExternalDroppedFiles(const std::vector<std::string>& absolutePaths);
 
 private:
     enum class SelectionKind
@@ -177,12 +200,72 @@ private:
     [[nodiscard]] std::string BuildUniqueLoopElementName(const std::string& preferredBaseName) const;
     [[nodiscard]] std::string BuildUniquePropName(const std::string& preferredBaseName) const;
     void RefreshContentBrowser();
+    void ClearContentPreviewCache();
+    void TouchContentPreviewLru(const std::string& key);
+    void EnforceContentPreviewLru();
+    unsigned int GetOrCreateMeshSurfaceAlbedoTexture(
+        const std::string& meshPath,
+        std::size_t surfaceIndex,
+        const engine::assets::MeshSurfaceData& surface
+    ) const;
+    void ClearMeshAlbedoTextureCache() const;
     void PlaceImportedAssetAtHovered(const std::string& relativeAssetPath);
     void InstantiatePrefabAtHovered(const std::string& prefabId);
     void SaveSelectedPropsAsPrefab(const std::string& prefabId);
     void ReapplySelectedPrefabInstance();
     [[nodiscard]] const MaterialAsset* GetMaterialCached(const std::string& materialId) const;
     [[nodiscard]] const AnimationClipAsset* GetAnimationClipCached(const std::string& clipId) const;
+    void ResetMeshModelerToCube();
+    void ResetMeshModelerToSquare();
+    void ResetMeshModelerToCircle(int segments, float radius);
+    void ResetMeshModelerToSphere(int latSegments, int lonSegments, float radius);
+    void ResetMeshModelerToCapsule(int segments, int hemiRings, int cylinderRings, float radius, float height);
+    void ResetMeshModelerCommonState();
+    void MeshModelerSubdivideFace(int faceIndex);
+    void MeshModelerCutFace(int faceIndex, bool verticalCut);
+    void MeshModelerExtrudeFace(int faceIndex, float distance);
+    void MeshModelerExtrudeEdge(int edgeIndex, float distance);
+    void MeshModelerExtrudeActiveEdges(float distance);
+    void MeshModelerBevelEdge(int edgeIndex, float distance, int segments);
+    void MeshModelerBevelActiveEdges(float distance, int segments);
+    void MeshModelerLoopCutEdge(int edgeIndex, float ratio);
+    void MeshModelerMergeVertices(int keepVertexIndex, int removeVertexIndex);
+    void MeshModelerSplitSelectedVertex();
+    void MeshModelerDissolveSelectedEdge();
+    void MeshModelerBridgeEdges(int edgeIndexA, int edgeIndexB);
+    void MeshModelerDeleteFace(int faceIndex);
+    void MeshModelerDissolveFace(int faceIndex);
+    void MeshModelerMoveVertex(int vertexIndex, const glm::vec3& delta);
+    bool ExportMeshModelerObj(const std::string& assetName, std::string* outRelativePath, std::string* outError) const;
+    void RenderMeshModeler(engine::render::Renderer& renderer) const;
+    [[nodiscard]] std::vector<std::array<int, 2>> BuildMeshModelEdges() const;
+    [[nodiscard]] std::vector<int> CollectMeshModelActiveEdges() const;
+    [[nodiscard]] glm::vec3 MeshModelSelectionPivot() const;
+    void MoveMeshSelection(const glm::vec3& delta);
+    [[nodiscard]] bool PickMeshModelInScene(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    [[nodiscard]] bool RaycastMeshModel(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, int* outFaceIndex, glm::vec3* outHitPoint) const;
+    void UpdateMeshHover(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    [[nodiscard]] bool BuildKnifePreviewSegments(
+        const glm::vec3& lineStartWorld,
+        const glm::vec3& lineEndWorld,
+        std::vector<std::pair<glm::vec3, glm::vec3>>* outSegments
+    ) const;
+    void MeshModelerSelectEdgeLoop(int edgeIndex);
+    void MeshModelerSelectEdgeRing(int edgeIndex);
+    [[nodiscard]] bool StartMeshAxisDrag(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    void UpdateMeshAxisDrag(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    void StopMeshAxisDrag();
+    [[nodiscard]] bool ComputeMeshBatchEdgeGizmo(
+        glm::vec3* outPivot,
+        glm::vec3* outDirection,
+        glm::vec3* outPlaneNormal,
+        float* outAxisLength
+    ) const;
+    [[nodiscard]] bool StartMeshBatchEdgeDrag(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    void UpdateMeshBatchEdgeDrag(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    void StopMeshBatchEdgeDrag();
+    [[nodiscard]] bool HandleMeshKnifeClick(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
+    void CleanupMeshModelTopology();
 
     [[nodiscard]] glm::vec3 TileCenter(int tileX, int tileY) const;
     [[nodiscard]] std::string SelectedLabel() const;
@@ -221,6 +304,8 @@ private:
     bool m_debugView = true;
     engine::render::RenderMode m_currentRenderMode = engine::render::RenderMode::Wireframe;
     std::optional<engine::render::RenderMode> m_pendingRenderMode;
+    bool m_dockLayoutBuilt = false;
+    UiWorkspace m_uiWorkspace = UiWorkspace::All;
 
     int m_selectedLibraryLoop = -1;
     int m_selectedLibraryMap = -1;
@@ -260,6 +345,19 @@ private:
     std::string m_contentRenameTarget;
     std::string m_selectedContentPath;
     bool m_contentNeedsRefresh = true;
+    bool m_contentBrowserHovered = false;
+    std::vector<std::string> m_pendingExternalDrops;
+    struct ContentPreviewTexture
+    {
+        unsigned int textureId = 0;
+        int width = 0;
+        int height = 0;
+        bool failed = false;
+    };
+    std::unordered_map<std::string, ContentPreviewTexture> m_contentPreviews;
+    std::vector<std::string> m_contentPreviewLru;
+    std::size_t m_contentPreviewLruCapacity = 192;
+    mutable std::unordered_map<std::string, unsigned int> m_meshAlbedoTextures;
     std::vector<std::string> m_prefabLibrary;
     int m_selectedPrefabIndex = -1;
     std::string m_prefabNewId = "new_prefab";
@@ -286,5 +384,123 @@ private:
     mutable std::unordered_map<std::string, MaterialAsset> m_materialCache;
     mutable std::unordered_map<std::string, AnimationClipAsset> m_animationCache;
     mutable engine::assets::MeshLibrary m_meshLibrary;
+    engine::fx::FxSystem m_fxPreviewSystem{};
+    std::vector<std::string> m_fxLibrary;
+    int m_selectedFxIndex = -1;
+    engine::fx::FxAsset m_fxEditing{};
+    bool m_fxDirty = false;
+    int m_selectedFxEmitterIndex = -1;
+
+    struct MeshModelVertex
+    {
+        glm::vec3 position{0.0F};
+        bool deleted = false;
+    };
+
+    struct MeshModelFace
+    {
+        std::array<int, 4> indices{0, 0, 0, 0};
+        int vertexCount = 4;
+        bool deleted = false;
+
+        MeshModelFace() = default;
+        MeshModelFace(const std::array<int, 4>& inIndices, bool inDeleted = false, int inVertexCount = 4)
+            : indices(inIndices)
+            , vertexCount(std::clamp(inVertexCount, 3, 4))
+            , deleted(inDeleted)
+        {
+        }
+    };
+
+    std::vector<MeshModelVertex> m_meshModelVertices;
+    std::vector<MeshModelFace> m_meshModelFaces;
+    int m_meshModelSelectedFace = -1;
+    int m_meshModelSelectedVertex = -1;
+    int m_meshModelHoveredFace = -1;
+    int m_meshModelHoveredVertex = -1;
+    float m_meshModelExtrudeDistance = 0.6F;
+    glm::vec3 m_meshModelVertexDelta{0.0F};
+    glm::vec3 m_meshModelPosition{0.0F, 1.1F, 0.0F};
+    glm::vec3 m_meshModelScale{1.0F, 1.0F, 1.0F};
+    std::string m_meshModelAssetName = "generated_mesh";
+    int m_meshPrimitiveCircleSegments = 24;
+    int m_meshPrimitiveSphereLatSegments = 18;
+    int m_meshPrimitiveSphereLonSegments = 32;
+    int m_meshPrimitiveCapsuleSegments = 24;
+    int m_meshPrimitiveCapsuleHemiRings = 8;
+    int m_meshPrimitiveCapsuleCylinderRings = 4;
+    float m_meshPrimitiveRadius = 0.75F;
+    float m_meshPrimitiveHeight = 1.8F;
+    int m_meshModelSelectedEdge = -1;
+    int m_meshModelHoveredEdge = -1;
+    std::vector<int> m_meshModelLoopSelectionEdges;
+    std::vector<int> m_meshModelRingSelectionEdges;
+    enum class MeshEditMode
+    {
+        Face,
+        Edge,
+        Vertex
+    };
+    MeshEditMode m_meshEditMode = MeshEditMode::Face;
+    bool m_meshModelSceneEditEnabled = true;
+    bool m_meshModelShowGizmo = true;
+    enum class MeshBatchEdgeOperation
+    {
+        Extrude,
+        Bevel
+    };
+    MeshBatchEdgeOperation m_meshModelBatchOperation = MeshBatchEdgeOperation::Bevel;
+    bool m_meshModelBatchGizmoEnabled = true;
+    bool m_meshModelBatchDragActive = false;
+    float m_meshModelBatchPreviewDistance = 0.15F;
+    glm::vec3 m_meshModelBatchDragPivot{0.0F};
+    glm::vec3 m_meshModelBatchDragDirection{0.0F, 1.0F, 0.0F};
+    glm::vec3 m_meshModelBatchDragPlaneNormal{1.0F, 0.0F, 0.0F};
+    float m_meshModelBatchDragStartScalar = 0.0F;
+    bool m_meshModelAxisDragActive = false;
+    GizmoAxis m_meshModelAxisDragAxis = GizmoAxis::None;
+    glm::vec3 m_meshModelAxisDragPivot{0.0F};
+    glm::vec3 m_meshModelAxisDragDirection{1.0F, 0.0F, 0.0F};
+    glm::vec3 m_meshModelAxisDragPlaneNormal{0.0F, 1.0F, 0.0F};
+    float m_meshModelAxisDragStartScalar = 0.0F;
+    float m_meshModelAxisDragLastScalar = 0.0F;
+    float m_meshModelBevelDistance = 0.15F;
+    int m_meshModelBevelSegments = 2;
+    float m_meshModelBevelProfile = 1.0F;
+    bool m_meshModelBevelUseMiter = true;
+    float m_meshModelLoopCutRatio = 0.5F;
+    int m_meshModelBridgeEdgeA = -1;
+    int m_meshModelBridgeEdgeB = -1;
+    int m_meshModelMergeKeepVertex = -1;
+    int m_meshModelMergeRemoveVertex = -1;
+    bool m_meshModelKnifeEnabled = false;
+    bool m_meshModelLoopCutToolEnabled = false;
+    bool m_meshModelKnifeHasFirstPoint = false;
+    int m_meshModelKnifeFaceIndex = -1;
+    glm::vec3 m_meshModelKnifeFirstPointLocal{0.0F};
+    glm::vec3 m_meshModelKnifeFirstPointWorld{0.0F};
+    bool m_meshModelKnifePreviewValid = false;
+    glm::vec3 m_meshModelKnifePreviewWorld{0.0F};
+    std::vector<std::pair<glm::vec3, glm::vec3>> m_meshModelKnifePreviewSegments;
+
+    MaterialLabViewMode m_materialLabViewMode = MaterialLabViewMode::Off;
+    bool m_materialLabLightingEnabled = true;
+    bool m_materialLabDirectionalLightEnabled = true;
+    bool m_materialLabPointLightsEnabled = true;
+    bool m_materialLabAutoRotate = true;
+    bool m_materialLabForceFilled = true;
+    bool m_materialLabBackdropEnabled = true;
+    float m_materialLabDistance = 4.6F;
+    float m_materialLabHeight = -0.5F;
+    float m_materialLabSphereRadius = 0.75F;
+    float m_materialLabAutoRotateSpeed = 26.0F;
+    float m_materialLabManualYaw = 0.0F;
+    float m_materialLabDirectionalIntensity = 1.2F;
+    float m_materialLabPointIntensity = 5.5F;
+    float m_materialLabPointRange = 12.0F;
+    float m_materialLabElapsed = 0.0F;
+
+    bool m_sceneViewportHovered = false;
+    bool m_sceneViewportFocused = false;
 };
 } // namespace game::editor

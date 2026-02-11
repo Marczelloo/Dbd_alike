@@ -1,0 +1,179 @@
+{
+  "asset_version": 1,
+  "camera_shake_amplitude": 0.0,
+  "camera_shake_duration": 0.25,
+  "camera_shake_enabled": false,
+  "camera_shake_frequency": 18.0,
+  "duration": 0.75,
+  "emitters": [
+    {
+      "alpha_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "blend_mode": "alpha",
+      "burst_count": 26,
+      "color_over_life": [
+        {
+          "color": [
+            0.8500000238418579,
+            0.11999999731779099,
+            0.10000000149011612,
+            1.0
+          ],
+          "t": 0.0
+        },
+        {
+          "color": [
+            0.30000001192092896,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.0
+          ],
+          "t": 1.0
+        }
+      ],
+      "color_param": "",
+      "depth_test": true,
+      "duration": 0.800000011920929,
+      "gravity": -2.200000047683716,
+      "lifetime_max": 0.699999988079071,
+      "lifetime_min": 0.3499999940395355,
+      "local_space": false,
+      "lod_far_distance": 68.0,
+      "lod_near_distance": 24.0,
+      "looping": false,
+      "max_distance": 120.0,
+      "max_particles": 256,
+      "name": "emitter",
+      "rate_param": "",
+      "size_max": 0.12999999523162842,
+      "size_min": 0.05000000074505806,
+      "size_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "size_param": "",
+      "spawn_rate": 0.0,
+      "speed_max": 3.700000047683716,
+      "speed_min": 0.800000011920929,
+      "trail_point_lifetime": 0.44999998807907104,
+      "trail_point_step": 0.03999999910593033,
+      "trail_width": 0.1599999964237213,
+      "type": "sprite",
+      "velocity_base": [
+        0.0,
+        0.800000011920929,
+        0.0
+      ],
+      "velocity_random": [
+        0.8999999761581421,
+        1.2000000476837158,
+        0.8999999761581421
+      ]
+    },
+    {
+      "alpha_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "blend_mode": "additive",
+      "burst_count": 0,
+      "color_over_life": [
+        {
+          "color": [
+            1.0,
+            0.949999988079071,
+            0.699999988079071,
+            1.0
+          ],
+          "t": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            0.0
+          ],
+          "t": 1.0
+        }
+      ],
+      "color_param": "",
+      "depth_test": true,
+      "duration": 0.800000011920929,
+      "gravity": -2.200000047683716,
+      "lifetime_max": 0.44999998807907104,
+      "lifetime_min": 0.25,
+      "local_space": false,
+      "lod_far_distance": 68.0,
+      "lod_near_distance": 24.0,
+      "looping": false,
+      "max_distance": 120.0,
+      "max_particles": 256,
+      "name": "emitter_2",
+      "rate_param": "",
+      "size_max": 0.23999999463558197,
+      "size_min": 0.07999999821186066,
+      "size_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "size_param": "",
+      "spawn_rate": 0.0,
+      "speed_max": 3.0,
+      "speed_min": 1.2000000476837158,
+      "trail_point_lifetime": 0.44999998807907104,
+      "trail_point_step": 0.03999999910593033,
+      "trail_width": 0.1599999964237213,
+      "type": "sprite",
+      "velocity_base": [
+        0.0,
+        1.5,
+        0.0
+      ],
+      "velocity_random": [
+        0.6000000238418579,
+        0.8999999761581421,
+        0.6000000238418579
+      ]
+    }
+  ],
+  "id": "blood_spray",
+  "lod_priority": 0,
+  "looping": false,
+  "max_instances": 24,
+  "net_mode": "server_broadcast",
+  "postfx_color": [
+    1.0,
+    0.25,
+    0.18000000715255737
+  ],
+  "postfx_duration": 0.2199999988079071,
+  "postfx_intensity": 0.0,
+  "postfx_pulse_enabled": false
+}

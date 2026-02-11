@@ -1,0 +1,101 @@
+{
+  "asset_version": 1,
+  "camera_shake_amplitude": 0.0,
+  "camera_shake_duration": 0.25,
+  "camera_shake_enabled": false,
+  "camera_shake_frequency": 18.0,
+  "duration": 0.8999999761581421,
+  "emitters": [
+    {
+      "alpha_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "blend_mode": "alpha",
+      "burst_count": 30,
+      "color_over_life": [
+        {
+          "color": [
+            0.7200000286102295,
+            0.6200000047683716,
+            0.5199999809265137,
+            0.75
+          ],
+          "t": 0.0
+        },
+        {
+          "color": [
+            0.44999998807907104,
+            0.38999998569488525,
+            0.3400000035762787,
+            0.0
+          ],
+          "t": 1.0
+        }
+      ],
+      "color_param": "",
+      "depth_test": true,
+      "duration": 0.800000011920929,
+      "gravity": -0.4000000059604645,
+      "lifetime_max": 1.0,
+      "lifetime_min": 0.6000000238418579,
+      "local_space": false,
+      "lod_far_distance": 68.0,
+      "lod_near_distance": 24.0,
+      "looping": false,
+      "max_distance": 120.0,
+      "max_particles": 256,
+      "name": "emitter",
+      "rate_param": "",
+      "size_max": 0.23999999463558197,
+      "size_min": 0.11999999731779099,
+      "size_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "size_param": "",
+      "spawn_rate": 0.0,
+      "speed_max": 1.2999999523162842,
+      "speed_min": 0.30000001192092896,
+      "trail_point_lifetime": 0.44999998807907104,
+      "trail_point_step": 0.03999999910593033,
+      "trail_width": 0.1599999964237213,
+      "type": "sprite",
+      "velocity_base": [
+        0.0,
+        0.20000000298023224,
+        0.0
+      ],
+      "velocity_random": [
+        1.0,
+        0.30000001192092896,
+        1.0
+      ]
+    }
+  ],
+  "id": "dust_puff",
+  "lod_priority": 0,
+  "looping": false,
+  "max_instances": 24,
+  "net_mode": "server_broadcast",
+  "postfx_color": [
+    1.0,
+    0.25,
+    0.18000000715255737
+  ],
+  "postfx_duration": 0.2199999988079071,
+  "postfx_intensity": 0.0,
+  "postfx_pulse_enabled": false
+}

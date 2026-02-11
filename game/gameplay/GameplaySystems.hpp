@@ -2,9 +2,11 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/mat4x4.hpp>
@@ -12,6 +14,7 @@
 #include <glm/vec3.hpp>
 
 #include "engine/core/EventBus.hpp"
+#include "engine/fx/FxSystem.hpp"
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
 #include "engine/scene/World.hpp"
@@ -98,6 +101,9 @@ struct HudState
     glm::vec3 lastCollisionNormal{0.0F, 1.0F, 0.0F};
     float penetrationDepth = 0.0F;
     std::vector<DebugActorLabel> debugActors;
+    int fxActiveInstances = 0;
+    int fxActiveParticles = 0;
+    float fxCpuMs = 0.0F;
 };
 
 class GameplaySystems
@@ -254,6 +260,7 @@ public:
 
     void Render(engine::render::Renderer& renderer) const;
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
+    [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
     [[nodiscard]] HudState BuildHudState() const;
 
     void LoadMap(const std::string& mapName);
@@ -313,6 +320,14 @@ public:
 
     void RequestQuit();
     [[nodiscard]] bool QuitRequested() const { return m_quitRequested; }
+
+    void SpawnFxDebug(const std::string& assetId);
+    void StopAllFx();
+    [[nodiscard]] std::vector<std::string> ListFxAssets() const;
+    [[nodiscard]] std::optional<engine::fx::FxAsset> GetFxAsset(const std::string& assetId) const;
+    bool SaveFxAsset(const engine::fx::FxAsset& asset, std::string* outError = nullptr);
+    void SetFxReplicationCallback(std::function<void(const engine::fx::FxSpawnEvent&)> callback);
+    void SpawnReplicatedFx(const engine::fx::FxSpawnEvent& event);
 
 private:
     enum class ControlledRole
@@ -495,6 +510,12 @@ private:
     static const char* SurvivorStateToText(SurvivorHealthState state);
     [[nodiscard]] const char* KillerAttackStateToText(KillerAttackState state) const;
     [[nodiscard]] std::string BuildMovementStateText(engine::scene::Entity entity, const engine::scene::ActorComponent& actor) const;
+    engine::fx::FxSystem::FxInstanceId SpawnGameplayFx(
+        const std::string& assetId,
+        const glm::vec3& position,
+        const glm::vec3& forward,
+        engine::fx::FxNetMode mode
+    );
 
     void AddRuntimeMessage(const std::string& text, float ttl = 2.0F);
     [[nodiscard]] RoleCommand BuildLocalRoleCommand(
@@ -518,6 +539,7 @@ private:
 
     engine::scene::World m_world;
     engine::physics::PhysicsWorld m_physics;
+    engine::fx::FxSystem m_fxSystem;
 
     MapType m_currentMap = MapType::Test;
     std::string m_activeMapName = "test";
@@ -652,5 +674,7 @@ private:
     std::vector<LoopDebugTile> m_loopDebugTiles;
     std::vector<SpawnPointInfo> m_spawnPoints;
     int m_nextSpawnPointId = 1;
+    std::function<void(const engine::fx::FxSpawnEvent&)> m_fxReplicationCallback;
+    engine::fx::FxSystem::FxInstanceId m_chaseAuraFxId = 0;
 };
 } // namespace game::gameplay

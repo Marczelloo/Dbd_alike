@@ -102,6 +102,7 @@ std::string CommandCategoryForUsage(const std::string& usage)
     if (command == "toggle_collision" || command == "toggle_debug_draw" || command == "physics_debug" ||
         command == "noclip" || command == "tr_vis" || command == "tr_set" || command == "set_chase" ||
         command == "cam_mode" || command == "control_role" || command == "set_role" ||
+        command == "fx_spawn" || command == "fx_stop_all" || command == "fx_list" ||
         command == "player_dump")
     {
         return "Debug";
@@ -206,6 +207,44 @@ struct DeveloperConsole::Impl
     {
         RegisterCommand("help", "List all commands", [this](const std::vector<std::string>&, const ConsoleContext&) {
             PrintHelp();
+        });
+
+        RegisterCommand("fx_spawn <assetId>", "Spawn an FX asset at camera forward", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: fx_spawn <assetId>");
+                return;
+            }
+
+            context.gameplay->SpawnFxDebug(tokens[1]);
+            AddLog("FX spawn requested: " + tokens[1]);
+        });
+
+        RegisterCommand("fx_stop_all", "Stop all active FX instances", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            context.gameplay->StopAllFx();
+            AddLog("All FX stopped.");
+        });
+
+        RegisterCommand("fx_list", "List available FX assets", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            const std::vector<std::string> assets = context.gameplay->ListFxAssets();
+            if (assets.empty())
+            {
+                AddLog("No FX assets found.");
+                return;
+            }
+            AddLog("FX assets:");
+            for (const std::string& assetId : assets)
+            {
+                AddLog("  " + assetId);
+            }
         });
 
         RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -1158,6 +1197,10 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             ImGui::Text("Interaction: %s", hudState.interactionTypeName.c_str());
             ImGui::Text("Target: %s", hudState.interactionTargetName.c_str());
             ImGui::Text("Priority: %d", hudState.interactionPriority);
+            ImGui::Separator();
+            ImGui::Text("FX Instances: %d", hudState.fxActiveInstances);
+            ImGui::Text("FX Particles: %d", hudState.fxActiveParticles);
+            ImGui::Text("FX CPU: %.3f ms", hudState.fxCpuMs);
             ImGui::Separator();
             ImGui::Text("WASD: Move");
             ImGui::Text("Mouse: Look");

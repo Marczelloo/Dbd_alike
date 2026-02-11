@@ -221,6 +221,14 @@ Selection/gizmos:
 - `R`: rotate pending loop placement
 - `P`: prop placement mode
 
+Mesh modeler (Loop Editor):
+- `4/5/6`: mesh edit mode (`Face` / `Edge` / `Vertex`)
+- `M`: toggle scene-edit picking for mesh
+- `J`: edge extrude (when Edge mode)
+- `B`: edge bevel (when Edge mode)
+- click mesh directly in `Scene Viewport` to select face/edge/vertex
+- drag mesh gizmo axis handles in viewport to move current mesh selection
+
 Multi-select:
 - `Ctrl + LMB` toggles object selection
 - group ops supported: move/rotate/scale (gizmo), duplicate, delete
@@ -542,6 +550,21 @@ Editor now has production-style authoring panels for reusable materials and tran
   - `Assign Material To Selected Props` for bulk assignment
   - unsaved-change indicator
 - Runtime/editor viewport now uses cached material loads for prop rendering color.
+- Lit shader now uses material parameters in runtime/editor rendering:
+  - `roughness`
+  - `metallic`
+  - `emissive_strength`
+  - `shader_type = Unlit/Lit`
+
+### Material Lab (Shader Ball Preview)
+- Open `Materials & Environment -> Material Editor -> Material Lab Controls`.
+- This enables a dedicated in-scene preview sphere near editor camera.
+- You can tune:
+  - lighting ON/OFF
+  - directional and point lights separately
+  - render mode (wireframe/filled)
+  - sphere size/distance/auto-rotation
+- Use `Align Camera To Lab` for fast setup and `Reset Lab Defaults` to restore preview rig.
 
 ### Animation Clip Library
 - Window: `Materials & Environment -> Animation Clip Editor`
@@ -589,3 +612,65 @@ Map assets now include authored light instances used by both editor viewport and
 - Important:
   - light shading is visible in `Filled` viewport mode
   - `Auto Lit Preview` in editor forces `Filled` when lights are active
+
+## Update: FX System MVP (VFX + Gameplay Hooks)
+
+Nowy moduł `engine/fx` dodaje data-driven system efektów:
+- assety FX: `assets/fx/*.json`
+- runtime manager: `engine/fx/FxSystem`
+- pooling instancji/cząstek (bez alokacji per-frame)
+- parametryzacja assetu przez overrides przy spawnie
+
+### Dostępne domyślne FX
+- `hit_spark` (burst)
+- `blood_spray` (burst kierunkowy)
+- `dust_puff` (burst)
+- `chase_aura` (loop)
+- `generator_sparks_loop` (loop)
+
+### Console (FX)
+- `fx_list`
+- `fx_spawn <assetId>`
+- `fx_stop_all`
+
+### FX Editor (in-engine)
+- W `Level Editor` otwórz okno `FX Editor`.
+- Workflow:
+  - `New FX` tworzy nowy asset w edycji.
+  - `Load Selected FX` ładuje asset z biblioteki.
+  - `Save FX` zapisuje do `assets/fx/<id>.json`.
+  - `Delete Selected FX` usuwa asset z dysku.
+- Emittery:
+  - lista emitterów + `Add Emitter` / `Remove Emitter`
+  - edycja typu (`Sprite`/`Trail`), blend, lifetime/speed/size, velocity, curves, gradient
+- Preview:
+  - `Spawn Editing FX At Camera`
+  - `Spawn Editing FX At Hovered`
+  - `Stop Preview`
+
+### Gameplay Hooks (MVP)
+- killer hit: `hit_spark` + `blood_spray`
+- drop/break pallet: `dust_puff` (+ spark przy starcie break)
+- vault window/pallet: `dust_puff` (+ `hit_spark` dla fast vault)
+- skillcheck success/fail: FX feedback
+- chase start/active: `chase_aura` podążające za killerem
+
+### Multiplayer Hook (Host -> Client)
+- hostowe FX z `FxNetMode::ServerBroadcast` są serializowane i wysyłane do klienta
+- klient odbiera packet i spawnuje efekt lokalnie
+- to jest hook MVP pod dalszą rozbudowę filtrów (`OwnerOnly`, priorytety, LOD per-peer)
+
+### FX Profiling
+HUD/debug udostępnia:
+- `FX Instances`
+- `FX Particles`
+- `FX CPU (ms)`
+
+### Szybki test
+1. Uruchom mapę i wpisz `fx_list`.
+2. Sprawdź ręczny spawn: `fx_spawn hit_spark`, `fx_spawn blood_spray`, `fx_spawn chase_aura`.
+3. W gameplay:
+- uderz survivor -> hit FX
+- zrzuć/rozwal paletę -> dust FX
+- zrób vault -> vault FX
+4. W MP (Host/Join) sprawdź, że FX hosta pojawiają się też u klienta.
