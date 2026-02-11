@@ -5,7 +5,9 @@
       "Bash(dir:*)",
       "Bash(if exist \"out\\\\assets\\\\rock_moss_large.glb\" del \"out\\\\assets\\\\rock_moss_large.glb\")",
       "Bash(if exist \"out\\\\previews\\\\rock_moss_large.png\" del:*)",
-      "Bash(if exist:*)"
+      "Bash(if exist:*)",
+      "Bash(cmake:*)",
+      "Bash(.buildasym_horror.exe --version)"
     ]
   }
 }

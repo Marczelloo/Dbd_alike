@@ -29,6 +29,7 @@ public:
         float pitch = 1.0F;
         float minDistance = 1.0F;
         float maxDistance = 64.0F;
+        bool isSpatial = true;  // false = 2D global sound (no attenuation)
     };
 
     using SoundHandle = std::uint64_t;
@@ -44,7 +45,6 @@ public:
     SoundHandle PlayOneShot(const std::string& clipName, Bus bus, const PlayOptions& options);
     SoundHandle PlayLoop(const std::string& clipName, Bus bus = Bus::Music);
     SoundHandle PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options, float loopDurationSeconds = 0.0F);
-    SoundHandle PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options);
     void Stop(SoundHandle handle);
     void StopAll();
     [[nodiscard]] bool SetHandleVolume(SoundHandle handle, float volume);
@@ -55,7 +55,14 @@ public:
     void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up = glm::vec3{0.0F, 1.0F, 0.0F});
 
 private:
-    struct ActiveSound;
+    struct ActiveSound
+    {
+        ma_sound sound;
+        bool initialized = false;
+        bool looping = false;
+        audio::AudioSystem::Bus bus;
+        glm::vec3 lastPosition{0.0F};  // Track position for 3D sounds
+    };
 
     [[nodiscard]] std::string ResolveClipPath(const std::string& clipName) const;
     [[nodiscard]] static bool IsAbsolutePathLike(const std::string& value);

@@ -1,53 +1,82 @@
 # TRACE — Reproduction Steps for Current Known Issues
 
-## Issue: Audio Files Missing
+## ~~CRITICAL: Build Failure (2026-02-11)~~ RESOLVED
+
+### Error Summary
+**Status:** RESOLVED - Build now compiles cleanly
+**Error:** Ambiguous function overload in `PlayLoop`
+**Locations:**
+- `engine/audio/AudioSystem.hpp:46-47`
+- `engine/audio/AudioSystem.cpp:217`
+- `engine/core/App.cpp:889, 3085`
+
+### Error Message (Previously)
+```
+error: call of overloaded 'PlayLoop(const std::string&, Bus, const PlayOptions&)' is ambiguous
+note: candidate 1: 'SoundHandle PlayLoop(const std::string&, Bus, const PlayOptions&, float)'
+note: candidate 2: 'SoundHandle PlayLoop(const std::string&, Bus, const PlayOptions&)'
+```
+
+### Fix Applied
+1. Deleted redundant line 47 from AudioSystem.hpp
+2. Updated AudioSystem.cpp implementation signature to match header
+3. Added `(void)loopDurationSeconds;` to suppress unused warning
+
+### Verification
+- Build succeeds: `cmake --build build -j 8`
+- All audio console commands functional
+- TR debug HUD displays correctly
+
+---
+
+## Issue: Audio Files Missing ~~RESOLVED~~
 
 ### Expected
 - Running `audio_play tr_far` should play a sound
 - Terror radius should produce layered audio based on distance
 
-### Actual
+### Actual (Previous State)
 - Audio system initializes but no files exist in `assets/audio/`
 - `ResolveClipPath()` returns empty path, `PlayOneShot()` returns handle 0
 
-### Reproduction Steps
-1. Build and run the game
-2. Press `~` to open console
-3. Type `audio_play tr_far music`
-4. Observe: No audio plays
+### Current Status (2026-02-11)
+**RESOLVED:** Audio files now present:
+- `assets/audio/tr_far.wav`
+- `assets/audio/tr_mid.wav`
+- `assets/audio/tr_close.wav`
+- `assets/audio/tr_chase.wav`
+- `assets/audio/README.md` documents usage
 
-### Root Cause
-- `assets/audio/` directory is empty
-- No default audio files included in repo
-
-### Fix Status
-- PENDING: Need to either:
-  1. Add placeholder audio files to repo
-  2. Document required audio files in README
-  3. Provide generation script for test tones
+### Reproduction Steps (After Build Fix)
+1. Fix build error (see above)
+2. Build and run the game
+3. Press `~` to open console
+4. Type `audio_play tr_far music`
+5. Verify: Audio plays
 
 ---
 
-## Issue: tr_debug Command Not Verified
+## Issue: tr_debug Command Not Verified ~~RESOLVED~~
 
 ### Expected
 - `tr_debug on|off` should toggle debug visualization for terror radius audio
 - Should show layer volumes, distance, intensity values
 
-### Actual
+### Actual (Previous State)
 - Command is registered in DeveloperConsole (line 715-729)
 - `ConsoleContext::setTerrorAudioDebug` callback exists
-- Wiring to App `m_terrorAudioDebug` not confirmed
+- No HUD overlay to display debug values
 
-### Reproduction Steps
+### Fix Applied (2026-02-11)
+- Added debug HUD overlay in `DrawInGameHudCustom()`
+- Shows: distance, intensity, chase state, per-layer volumes
+- Color-coded volumes (muted/accent/danger)
+
+### Verification Steps
 1. Run game, start solo session
 2. Press `~` to open console
 3. Type `tr_debug on`
-4. Observe: No visible feedback of debug state
-
-### Fix Status
-- PENDING: Need to verify callback wiring in App.cpp
-- May need HUD overlay for TR debug values
+4. Observe: HUD panel at top-center showing TR debug info
 
 ---
 

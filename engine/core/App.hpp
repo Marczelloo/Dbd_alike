@@ -70,6 +70,7 @@ public:
         float ui = 0.9F;
         float ambience = 0.3F;
         bool muted = false;
+        float terrorRadiusDefault = 24.0F;  // Default terror radius in meters
 
         // Killer spotlight color configuration (RGB 0-1)
         float killerLightRed = 1.0F;
@@ -349,6 +350,7 @@ private:
         float fadeInEnd = 1.0F;
         float gain = 1.0F;
         bool chaseOnly = false;
+        bool isSpatial = true;  // true = 3D positioned at killer, false = global/2D
         audio::AudioSystem::SoundHandle handle = 0;
         float currentVolume = 0.0F;
     };
@@ -359,6 +361,11 @@ private:
         float baseRadius = 24.0F;
         std::vector<TerrorRadiusLayerAudio> layers;
         bool loaded = false;
+
+        // Debug values (updated each frame when loaded)
+        float debugDistance = 0.0F;
+        float debugIntensity = 0.0F;
+        bool debugChaseActive = false;
     };
 
     TerrorRadiusProfileAudio m_terrorAudioProfile{};

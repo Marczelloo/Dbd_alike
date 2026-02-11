@@ -1,5 +1,49 @@
 # Implementation Plan — Audio + Terror Radius + Scratch Marks + Blood Pools
 
+## Short-Term Implementation Order (Next 1-2 Hours)
+
+1. **FIX BUILD** (5 min)
+   - Delete redundant `PlayLoop` declaration in AudioSystem.hpp:47
+   - Verify clean build
+
+2. **SMOKE TEST AUDIO** (15 min)
+   - Run `audio_play tr_far music` - verify sound
+   - Run `audio_loop tr_close music` - verify looping
+   - Run `audio_stop_all` - verify silence
+   - Test terror radius crossfade (move killer near survivor)
+
+3. **IMPLEMENT TR DEBUG HUD** (30 min)
+   - Add `App::RenderTerrorRadiusDebug()` overlay
+   - Show: distance, intensity, layer volumes
+   - Wire `tr_debug on|off` to toggle visibility
+
+4. **STABILIZE & DOCUMENT** (20 min)
+   - Verify Audio Settings UI works
+   - Update README with any missing console commands
+   - Commit working audio state
+
+---
+
+## Detailed Implementation Steps
+
+### P0.1. Fix PlayLoop Ambiguity
+**File:** `engine/audio/AudioSystem.hpp:47`
+**Action:** Delete the redundant `PlayLoop` declaration
+```cpp
+// DELETE THIS LINE:
+SoundHandle PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options);
+```
+**Rationale:** Line 46 already has `float loopDurationSeconds = 0.0F` as default parameter
+**Test:** Rebuild, verify compilation succeeds
+**Estimated time:** 1 minute
+
+### P0.2. Verify Build
+**Action:** Run `cmake --build build -j 8`
+**Expected:** Clean build with no errors
+**If fails:** Check for any other calls that need updating
+
+---
+
 ## Phase A — Stabilize Audio + Terror Radius (Finish Baseline)
 
 ### A1. Audio File Setup

@@ -1,0 +1,109 @@
+{
+  "asset_version": 1,
+  "camera_shake_amplitude": 0.0,
+  "camera_shake_duration": 0.25,
+  "camera_shake_enabled": false,
+  "camera_shake_frequency": 18.0,
+  "duration": 45.0,
+  "emitters": [
+    {
+      "alpha_over_life": [
+        {
+          "t": 0.0,
+          "v": 0.8
+        },
+        {
+          "t": 0.3,
+          "v": 0.6
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "blend_mode": "alpha",
+      "burst_count": 0,
+      "color_over_life": [
+        {
+          "color": [
+            0.85,
+            0.15,
+            0.12,
+            1.0
+          ],
+          "t": 0.0
+        },
+        {
+          "color": [
+            0.65,
+            0.1,
+            0.08,
+            0.0
+          ],
+          "t": 1.0
+        }
+      ],
+      "color_param": "",
+      "depth_test": true,
+      "duration": 45.0,
+      "gravity": 0.0,
+      "lifetime_max": 45.0,
+      "lifetime_min": 45.0,
+      "local_space": false,
+      "lod_far_distance": 80.0,
+      "lod_near_distance": 30.0,
+      "looping": false,
+      "max_distance": 120.0,
+      "max_particles": 1024,
+      "name": "scratch_trail",
+      "rate_param": "",
+      "size_max": 0.15,
+      "size_min": 0.15,
+      "size_over_life": [
+        {
+          "t": 0.0,
+          "v": 1.0
+        },
+        {
+          "t": 0.5,
+          "v": 0.7
+        },
+        {
+          "t": 1.0,
+          "v": 0.3
+        }
+      ],
+      "size_param": "",
+      "spawn_rate": 0.0,
+      "speed_max": 0.0,
+      "speed_min": 0.0,
+      "trail_point_lifetime": 45.0,
+      "trail_point_step": 0.08,
+      "trail_width": 0.12,
+      "type": "trail",
+      "velocity_base": [
+        0.0,
+        0.02,
+        0.0
+      ],
+      "velocity_random": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "id": "scratch_mark_trail",
+  "lod_priority": 1,
+  "looping": false,
+  "max_instances": 48,
+  "net_mode": "local",
+  "postfx_color": [
+    1.0,
+    0.25,
+    0.18
+  ],
+  "postfx_duration": 0.22,
+  "postfx_intensity": 0.0,
+  "postfx_pulse_enabled": false
+}

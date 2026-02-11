@@ -1,5 +1,31 @@
 # DECISIONS — Architecture and Design Decisions Log
 
+## Build Error Fix (2026-02-11) - COMPLETED
+
+### Decision: Remove redundant PlayLoop declaration
+**Issue:** Ambiguous overload between two `PlayLoop` declarations
+**Action:** Deleted line 47 from AudioSystem.hpp (redundant declaration)
+**Rationale:** Line 46 already has `loopDurationSeconds = 0.0F` default parameter
+**Files affected:** `engine/audio/AudioSystem.hpp`, `engine/audio/AudioSystem.cpp`
+
+---
+
+## Terror Radius Debug HUD (2026-02-11) - COMPLETED
+
+### Decision: Integrate TR debug into main HUD overlay
+**Approach:** Add debug panel directly in `DrawInGameHudCustom()` when `m_terrorAudioDebug == true`
+**Rationale:** Keeps debug info visible during gameplay without separate panel
+**Display:**
+- Distance (meters) and base radius
+- Intensity percentage (0-100%)
+- Chase state (ON/OFF)
+- Per-layer volumes with color coding
+
+**Alternative rejected:**
+- Separate ImGui debug window: Would break custom UI consistency
+
+---
+
 ## Audio System
 
 ### Decision: Use miniaudio instead of other libraries

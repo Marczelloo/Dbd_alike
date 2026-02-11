@@ -2778,6 +2778,7 @@ bool App::LoadAudioConfig()
     readFloat("ui", m_audioSettings.ui);
     readFloat("ambience", m_audioSettings.ambience);
     readBool("muted", m_audioSettings.muted);
+    readFloat("terror_radius_default", m_audioSettings.terrorRadiusDefault);
     readFloat("killer_light_red", m_audioSettings.killerLightRed);
     readFloat("killer_light_green", m_audioSettings.killerLightGreen);
     readFloat("killer_light_blue", m_audioSettings.killerLightBlue);
@@ -2787,6 +2788,7 @@ bool App::LoadAudioConfig()
     m_audioSettings.sfx = glm::clamp(m_audioSettings.sfx, 0.0F, 1.0F);
     m_audioSettings.ui = glm::clamp(m_audioSettings.ui, 0.0F, 1.0F);
     m_audioSettings.ambience = glm::clamp(m_audioSettings.ambience, 0.0F, 1.0F);
+    m_audioSettings.terrorRadiusDefault = glm::clamp(m_audioSettings.terrorRadiusDefault, 10.0F, 100.0F);
     return true;
 }
 
@@ -2803,6 +2805,7 @@ bool App::SaveAudioConfig() const
     root["ui"] = m_audioSettings.ui;
     root["ambience"] = m_audioSettings.ambience;
     root["muted"] = m_audioSettings.muted;
+    root["terror_radius_default"] = m_audioSettings.terrorRadiusDefault;
     root["killer_light_red"] = m_audioSettings.killerLightRed;
     root["killer_light_green"] = m_audioSettings.killerLightGreen;
     root["killer_light_blue"] = m_audioSettings.killerLightBlue;
@@ -3004,7 +3007,7 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
         json defaults;
         defaults["asset_version"] = 1;
         defaults["killer_id"] = m_terrorAudioProfile.killerId;
-        defaults["base_radius"] = 24.0F;
+        defaults["base_radius"] = m_audioSettings.terrorRadiusDefault;
         defaults["layers"] = json::array({
             json{{"clip", "tr_far"}, {"fade_in_start", 0.0F}, {"fade_in_end", 0.45F}, {"gain", 0.15F}},
             json{{"clip", "tr_mid"}, {"fade_in_start", 0.25F}, {"fade_in_end", 0.75F}, {"gain", 0.2F}},
@@ -3071,6 +3074,16 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
             {
                 layer.gain = glm::clamp(layerJson["gain"].get<float>(), 0.0F, 1.0F);
             }
+            // Default: spatial=true for layers near killer, set false for chase-only layers
+            if (layerJson.contains("is_spatial"))
+            {
+                layer.isSpatial = layerJson["is_spatial"].is_boolean() ? true : false;
+            }
+            else
+            {
+                // Auto-detect from chase_only flag: chase layers are 2D global, others are 3D
+                layer.isSpatial = !layer.chaseOnly;
+            }
             if (layerJson.contains("chase_only") && layerJson["chase_only"].is_boolean())
             {
                 layer.chaseOnly = layerJson["chase_only"].get<bool>();
@@ -3123,49 +3136,62 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 
     const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
     const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
-    float intensity = 0.0F;
+    float distance = 0.0F;
+    float intensity = 0.0F;  // 0-1 inside radius for layer crossfade
+    float edgeFade = 0.0F;    // 0-1 for entry/exit fade at radius edge
     bool chaseActive = false;
+
     if (hasSurvivor && hasKiller)
     {
         const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
         const glm::vec3 killer = m_gameplay.RolePosition("killer");
         const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
-        const float distance = glm::length(delta);
+        distance = glm::length(delta);
         const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
-        intensity = glm::clamp(1.0F - distance / radius, 0.0F, 1.0F);
-        chaseActive = m_gameplay.BuildHudState().chaseActive;
-    }
 
-    // Always update layers even if one entity is missing
-    // (intensity will be 0, which fades all audio out)
-
-    const float smooth = glm::clamp(deltaSeconds * 8.0F, 0.0F, 1.0F);
-
-    // Debug: terror radius debug state (now toggled via console command)
-    // Visual cone drawing is in GameplaySystems.cpp::RenderDebug()
-
-    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
-    {
-        float w = 0.0F;
-        if (layer.fadeInEnd <= layer.fadeInStart + 1.0e-4F)
+        // Edge fade: smooth fade in/out at the radius boundary (last 20% of radius)
+        const float edgeDistance = 0.2F * radius;  // Fade zone size
+        if (distance < radius)
         {
-            w = intensity >= layer.fadeInStart ? 1.0F : 0.0F;
+            // Inside radius: full volume, possibly with edge fade near boundary
+            if (distance > radius - edgeDistance)
+            {
+                // Near edge: fade based on how close to boundary
+                edgeFade = 1.0F - glm::clamp((distance - (radius - edgeDistance)) / edgeDistance, 0.0F, 1.0F);
+            }
+            else
+            {
+                // Well inside radius: full volume
+                edgeFade = 1.0F;
+            }
+            // Intensity for layer crossfade (0 at center, 1 at edge)
+            intensity = glm::clamp(distance / radius, 0.0F, 1.0F);
         }
         else
         {
-            w = glm::clamp((intensity - layer.fadeInStart) / (layer.fadeInEnd - layer.fadeInStart), 0.0F, 1.0F);
-        }
-        if (layer.chaseOnly && !chaseActive)
-        {
-            w = 0.0F;
+            // Outside radius: fade out based on distance beyond edge
+            const float beyondRadius = distance - radius;
+            edgeFade = 1.0F - glm::clamp(beyondRadius / edgeDistance, 0.0F, 1.0F);
+            intensity = 1.0F;  // At edge, use "far" layer
         }
 
-        const float target = w * layer.gain;
-        layer.currentVolume = glm::mix(layer.currentVolume, target, smooth);
-        if (layer.handle != 0)
-        {
-            (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
-        }
+        chaseActive = m_gameplay.BuildHudState().chaseActive;
+    }
+
+    // Store debug values for HUD display
+    m_terrorAudioProfile.debugDistance = distance;
+    m_terrorAudioProfile.debugIntensity = intensity;
+    m_terrorAudioProfile.debugChaseActive = chaseActive;
+
+    const float smooth = glm::clamp(deltaSeconds * 8.0F, 0.0F, 1.0F);
+
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        const audio::AudioSystem::PlayOptions options{
+            .isSpatial = layer.isSpatial
+        };
+        layer.handle = m_audio.PlayLoop(layer.clip, audio::AudioSystem::Bus::Music, options);
+        layer.currentVolume = 0.0F;
     }
 }
 
@@ -4015,6 +4041,7 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         changed |= m_ui.SliderFloat("audio_sfx", "SFX", &m_audioSettings.sfx, 0.0F, 1.0F, "%.2f");
         changed |= m_ui.SliderFloat("audio_ui", "UI", &m_audioSettings.ui, 0.0F, 1.0F, "%.2f");
         changed |= m_ui.SliderFloat("audio_amb", "Ambience", &m_audioSettings.ambience, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_tr", "Terror Radius (m)", &m_audioSettings.terrorRadiusDefault, 10.0F, 100.0F, "%.1f");
         changed |= m_ui.Checkbox("audio_mute", "Mute All", &m_audioSettings.muted);
         if (changed)
         {
@@ -4318,6 +4345,45 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         }
     }
     m_ui.EndPanel();
+
+    // Terror radius debug overlay
+    if (m_terrorAudioDebug && m_terrorAudioProfile.loaded)
+    {
+        const float scale = m_ui.Scale();
+        const engine::ui::UiRect trDebugRect{
+            (static_cast<float>(m_ui.ScreenWidth()) - 320.0F * scale) * 0.5F,
+            60.0F * scale,
+            320.0F * scale,
+            180.0F * scale,
+        };
+        m_ui.BeginPanel("hud_tr_debug", trDebugRect, true);
+        m_ui.Label("Terror Radius Debug", m_ui.Theme().colorAccent, 1.05F);
+        m_ui.Label("Dist: " + std::to_string(static_cast<int>(m_terrorAudioProfile.debugDistance)) + "m | Radius: " +
+                   std::to_string(static_cast<int>(m_terrorAudioProfile.baseRadius)) + "m", m_ui.Theme().colorTextMuted);
+        m_ui.Label("Intensity: " + std::to_string(static_cast<int>(m_terrorAudioProfile.debugIntensity * 100.0F)) + "%",
+                   m_ui.Theme().colorTextMuted);
+        m_ui.Label("Chase: " + std::string(m_terrorAudioProfile.debugChaseActive ? "ON" : "OFF"),
+                   m_terrorAudioProfile.debugChaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+        m_ui.Label("Layers:", m_ui.Theme().colorTextMuted);
+        for (size_t i = 0; i < m_terrorAudioProfile.layers.size(); ++i)
+        {
+            const auto& layer = m_terrorAudioProfile.layers[i];
+            std::string layerName = layer.clip;
+            // Extract just the filename without extension
+            const size_t lastSlash = layerName.find_last_of('/');
+            if (lastSlash != std::string::npos) layerName = layerName.substr(lastSlash + 1);
+            const size_t lastDot = layerName.find_last_of('.');
+            if (lastDot != std::string::npos) layerName = layerName.substr(0, lastDot);
+
+            const float volPercent = layer.currentVolume * 100.0F;
+            glm::vec4 volColor = m_ui.Theme().colorTextMuted;
+            if (volPercent > 75.0F) volColor = m_ui.Theme().colorDanger;
+            else if (volPercent > 50.0F) volColor = m_ui.Theme().colorAccent;
+
+            m_ui.Label("  " + layerName + ": " + std::to_string(static_cast<int>(volPercent)) + "%", volColor);
+        }
+        m_ui.EndPanel();
+    }
 }
 
 void App::DrawUiTestPanel()

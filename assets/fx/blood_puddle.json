@@ -1,0 +1,109 @@
+{
+  "asset_version": 1,
+  "camera_shake_amplitude": 0.0,
+  "camera_shake_duration": 0.25,
+  "camera_shake_enabled": false,
+  "camera_shake_frequency": 18.0,
+  "duration": 180.0,
+  "emitters": [
+    {
+      "alpha_over_life": [
+        {
+          "t": 0.0,
+          "v": 0.9
+        },
+        {
+          "t": 0.2,
+          "v": 0.8
+        },
+        {
+          "t": 1.0,
+          "v": 0.0
+        }
+      ],
+      "blend_mode": "alpha",
+      "burst_count": 20,
+      "color_over_life": [
+        {
+          "color": [
+            0.65,
+            0.08,
+            0.06,
+            1.0
+          ],
+          "t": 0.0
+        },
+        {
+          "color": [
+            0.45,
+            0.05,
+            0.04,
+            0.0
+          ],
+          "t": 1.0
+        }
+      ],
+      "color_param": "",
+      "depth_test": true,
+      "duration": 1.5,
+      "gravity": -0.5,
+      "lifetime_max": 180.0,
+      "lifetime_min": 120.0,
+      "local_space": false,
+      "lod_far_distance": 80.0,
+      "lod_near_distance": 30.0,
+      "looping": false,
+      "max_distance": 120.0,
+      "max_particles": 512,
+      "name": "blood_particles",
+      "rate_param": "",
+      "size_max": 0.35,
+      "size_min": 0.15,
+      "size_over_life": [
+        {
+          "t": 0.0,
+          "v": 0.5
+        },
+        {
+          "t": 0.1,
+          "v": 1.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.3
+        }
+      ],
+      "size_param": "",
+      "spawn_rate": 0.0,
+      "speed_max": 2.5,
+      "speed_min": 0.5,
+      "trail_point_lifetime": 0.0,
+      "trail_point_step": 0.0,
+      "trail_width": 0.1,
+      "type": "sprite",
+      "velocity_base": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "velocity_random": [
+        1.2,
+        0.3,
+        1.2
+      ]
+    }
+  ],
+  "id": "blood_puddle",
+  "lod_priority": 0,
+  "looping": false,
+  "max_instances": 24,
+  "net_mode": "server_broadcast",
+  "postfx_color": [
+    1.0,
+    0.25,
+    0.18
+  ],
+  "postfx_duration": 0.22,
+  "postfx_intensity": 0.0,
+  "postfx_pulse_enabled": false
+}

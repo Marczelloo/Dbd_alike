@@ -214,11 +214,12 @@ AudioSystem::SoundHandle AudioSystem::PlayOneShot(const std::string& clipName, B
 
 AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus)
 {
-    return PlayLoop(clipName, bus, PlayOptions{});
+    return PlayLoop(clipName, bus, PlayOptions{}, 0.0F);
 }
 
-AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options)
+AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options, float loopDurationSeconds)
 {
+    (void)loopDurationSeconds;  // Reserved for future auto-stop functionality
     if (!m_initialized || m_engine == nullptr)
     {
         return 0;
@@ -252,7 +253,9 @@ AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus 
     ma_sound_set_volume(&active->sound, std::max(0.0F, options.volume));
     ma_sound_set_pitch(&active->sound, std::max(0.01F, options.pitch));
 
-    if (options.position.has_value())
+    // Spatial audio only if requested (otherwise global 2D sound)
+    const bool useSpatial = options.isSpatial && options.position.has_value();
+    if (useSpatial)
     {
         const glm::vec3 p = *options.position;
         ma_sound_set_spatialization_enabled(&active->sound, MA_TRUE);
@@ -302,6 +305,102 @@ void AudioSystem::Stop(SoundHandle handle)
     m_active.erase(handle);
 }
 
+void AudioSystem::SetHandlePositionAndVolume(SoundHandle handle, const glm::vec3& position, float volume)
+{
+    if (!m_initialized || m_engine == nullptr)
+    {
+        return;
+    }
+    const auto it = m_engine->sounds.find(handle);
+    if (it == m_engine->sounds.end() || it->second == nullptr || !it->second->initialized)
+    {
+        return false;
+    }
+
+    ActiveSound* active = it->second.get();
+    if (active->initialized)
+    {
+        ma_sound_stop(&active->sound);
+        ma_sound_uninit(&active->sound);
+        active->initialized = false;
+    }
+
+    m_engine->sounds.erase(it);
+    m_active.erase(handle);
+
+    // Update position tracking for 3D sounds and restart
+    if (position.has_value())
+    {
+        ma_sound_stop(&active->sound);
+        ma_sound_uninit(&active->sound);
+        active->initialized = true;
+        ma_sound_set_spatialization_enabled(&active->sound, MA_TRUE);
+        ma_sound_set_position(&active->sound, position->x, position->y, position->z);
+        ma_sound_set_min_distance(&active->sound, 1.0F);
+        ma_sound_set_max_distance(&active->sound, 100.0F);
+    }
+    else
+    {
+        // Non-spatial: clear position tracking
+        ma_sound_set_spatialization_enabled(&active->sound, MA_FALSE);
+    }
+
+    // Restart and set volume
+    ma_sound_start(&active->sound);
+    ma_sound_set_volume(&active->sound, std::max(0.0F, volume));
+    active->initialized = true;
+
+    return true;
+}
+
+void AudioSystem::StopAll()
+{
+    if (!m_initialized || m_engine == nullptr)
+    {
+        return;
+    }
+
+    // Stop all sounds and reset position tracking
+    std::vector<SoundHandle> handles;
+    handles.reserve(m_engine->sounds.size());
+    for (auto& [_, soundData] : m_engine->sounds)
+    {
+        handles.push_back(_);
+        if (soundData != nullptr)
+        {
+            soundData->lastPosition = glm::vec3{0.0F};
+        }
+    }
+    for (const SoundHandle handle : handles)
+    {
+        Stop(handle);
+    }
+}
+
+void AudioSystem::SetHandlePositionAndVolume(SoundHandle handle, const glm::vec3& position, float volume)
+{
+    if (!m_initialized || m_engine == nullptr)
+    {
+        return;
+    }
+    const auto it = m_engine->sounds.find(handle);
+    if (it == m_engine->sounds.end() || it->second == nullptr || !it->second->initialized)
+    {
+        return false;
+    }
+
+    ActiveSound* active = it->second.get();
+    if (active->initialized)
+    {
+        ma_sound_stop(&active->sound);
+        ma_sound_uninit(&active->sound);
+        active->initialized = false;
+    }
+
+    m_engine->sounds.erase(it);
+    m_active.erase(handle);
+}
+
 void AudioSystem::StopAll()
 {
     if (!m_initialized || m_engine == nullptr)
@@ -318,6 +417,14 @@ void AudioSystem::StopAll()
     for (const SoundHandle handle : handles)
     {
         Stop(handle);
+    }
+    // Reset position tracking for all sounds
+    for (auto& [_, soundData] : m_engine->sounds)
+    {
+        if (soundData != nullptr)
+        {
+            soundData->lastPosition = glm::vec3{0.0F};
+        }
     }
 }
 

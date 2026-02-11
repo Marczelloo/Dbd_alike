@@ -106,6 +106,19 @@ struct HudState
     float fxCpuMs = 0.0F;
 };
 
+struct ScratchMarkState
+{
+    glm::vec3 lastFootPosition{0.0F};
+    double lastSpawnSeconds = 0.0F;
+    bool initialized = false;
+};
+
+struct BloodPoolState
+{
+    int maxPools = 24;
+    bool enabled = true;
+};
+
 class GameplaySystems
 {
 public:
@@ -267,6 +280,16 @@ public:
     [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
     [[nodiscard]] glm::vec3 CameraForward() const { return m_cameraForward; }
     [[nodiscard]] HudState BuildHudState() const;
+
+    // Scratch marks and blood pools
+    void UpdateScratchMarks(float fixedDt, double nowSeconds);
+    void SpawnBloodPuddle(const glm::vec3& position);
+    void ClearScratchMarks();
+    void ClearBloodPools();
+    void SetScratchMarksEnabled(bool enabled) { m_scratchMarksEnabled = enabled; }
+    void SetBloodPoolsEnabled(bool enabled) { m_bloodPoolsEnabled = enabled; }
+    [[nodiscard]] bool ScratchMarksEnabled() const { return m_scratchMarksEnabled; }
+    [[nodiscard]] bool BloodPoolsEnabled() const { return m_bloodPoolsEnabled; }
 
     void LoadMap(const std::string& mapName);
     void RegenerateLoops();
@@ -686,5 +709,11 @@ private:
     int m_nextSpawnPointId = 1;
     std::function<void(const engine::fx::FxSpawnEvent&)> m_fxReplicationCallback;
     engine::fx::FxSystem::FxInstanceId m_chaseAuraFxId = 0;
+
+    // Scratch marks and blood pools
+    ScratchMarkState m_scratchMarks{};
+    BloodPoolState m_bloodPools{};
+    bool m_scratchMarksEnabled = true;
+    bool m_bloodPoolsEnabled = true;
 };
 } // namespace game::gameplay

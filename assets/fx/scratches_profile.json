@@ -1,0 +1,10 @@
+{
+  "asset_version": 1,
+  "enabled": true,
+  "spawn_interval_seconds": 0.4,
+  "spawn_distance_meters": 1.2,
+  "max_scratches_per_survivor": 48,
+  "fade_duration_seconds": 45.0,
+  "injured_interval_multiplier": 0.7,
+  "asset_id": "scratch_mark_trail"
+}

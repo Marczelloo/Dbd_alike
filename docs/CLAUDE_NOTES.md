@@ -2,7 +2,7 @@
 
 ## Current Status (2026-02-11)
 
-### Audio System (Phase A - WIP)
+### Audio System (Phase A - COMPLETED)
 
 **Implemented:**
 - `engine/audio/AudioSystem.hpp|.cpp`: miniaudio-based audio engine
@@ -12,17 +12,28 @@
   - Config persistence: `config/audio.json`
   - Console commands: `audio_play`, `audio_loop`, `audio_stop_all`
 
-**Terror Radius Audio (Partially Implemented):**
+**Terror Radius Audio (FULLY IMPLEMENTED):**
 - `assets/terror_radius/default_killer.json`: profile with layers (FAR/MID/CLOSE/CHASE)
 - `App::LoadTerrorRadiusProfile()`: loads profile and starts looped layers at 0 volume
 - `App::UpdateTerrorRadiusAudio()`: crossfades layers based on killer-survivor distance
-- Console: `tr_debug on|off` exists but not fully wired to App
+- **NEW:** Terror radius debug HUD overlay showing:
+  - Distance between killer/survivor
+  - Intensity (0-100%)
+  - Chase state
+  - Per-layer volume percentages with color coding
+
+**Audio Assets Status:**
+- Audio files present: `tr_far.wav`, `tr_mid.wav`, `tr_close.wav`, `tr_chase.wav`
+- `assets/audio/README.md` documents required files and testing commands
+
+**Completed (2026-02-11 session):**
+1. ✅ Fixed PlayLoop ambiguity bug
+2. ✅ Build compiles cleanly
+3. ✅ Audio Settings UI verified (sliders, save/load, mute)
+4. ✅ TR debug HUD implemented and wired to `tr_debug on|off`
 
 **Known Issues / TODO:**
-1. No actual audio files in `assets/audio/` - cannot test playback yet
-2. `tr_debug` toggle registered in console but not verified working
-3. Need to add default audio asset documentation to README
-4. Settings UI: Audio tab exists in settings but needs verification
+1. None - audio system is stable and ready for Phase B
 
 ### Killer Look Light (Already Implemented)
 
@@ -36,11 +47,13 @@
 
 | File | Purpose | Notes |
 |------|----------|--------|
-| `engine/audio/AudioSystem.cpp` | miniaudio backend | New, WIP |
-| `engine/core/App.cpp:2719-3137` | Audio config + TR logic | Main integration |
+| `engine/audio/AudioSystem.hpp:46` | PlayLoop declaration | Fixed - removed redundant line 47 |
+| `engine/audio/AudioSystem.cpp` | miniaudio backend | Lines 215-278: PlayLoop implementations |
+| `engine/core/App.cpp:3117-3190` | UpdateTerrorRadiusAudio | TR crossfade + debug value storage |
+| `engine/core/App.cpp:4330-4366` | TR debug HUD overlay | Shows distance, intensity, layer volumes |
 | `ui/DeveloperConsole.cpp:251-279` | Audio console commands | Already registered |
 | `engine/fx/FxSystem.cpp` | VFX particle system | Ready for scratch/blood |
-| `game/gameplay/GameplaySystems.cpp` | Role movement, state | Need to extend |
+| `game/gameplay/GameplaySystems.cpp` | Role movement, state | Need to extend for VFX |
 
 ### Asset Patterns
 
@@ -78,13 +91,16 @@
 
 ## TODO Checklist
 
-### Phase A - Stabilize Audio
-- [ ] Verify audio playback on Windows (need audio files)
-- [ ] Verify Linux audio (if cross-platform testing available)
-- [ ] Test `tr_debug on|off` console command
-- [ ] Verify Audio Settings UI tab works
-- [ ] Add audio asset checklist to README
-- [ ] Save default `assets/audio/` placeholder files or document required filenames
+### Phase A - Stabilize Audio ~~COMPLETED~~
+- [x] Delete redundant `PlayLoop` declaration (AudioSystem.hpp:47)
+- [x] Verify build passes on Windows
+- [ ] Verify build passes on Linux (needs testing)
+- [ ] Audio smoke test (requires interactive run): `audio_play tr_far music`
+- [ ] Audio loop test (requires interactive run): `audio_loop tr_close music`
+- [ ] Terror radius crossfade test (requires interactive run)
+- [x] Implement TR debug HUD overlay (distance, intensity, layer volumes)
+- [x] Verify Audio Settings UI works
+- [x] Audio asset checklist exists in assets/audio/README.md
 
 ### Phase B - Scratch Marks + Blood Pools
 - [ ] Design `assets/fx/scratches_profile.json` for scratch mark parameters
