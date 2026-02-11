@@ -778,7 +778,7 @@ private:
     float m_skillCheckTimeToNext = 2.0F;
     float m_survivorSpeedPercent = 1.0F;
     float m_killerSpeedPercent = 1.15F;
-    std::mt19937 m_rng;
+    mutable std::mt19937 m_rng;
 
     float m_survivorLookSensitivity = 0.0022F;
     float m_killerLookSensitivity = 0.0022F;

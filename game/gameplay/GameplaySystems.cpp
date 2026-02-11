@@ -5843,6 +5843,8 @@ void GameplaySystems::RenderScratchMarks(engine::render::Renderer& renderer, boo
             const float t = static_cast<float>(seg) / static_cast<float>(numSegments);
             const float theta1 = t * glm::two_pi<float>();
             const float theta2 = static_cast<float>(seg + 1) * glm::two_pi<float>();
+            (void)theta1;  // Mark as intentionally unused (computed but not directly used)
+            (void)theta2;  // Mark as intentionally unused (computed but not directly used)
 
             // Slight jitter per segment for natural variety
             const float segJitterX = std::uniform_real_distribution<float>(-0.02F, 0.02F)(m_rng);
