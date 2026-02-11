@@ -1,5 +1,7 @@
 #include "game/gameplay/GameplaySystems.hpp"
 #include "game/gameplay/SpawnSystem.hpp"
+#include "game/gameplay/PerkSystem.hpp"
+#include "engine/scene/Components.hpp"
 
 #include <algorithm>
 #include <array>
@@ -105,11 +107,12 @@ std::string MapToName(GameplaySystems::MapType type)
     }
 }
 
-std::string CameraModeToName(GameplaySystems::CameraMode mode)
-{
-    return mode == GameplaySystems::CameraMode::ThirdPerson ? "3rd Person" : "1st Person";
-}
 } // namespace
+
+const char* GameplaySystems::CameraModeToName(CameraMode mode)
+{
+    return mode == CameraMode::ThirdPerson ? "3rd Person" : "1st Person";
+}
 
 GameplaySystems::GameplaySystems()
     : m_rng(std::random_device{}())
@@ -153,6 +156,13 @@ void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
     m_eventBus->Subscribe("quit", [this](const engine::core::Event&) { RequestQuit(); });
 
     ApplyGameplayTuning(m_tuning);
+
+    // Initialize perk system with default perks
+    m_perkSystem.InitializeDefaultPerks();
+
+    // Initialize perk system active states
+    m_perkSystem.InitializeActiveStates();
+
     BuildSceneFromMap(MapType::Test, m_generationSeed);
     AddRuntimeMessage("Press ~ for Console", 4.0F);
 }
@@ -164,7 +174,7 @@ void GameplaySystems::CaptureInputFrame(
 )
 {
     const engine::scene::Role localRole = ControlledSceneRole();
-    const engine::scene::Role remoteRole = OppositeRole(localRole);
+    const engine::scene::Role remoteRole = (localRole == engine::scene::Role::Survivor) ? engine::scene::Role::Killer : engine::scene::Role::Survivor;
 
     auto updateCommandForRole = [&](engine::scene::Role role, RoleCommand& command) {
         const engine::scene::Entity entity = (role == engine::scene::Role::Survivor) ? m_survivor : m_killer;
@@ -422,6 +432,9 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
     (void)controlsEnabled;
     m_elapsedSeconds += deltaSeconds;
 
+    // Update perk system (cooldowns, active durations)
+    m_perkSystem.UpdateActiveStates(deltaSeconds);
+
     for (auto it = m_messages.begin(); it != m_messages.end();)
     {
         it->ttl -= deltaSeconds;
@@ -667,14 +680,16 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
         const auto killerTransformIt = transforms.find(m_killer);
         if (killerTransformIt != transforms.end())
         {
-            const float radius = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
+            const float perkModifier = m_perkSystem.GetTerrorRadiusModifier(engine::scene::Role::Killer);
+            const float baseRadius = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
+            const float radius = baseRadius + perkModifier;
             const glm::vec3 center = killerTransformIt->second.position + glm::vec3{0.0F, 0.06F, 0.0F};
             const glm::vec3 trColor = m_chase.isChasing ? glm::vec3{1.0F, 0.2F, 0.2F} : glm::vec3{1.0F, 0.5F, 0.15F};
             constexpr int kSegments = 48;
             glm::vec3 prev = center + glm::vec3{radius, 0.0F, 0.0F};
             for (int i = 1; i <= kSegments; ++i)
             {
-                const float t = 2.0F * kPi * static_cast<float>(i) / static_cast<float>(kSegments);
+                const float t = 2.0F * glm::pi<float>() * static_cast<float>(i) / static_cast<float>(kSegments);
                 const glm::vec3 curr = center + glm::vec3{std::cos(t) * radius, 0.0F, std::sin(t) * radius};
                 renderer.DrawOverlayLine(prev, curr, trColor);
                 prev = curr;
@@ -806,7 +821,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
             glm::vec3 previousPoint{0.0F};
             for (int i = 0; i <= kSegments; ++i)
             {
-                const float theta = 2.0F * kPi * static_cast<float>(i) / static_cast<float>(kSegments);
+                const float theta = 2.0F * glm::pi<float>() * static_cast<float>(i) / static_cast<float>(kSegments);
                 const glm::vec3 ringOffset = right * std::cos(theta) * radiusAtEnd + up * std::sin(theta) * radiusAtEnd;
                 const glm::vec3 point = endCenter + ringOffset;
                 if (i == 0)
@@ -864,7 +879,9 @@ HudState GameplaySystems::BuildHudState() const
         1.0F
     );
     hud.terrorRadiusVisible = m_terrorRadiusVisible;
-    hud.terrorRadiusMeters = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
+    const float perkModifier = m_perkSystem.GetTerrorRadiusModifier(engine::scene::Role::Killer);
+    const float baseRadius = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
+    hud.terrorRadiusMeters = baseRadius + perkModifier;
     if (m_activeRepairGenerator != 0)
     {
         const auto generatorIt = m_world.Generators().find(m_activeRepairGenerator);
@@ -986,6 +1003,31 @@ HudState GameplaySystems::BuildHudState() const
         hud.penetrationDepth = actor.lastPenetrationDepth;
         hud.vaultTypeName = actor.lastVaultType;
         hud.movementStateName = BuildMovementStateText(controlled, actor);
+
+        // Populate perk debug info for both roles
+        const auto populatePerkDebug = [&](engine::scene::Role role, std::vector<HudState::ActivePerkDebug>& outDebug, float& outSpeedMod) {
+            const auto& activePerkStates = m_perkSystem.GetActivePerks(role);
+            for (const auto& state : activePerkStates)
+            {
+                const auto* perk = m_perkSystem.GetPerk(state.perkId);
+                if (!perk) continue;
+
+                HudState::ActivePerkDebug debug;
+                debug.id = state.perkId;
+                debug.name = perk->name;
+                debug.isActive = state.isActive;
+                debug.activeRemainingSeconds = state.activeRemainingSeconds;
+                debug.cooldownRemainingSeconds = state.cooldownRemainingSeconds;
+                debug.stacks = state.currentStacks;
+                outDebug.push_back(debug);
+            }
+
+            // Get speed modifier for display (sample with sprint=true to show max effect)
+            outSpeedMod = m_perkSystem.GetSpeedModifier(role, true, false, false);
+        };
+
+        populatePerkDebug(engine::scene::Role::Survivor, hud.activePerksSurvivor, hud.speedModifierSurvivor);
+        populatePerkDebug(engine::scene::Role::Killer, hud.activePerksKiller, hud.speedModifierKiller);
     }
 
     auto pushDebugLabel = [&](engine::scene::Entity entity, const std::string& name, bool killer) {
@@ -1418,6 +1460,30 @@ void GameplaySystems::SetForcedChase(bool enabled)
     }
 }
 
+void GameplaySystems::SetSurvivorPerkLoadout(const perks::PerkLoadout& loadout)
+{
+    m_survivorPerks = loadout;
+    m_perkSystem.SetSurvivorLoadout(loadout);
+    m_perkSystem.InitializeActiveStates();
+
+    if (!m_survivorPerks.IsEmpty())
+    {
+        std::cout << "GameplaySystems: Set survivor perk loadout with " << m_survivorPerks.GetSlotCount() << " perks\n";
+    }
+}
+
+void GameplaySystems::SetKillerPerkLoadout(const perks::PerkLoadout& loadout)
+{
+    m_killerPerks = loadout;
+    m_perkSystem.SetKillerLoadout(loadout);
+    m_perkSystem.InitializeActiveStates();
+
+    if (!m_killerPerks.IsEmpty())
+    {
+        std::cout << "GameplaySystems: Set killer perk loadout with " << m_killerPerks.GetSlotCount() << " perks\n";
+    }
+}
+
 void GameplaySystems::ToggleTerrorRadiusVisualization(bool enabled)
 {
     m_terrorRadiusVisible = enabled;
@@ -1653,6 +1719,8 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
     Snapshot snapshot;
     snapshot.mapType = m_currentMap;
     snapshot.seed = m_generationSeed;
+    snapshot.survivorPerkIds = m_survivorPerks.perkIds;
+    snapshot.killerPerkIds = m_killerPerks.perkIds;
     snapshot.survivorState = static_cast<std::uint8_t>(m_survivorState);
     snapshot.killerAttackState = static_cast<std::uint8_t>(m_killerAttackState);
     snapshot.killerAttackStateTimer = m_killerAttackStateTimer;
@@ -1702,6 +1770,21 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
 
 void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
 {
+    // Apply perk loadouts if different
+    if (snapshot.survivorPerkIds != m_survivorPerks.perkIds)
+    {
+        m_survivorPerks.perkIds = snapshot.survivorPerkIds;
+        m_perkSystem.SetSurvivorLoadout(m_survivorPerks);
+        m_perkSystem.InitializeActiveStates();
+    }
+
+    if (snapshot.killerPerkIds != m_killerPerks.perkIds)
+    {
+        m_killerPerks.perkIds = snapshot.killerPerkIds;
+        m_perkSystem.SetKillerLoadout(m_killerPerks);
+        m_perkSystem.InitializeActiveStates();
+    }
+
     if (snapshot.mapType != m_currentMap || snapshot.seed != m_generationSeed)
     {
         BuildSceneFromMap(snapshot.mapType, snapshot.seed);
@@ -2593,6 +2676,9 @@ void GameplaySystems::UpdateActorMovement(
         speed *= m_killerSlowMultiplier;
     }
 
+    // Apply perk speed modifiers
+    speed *= m_perkSystem.GetSpeedModifier(actor.role, sprinting, crouchHeld, actor.crawling);
+
     actor.sprinting = actor.role == engine::scene::Role::Survivor && sprinting;
 
     actor.velocity.x = moveDirection.x * speed;
@@ -3204,6 +3290,21 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
     if (m_chase.isChasing != wasChasing)
     {
         AddRuntimeMessage(m_chase.isChasing ? "Chase started" : "Chase ended", 1.0F);
+
+        if (!m_chase.isChasing)
+        {
+            // Check for Sprint Burst: activates when chase ends
+            const auto& activePerks = m_perkSystem.GetActivePerks(engine::scene::Role::Survivor);
+            for (const auto& state : activePerks)
+            {
+                const auto* perk = m_perkSystem.GetPerk(state.perkId);
+                if (perk && (perk->type == game::gameplay::perks::PerkType::Triggered) && 
+                    (perk->id == "sprint_burst" || perk->id == "adrenaline"))
+                {
+                    m_perkSystem.ActivatePerk(state.perkId, engine::scene::Role::Survivor);
+                }
+            }
+        }
     }
 }
 

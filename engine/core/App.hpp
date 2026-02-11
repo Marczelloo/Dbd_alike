@@ -20,6 +20,7 @@
 #include "engine/ui/UiSystem.hpp"
 #include "game/editor/LevelEditor.hpp"
 #include "game/gameplay/GameplaySystems.hpp"
+#include "game/ui/LoadingManager.hpp"
 #include "ui/DeveloperConsole.hpp"
 
 namespace engine::core
@@ -66,7 +67,8 @@ private:
     {
         MainMenu,
         Editor,
-        InGame
+        InGame,
+        Loading
     };
 
     enum class MultiplayerMode
@@ -118,6 +120,22 @@ private:
     void StartSoloSession(const std::string& mapName, const std::string& roleName);
     bool StartHostSession(const std::string& mapName, const std::string& roleName, std::uint16_t port);
     bool StartJoinSession(const std::string& ip, std::uint16_t port, const std::string& preferredRole);
+
+    // Loading screen system
+    void StartLoading(game::ui::LoadingScenario scenario, const std::string& title = "");
+    void UpdateLoading(float deltaSeconds);
+    void FinishLoading();
+    void CancelLoading();
+    [[nodiscard]] bool IsLoading() const;
+    [[nodiscard]] bool IsLoadingComplete() const;
+
+    // Loading progress updates (called by other systems)
+    void SetLoadingStage(game::ui::LoadingStage stage);
+    void UpdateLoadingProgress(float overall, float stage);
+    void SetLoadingTask(const std::string& task, const std::string& subtask = "");
+    void SetLoadingError(const std::string& error);
+
+    game::ui::LoadingScenario m_currentScenario = game::ui::LoadingScenario::Startup;
 
     void PollNetwork();
     void HandleNetworkPacket(const std::vector<std::uint8_t>& payload);
@@ -208,6 +226,7 @@ private:
 
     game::gameplay::GameplaySystems m_gameplay;
     game::editor::LevelEditor m_levelEditor;
+    game::ui::LoadingManager m_loadingManager;
     ::ui::DeveloperConsole m_console;
     net::NetworkSession m_network;
     net::LanDiscovery m_lanDiscovery;

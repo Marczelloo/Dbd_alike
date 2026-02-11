@@ -1,0 +1,71 @@
+{
+  "asset_version": 1,
+  "perks": [
+    {
+      "id": "sprint_burst",
+      "name": "Sprint Burst",
+      "description": "Gain a burst of speed when leaving chase",
+      "role": "survivor",
+      "type": "triggered",
+      "effects": {
+        "sprint_speed_percent": 0.15,
+        "effect_duration_seconds": 3.0
+      }
+    },
+    {
+      "id": "resilience",
+      "name": "Resilience",
+      "description": "Perform actions faster while injured",
+      "role": "survivor",
+      "type": "conditional",
+      "effects": {
+        "vault_speed_percent": 0.10,
+        "self_heal_speed_percent": 0.10,
+        "altruistic_heal_speed_percent": -0.08
+      }
+    },
+    {
+      "id": "adrenaline",
+      "name": "Adrenaline",
+      "description": "Heal one health state and gain speed when generators are complete",
+      "role": "survivor",
+      "type": "triggered",
+      "effects": {
+        "sprint_speed_percent": 0.20,
+        "effect_duration_seconds": 5.0
+      }
+    },
+    {
+      "id": "brutal_strength",
+      "name": "Brutal Strength",
+      "description": "Break obstacles and damage generators faster",
+      "role": "killer",
+      "type": "passive",
+      "effects": {
+        "pallet_break_time_percent": -0.15,
+        "walk_speed_percent": 0.02
+      }
+    },
+    {
+      "id": "terrifying_presence",
+      "name": "Terrifying Presence",
+      "description": "Your presence looms over survivors",
+      "role": "killer",
+      "type": "passive",
+      "effects": {
+        "terror_radius_meters": 4.0
+      }
+    },
+    {
+      "id": "sloppy_butcher",
+      "name": "Sloppy Butcher",
+      "description": "Survivors suffer from blood loss and require more healing",
+      "role": "killer",
+      "type": "passive",
+      "effects": {
+        "self_heal_speed_percent": 0.20,
+        "altruistic_heal_speed_percent": 0.20
+      }
+    }
+  ]
+}

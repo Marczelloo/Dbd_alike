@@ -18,7 +18,13 @@
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
 #include "engine/scene/World.hpp"
+#include "game/gameplay/PerkSystem.hpp"
 #include "game/maps/TileGenerator.hpp"
+
+namespace engine::scene
+{
+enum class Role;
+}
 
 namespace engine::platform
 {
@@ -30,8 +36,19 @@ namespace engine::render
 class Renderer;
 }
 
+namespace game::gameplay::perks
+{
+struct PerkLoadout;
+class PerkSystem;
+struct PerkEffect;
+}
+
+// Forward declarations
+struct RoleCommand;
+
 namespace game::gameplay
 {
+// HUD State - defined outside class for access from DeveloperConsole
 struct HudState
 {
     struct DebugActorLabel
@@ -104,6 +121,21 @@ struct HudState
     int fxActiveInstances = 0;
     int fxActiveParticles = 0;
     float fxCpuMs = 0.0F;
+
+    // Perks debug info
+    struct ActivePerkDebug
+    {
+        std::string id;
+        std::string name;
+        bool isActive = false;
+        float activeRemainingSeconds = 0.0F;
+        float cooldownRemainingSeconds = 0.0F;
+        int stacks = 0;
+    };
+    std::vector<ActivePerkDebug> activePerksSurvivor;
+    std::vector<ActivePerkDebug> activePerksKiller;
+    float speedModifierSurvivor = 1.0F;
+    float speedModifierKiller = 1.0F;
 };
 
 class GameplaySystems
@@ -240,6 +272,8 @@ public:
     {
         MapType mapType = MapType::Test;
         unsigned int seed = 1337U;
+        std::array<std::string, 3> survivorPerkIds = {"", "", ""};
+        std::array<std::string, 3> killerPerkIds = {"", "", ""};
         ActorSnapshot survivor;
         ActorSnapshot killer;
         std::uint8_t survivorState = 0;
@@ -331,20 +365,13 @@ public:
     void SetFxReplicationCallback(std::function<void(const engine::fx::FxSpawnEvent&)> callback);
     void SpawnReplicatedFx(const engine::fx::FxSpawnEvent& event);
 
+    // Perk system methods
+    void SetSurvivorPerkLoadout(const perks::PerkLoadout& loadout);
+    void SetKillerPerkLoadout(const perks::PerkLoadout& loadout);
+    [[nodiscard]] perks::PerkSystem& GetPerkSystem() { return m_perkSystem; }
+    [[nodiscard]] const perks::PerkSystem& GetPerkSystem() const { return m_perkSystem; }
+
 private:
-    enum class ControlledRole
-    {
-        Survivor,
-        Killer
-    };
-
-    enum class CameraOverride
-    {
-        RoleBased,
-        SurvivorThirdPerson,
-        KillerFirstPerson
-    };
-
     enum class InteractionType
     {
         None,
@@ -390,6 +417,19 @@ private:
         Generator,
         SelfHeal,
         HookStruggle
+    };
+
+    enum class ControlledRole
+    {
+        Survivor,
+        Killer
+    };
+
+    enum class CameraOverride
+    {
+        RoleBased,
+        SurvivorThirdPerson,
+        KillerFirstPerson
     };
 
     struct InteractionCandidate
@@ -531,11 +571,18 @@ private:
     [[nodiscard]] bool ConsumeInteractBuffered(engine::scene::Role role);
     void ConsumeWigglePressedForSurvivor(bool& leftPressed, bool& rightPressed);
     static std::uint8_t RoleToIndex(engine::scene::Role role);
-    [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
-
     [[nodiscard]] static float DistanceXZ(const glm::vec3& a, const glm::vec3& b);
     [[nodiscard]] static float DistancePointToSegment(const glm::vec3& point, const glm::vec3& segmentA, const glm::vec3& segmentB);
     [[nodiscard]] static glm::vec3 ForwardFromYawPitch(float yaw, float pitch);
+    static const char* CameraModeToName(CameraMode mode);
+    [[nodiscard]] const char* MapTypeToName(MapType type) const;
+    static std::uint8_t MapTypeToByte(MapType type);
+    static MapType ByteToMapType(std::uint8_t byte);
+    static const char* MapNameFromIndex(int index);
+    [[nodiscard]] const char* RoleNameFromIndex(int index) const;
+    static const char* RoleNameFromEnum(engine::scene::Role role);
+    static bool IsEnemyRole(engine::scene::Role myRole, engine::scene::Role otherRole);
+    static engine::scene::Role ParseRoleEnum(const std::string& roleName);
 
     engine::core::EventBus* m_eventBus = nullptr;
 
@@ -679,5 +726,13 @@ private:
     int m_nextSpawnPointId = 1;
     std::function<void(const engine::fx::FxSpawnEvent&)> m_fxReplicationCallback;
     engine::fx::FxSystem::FxInstanceId m_chaseAuraFxId = 0;
+
+    // Perks system
+    perks::PerkSystem m_perkSystem;
+    perks::PerkLoadout m_survivorPerks;
+    perks::PerkLoadout m_killerPerks;
+
+    [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
 };
+
 } // namespace game::gameplay

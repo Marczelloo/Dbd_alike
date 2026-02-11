@@ -718,6 +718,167 @@ struct DeveloperConsole::Impl
             AddLog(std::string("DBD spawns ") + (enabled ? "enabled." : "disabled."));
         });
 
+        RegisterCommand("perks <list|equip|clear>", "Manage perks (list/equip/clear)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+
+            if (tokens.size() < 2)
+            {
+                AddLog("Usage: perks <list|equip|clear>");
+                AddLog("  perks list");
+                AddLog("  perks equip <role> <slot> <id>");
+                AddLog("  perks clear <role>");
+                return;
+            }
+
+            const std::string& subcommand = tokens[1];
+            if (subcommand == "list")
+            {
+                const auto& perkSystem = context.gameplay->GetPerkSystem();
+                std::vector<std::string> survivorPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor);
+                std::vector<std::string> killerPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+                std::vector<std::string> bothPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Both);
+
+                AddLog("=== SURVIVOR PERKS ===");
+                for (const auto& id : survivorPerks)
+                {
+                    const auto* perk = perkSystem.GetPerk(id);
+                    if (perk)
+                    {
+                        AddLog(id + " - " + perk->name);
+                    }
+                }
+
+                AddLog("=== KILLER PERKS ===");
+                for (const auto& id : killerPerks)
+                {
+                    const auto* perk = perkSystem.GetPerk(id);
+                    if (perk)
+                    {
+                        AddLog(id + " - " + perk->name);
+                    }
+                }
+
+                if (!bothPerks.empty())
+                {
+                    AddLog("=== BOTH ROLES ===");
+                    for (const auto& id : bothPerks)
+                    {
+                        const auto* perk = perkSystem.GetPerk(id);
+                        if (perk)
+                        {
+                            AddLog(id + " - " + perk->name);
+                        }
+                    }
+                }
+
+                AddLog("Total: " + std::to_string(survivorPerks.size() + killerPerks.size() + bothPerks.size()) + " perks");
+                return;
+            }
+
+            if (subcommand == "equip")
+            {
+                if (tokens.size() != 5)
+                {
+                    AddLog("Usage: perks equip <role> <slot> <id>");
+                    AddLog("  role: survivor | killer");
+                    AddLog("  slot: 0 | 1 | 2");
+                    AddLog("  id: perk_id (use 'perks list' to see available)");
+                    return;
+                }
+
+                const std::string& roleName = tokens[2];
+                if (roleName != "survivor" && roleName != "killer")
+                {
+                    AddLog("Role must be 'survivor' or 'killer'");
+                    return;
+                }
+
+                const int slot = ParseIntOr(-1, tokens[3]);
+                if (slot < 0 || slot > 2)
+                {
+                    AddLog("Invalid slot (must be 0, 1, or 2)");
+                    return;
+                }
+
+                const std::string& perkId = tokens[4];
+                const auto& perkSystem = context.gameplay->GetPerkSystem();
+                const auto* perk = perkSystem.GetPerk(perkId);
+                if (!perk)
+                {
+                    AddLog("Perk not found: " + perkId + " (use 'perks list' to see available)");
+                    return;
+                }
+
+                const auto role = (roleName == "survivor") ? game::gameplay::perks::PerkRole::Survivor : game::gameplay::perks::PerkRole::Killer;
+                if (perk->role != game::gameplay::perks::PerkRole::Both && perk->role != role)
+                {
+                    AddLog("Perk '" + perk->name + "' is not for " + roleName);
+                    return;
+                }
+
+                game::gameplay::perks::PerkLoadout loadout;
+                if (roleName == "survivor")
+                {
+                    loadout = perkSystem.GetSurvivorLoadout();
+                }
+                else
+                {
+                    loadout = perkSystem.GetKillerLoadout();
+                }
+
+                loadout.SetPerk(slot, perkId);
+
+                if (roleName == "survivor")
+                {
+                    context.gameplay->SetSurvivorPerkLoadout(loadout);
+                }
+                else
+                {
+                    context.gameplay->SetKillerPerkLoadout(loadout);
+                }
+
+                AddLog("Equipped '" + perk->name + "' for " + roleName + " in slot " + std::to_string(slot));
+                return;
+            }
+
+            if (subcommand == "clear")
+            {
+                if (tokens.size() != 3)
+                {
+                    AddLog("Usage: perks clear <role>");
+                    AddLog("  role: survivor | killer");
+                    return;
+                }
+
+                const std::string& roleName = tokens[2];
+                if (roleName != "survivor" && roleName != "killer")
+                {
+                    AddLog("Role must be 'survivor' or 'killer'");
+                    return;
+                }
+
+                game::gameplay::perks::PerkLoadout loadout;
+                loadout.Clear();
+
+                if (roleName == "survivor")
+                {
+                    context.gameplay->SetSurvivorPerkLoadout(loadout);
+                }
+                else
+                {
+                    context.gameplay->SetKillerPerkLoadout(loadout);
+                }
+
+                AddLog("Cleared all perks for " + roleName);
+                return;
+            }
+
+            AddLog("Unknown perks subcommand. Use: perks list | perks equip | perks clear");
+        });
+
         RegisterCommand("set_chase on|off", "Force chase state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -1254,6 +1415,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             ImGui::End();
         }
 
+        // Debug overlay: always draw perks at top-left when F2 is active
         if (context.gameplay != nullptr && !hudState.debugActors.empty())
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1310,6 +1472,52 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             }
         }
 
+        // Render perk debug info (top-left corner below runtime message) - always when debug mode is on
+        if (context.gameplay != nullptr && !hudState.debugActors.empty())
+        {
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImDrawList* drawList = ImGui::GetForegroundDrawList();
+
+            // Render perk debug info (top-left corner below runtime message)
+            const ImVec2 perkOrigin(viewport->Pos.x + 16.0F, viewport->Pos.y + 88.0F);
+            const float lineHeight = 18.0F;
+            float perkY = perkOrigin.y;
+            
+            const auto drawPerkSection = [&](const std::string& label, const std::vector<game::gameplay::HudState::ActivePerkDebug>& perks, float mod) {
+                drawList->AddText(perkOrigin, IM_COL32(200, 200, 200, 255), (label + " (x" + std::to_string(mod).substr(0, 4) + ")").c_str());
+                perkY += lineHeight;
+                
+                if (perks.empty())
+                {
+                    drawList->AddText(ImVec2(perkOrigin.x, perkY), IM_COL32(120, 120, 120, 255), "  [none]");
+                    perkY += lineHeight;
+                }
+                else
+                {
+                    for (const auto& perk : perks)
+                    {
+                        const ImU32 color = perk.isActive ? IM_COL32(120, 255, 120, 255) : IM_COL32(180, 180, 180, 255);
+                        const std::string status = perk.isActive ? "ACTIVE" : "PASSIVE";
+                        std::string extra;
+                        if (perk.isActive && perk.activeRemainingSeconds > 0.01F)
+                        {
+                            extra = " (" + std::to_string(perk.activeRemainingSeconds).substr(0, 3) + "s)";
+                        }
+                        if (!perk.isActive && perk.cooldownRemainingSeconds > 0.01F)
+                        {
+                            extra = " (CD " + std::to_string(perk.cooldownRemainingSeconds).substr(0, 3) + "s)";
+                        }
+                        drawList->AddText(ImVec2(perkOrigin.x, perkY), color, ("  " + perk.name + " [" + status + "]" + extra).c_str());
+                        perkY += lineHeight;
+                    }
+                }
+                perkY += 8.0F; // spacing between sections
+            };
+            
+            drawPerkSection("SURVIVOR PERKS", hudState.activePerksSurvivor, hudState.speedModifierSurvivor);
+            drawPerkSection("KILLER PERKS", hudState.activePerksKiller, hudState.speedModifierKiller);
+        }
+
         }
     }
 
@@ -1344,6 +1552,12 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                 m_impl->scrollToBottom = false;
             }
             ImGui::EndChild();
+
+            if (m_impl->reclaimFocus)
+            {
+                ImGui::SetKeyboardFocusHere(-1);
+                m_impl->reclaimFocus = false;
+            }
 
             ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue |
                                              ImGuiInputTextFlags_CallbackCompletion |
@@ -1409,7 +1623,13 @@ void DeveloperConsole::Toggle()
 #if BUILD_WITH_IMGUI
     if (m_impl != nullptr)
     {
+        const bool wasOpen = m_impl->open;
         m_impl->open = !m_impl->open;
+        // Set focus only when opening, not when closing
+        if (!wasOpen && m_impl->open)
+        {
+            m_impl->reclaimFocus = true;
+        }
     }
 #endif
 }
