@@ -1070,6 +1070,9 @@ void LevelEditor::Enter(Mode mode)
     m_axisDragAxis = GizmoAxis::None;
     m_axisDragMode = GizmoMode::Translate;
     m_gizmoEditing = false;
+    
+    // Force workspace reset to ensure clean state on mode change
+    m_uiWorkspace = UiWorkspace::All;
 
     if (mode == Mode::LoopEditor)
     {
@@ -1080,6 +1083,16 @@ void LevelEditor::Enter(Mode mode)
         m_cameraPitch = -0.52F;
         m_cameraSpeed = 16.0F;
         m_debugView = true;
+    }
+    else
+    {
+        // MapEditor or any other mode
+        m_topDownView = false;
+        m_cameraPosition = glm::vec3{0.0F, 10.0F, 20.0F};
+        m_cameraYaw = 0.0F;
+        m_cameraPitch = -0.3F;
+        m_cameraSpeed = 12.0F;
+        m_debugView = false;
     }
 
     m_contentNeedsRefresh = true;
@@ -10067,7 +10080,8 @@ void LevelEditor::DrawUi(
         const float thumbSize = 82.0F;
         const float cellWidth = 120.0F;
         const int columns = glm::max(1, static_cast<int>(std::floor(ImGui::GetContentRegionAvail().x / cellWidth)));
-        if (ImGui::BeginChild("##content_grid", ImVec2(-1.0F, 280.0F), true))
+        const bool contentGridOpen = ImGui::BeginChild("##content_grid", ImVec2(-1.0F, 280.0F), true);
+        if (contentGridOpen)
         {
             for (int i = 0; i < static_cast<int>(m_contentEntries.size()); ++i)
             {
@@ -10156,8 +10170,8 @@ void LevelEditor::DrawUi(
                     ImGui::SameLine();
                 }
             }
-            ImGui::EndChild();
         }
+        ImGui::EndChild();
 
         if (m_contentBrowserHovered && !m_pendingExternalDrops.empty())
         {

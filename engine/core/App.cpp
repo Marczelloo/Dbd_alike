@@ -1012,8 +1012,6 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     ApplyMapEnvironment(normalizedMap);
     InitializePlayerBindings();
     ApplyRoleMapping(m_sessionRoleName, m_remoteRoleName, "Solo role selection", true, true);
-
-    // Note: loading screen will be dismissed naturally when minimum time elapses
 }
 
 bool App::StartHostSession(const std::string& mapName, const std::string& roleName, std::uint16_t port)
