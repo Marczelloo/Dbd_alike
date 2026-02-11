@@ -674,18 +674,36 @@ bool App::Run()
         if (m_connectingLoadingActive)
         {
             const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
-            // Auto-dismiss after 15 seconds timeout
-            if (elapsed > 15.0)
+            
+            // Solo mode dismisses faster (2s), multiplayer has 15s timeout
+            const bool isSoloMode = m_joinTargetIp.empty();
+            const double timeout = isSoloMode ? 2.0 : 15.0;
+            
+            if (elapsed > timeout)
             {
-                std::cout << "[Loading] Timeout after 15s, dismissing loading screen\n";
+                std::cout << "[Loading] Timeout after " << timeout << "s, dismissing loading screen\n";
                 m_connectingLoadingActive = false;
             }
             else
             {
                 // Fake progress: asymptotically approach 0.95 over ~8 seconds
                 const float fakeProgress = std::min(0.95F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
-                const std::string step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
-                DrawFullLoadingScreen(fakeProgress, "Establishing connection to the server...", step);
+                
+                std::string step;
+                std::string tip;
+                if (isSoloMode)
+                {
+                    // Solo mode
+                    step = "Loading solo session (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+                    tip = "Preparing game world...";
+                }
+                else
+                {
+                    // Multiplayer join
+                    step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+                    tip = "Establishing connection to the server...";
+                }
+                DrawFullLoadingScreen(fakeProgress, tip, step);
             }
         }
 
@@ -942,6 +960,7 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
 {
     m_lanDiscovery.Stop();
     m_network.Disconnect();
+
     TransitionNetworkState(NetworkState::Offline, "Solo session");
     m_multiplayerMode = MultiplayerMode::Solo;
     m_appMode = AppMode::InGame;
@@ -950,6 +969,16 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     m_settingsOpenedFromPause = false;
     m_menuNetStatus = "Solo session started.";
     m_serverGameplayValues = false;
+
+    // Start loading screen if preference is enabled (after Offline transition)
+    if (m_showConnectingLoading)
+    {
+        m_connectingLoadingActive = true;
+        m_connectingLoadingStart = glfwGetTime();
+        m_joinTargetIp = ""; // Empty IP indicates solo mode
+        m_joinTargetPort = 0;
+        m_menuNetStatus = "Loading solo session...";
+    }
 
     m_sessionMapName = mapName;
     m_sessionRoleName = NormalizeRoleName(roleName);
@@ -983,6 +1012,8 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     ApplyMapEnvironment(normalizedMap);
     InitializePlayerBindings();
     ApplyRoleMapping(m_sessionRoleName, m_remoteRoleName, "Solo role selection", true, true);
+
+    // Note: loading screen will be dismissed naturally when minimum time elapses
 }
 
 bool App::StartHostSession(const std::string& mapName, const std::string& roleName, std::uint16_t port)
@@ -3363,7 +3394,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
     if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
     {
-        StartJoinSession("", static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
+        StartSoloSession(mapName, roleName);
     }
 
     if (!savedMaps.empty())
@@ -3412,8 +3443,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     {
         StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
     }
-
-    m_ui.Checkbox("loading_on_join", "Show loading screen on join", &m_showConnectingLoading);
 
     if (m_ui.Button("refresh_lan", "Refresh LAN"))
     {
@@ -4424,6 +4453,8 @@ void App::DrawMainMenuUi(bool* shouldQuit)
             m_settingsOpenedFromPause = false;
         }
         ImGui::Separator();
+
+        ImGui::Checkbox("Show loading screen on start/join", &m_showConnectingLoading);
 
         ImGui::Combo("Role", &m_menuRoleIndex, kRoleItems, IM_ARRAYSIZE(kRoleItems));
         ImGui::Combo("Map", &m_menuMapIndex, kMapItems, IM_ARRAYSIZE(kMapItems));
