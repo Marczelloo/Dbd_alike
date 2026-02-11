@@ -56,6 +56,7 @@ struct KillerLookLight
     float range = 14.0F;
     float innerAngleDegrees = 16.0F;
     float outerAngleDegrees = 28.0F;
+    float pitchDegrees = 10.0F;
     glm::vec3 color{1.0F, 0.15F, 0.1F};
 };
 
@@ -140,6 +141,7 @@ struct HudState
     float killerLightIntensity = 1.1F;
     float killerLightInnerAngle = 16.0F;
     float killerLightOuterAngle = 28.0F;
+    float killerLightPitch = 10.0F;  // Pitch downward (positive = down)
 
     bool collisionEnabled = true;
     bool debugDrawEnabled = true;
@@ -430,6 +432,9 @@ public:
     // Phase B4: Killer Look Light control
     void SetKillerLookLightEnabled(bool enabled) { m_killerLookLight.enabled = enabled; }
     void SetKillerLookLightRange(float range) { m_killerLookLight.range = range; }
+    void SetKillerLookLightIntensity(float intensity) { m_killerLookLight.intensity = intensity; }
+    void SetKillerLookLightAngle(float angleDegrees) { m_killerLookLight.innerAngleDegrees = angleDegrees; }
+    void SetKillerLookLightPitch(float pitchDegrees) { m_killerLookLight.pitchDegrees = pitchDegrees; }
     void SetKillerLookLightDebug(bool enabled) { m_killerLookLightDebug = enabled; }
     [[nodiscard]] bool KillerLookLightEnabled() const { return m_killerLookLight.enabled; }
     [[nodiscard]] bool KillerLookLightDebug() const { return m_killerLookLightDebug; }

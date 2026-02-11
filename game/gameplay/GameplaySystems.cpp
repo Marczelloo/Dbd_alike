@@ -1190,6 +1190,7 @@ HudState GameplaySystems::BuildHudState() const
     hud.killerLightIntensity = m_killerLookLight.intensity;
     hud.killerLightInnerAngle = m_killerLookLight.innerAngleDegrees;
     hud.killerLightOuterAngle = m_killerLookLight.outerAngleDegrees;
+    hud.killerLightPitch = m_killerLookLight.pitchDegrees;  // Pitch (degrees downward, positive = down)
 
     return hud;
 }
@@ -5908,6 +5909,21 @@ void GameplaySystems::SetScratchDebug(bool enabled)
 void GameplaySystems::SetBloodDebug(bool enabled)
 {
     m_bloodDebugEnabled = enabled;
+}
+
+void GameplaySystems::SetKillerLookLightIntensity(float intensity)
+{
+    m_killerLookLight.intensity = intensity;
+}
+
+void GameplaySystems::SetKillerLookLightAngle(float angleDegrees)
+{
+    m_killerLookLight.innerAngleDegrees = angleDegrees;
+}
+
+void GameplaySystems::SetKillerLookLightPitch(float pitchDegrees)
+{
+    m_killerLookLight.pitchDegrees = pitchDegrees;
 }
 
 void GameplaySystems::SetScratchProfile(const std::string& profileName)

@@ -1134,6 +1134,54 @@ struct DeveloperConsole::Impl
             AddLog(std::string("Killer light debug ") + (enabled ? "enabled." : "disabled."));
         });
 
+        RegisterCommand("killer_light_intensity <float>", "Set killer light intensity", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_intensity <value>");
+                return;
+            }
+            const float intensity = ParseFloatOr(1.1F, tokens[1]);
+            if (intensity < 0.0F || intensity > 20.0F)
+            {
+                AddLog("Intensity must be between 0 and 20");
+                return;
+            }
+            context.gameplay->SetKillerLookLightIntensity(intensity);
+            AddLog("Killer light intensity set to " + std::to_string(intensity));
+        });
+
+        RegisterCommand("killer_light_angle <deg>", "Set killer light cone angle", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_angle <degrees>");
+                return;
+            }
+            const float angle = ParseFloatOr(16.0F, tokens[1]);
+            if (angle < 1.0F || angle > 90.0F)
+            {
+                AddLog("Angle must be between 1 and 90");
+                return;
+            }
+            context.gameplay->SetKillerLookLightAngle(angle);
+            AddLog("Killer light angle set to " + std::to_string(angle) + " degrees");
+        });
+
+        RegisterCommand("killer_light_pitch <deg>", "Set killer light pitch (downward angle)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_pitch <degrees>");
+                return;
+            }
+            const float pitch = ParseFloatOr(10.0F, tokens[1]);
+            if (pitch < -45.0F || pitch > 45.0F)
+            {
+                AddLog("Pitch must be between -45 and 45");
+                return;
+            }
+            context.gameplay->SetKillerLookLightPitch(pitch);
+            AddLog("Killer light pitch set to " + std::to_string(pitch) + " degrees");
+        });
+
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
