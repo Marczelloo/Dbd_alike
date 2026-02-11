@@ -52,7 +52,10 @@ struct ConsoleContext
     std::function<void(bool)> lanDebug;
     std::function<void(bool)> setTerrorRadiusVisible;
     std::function<void(float)> setTerrorRadiusMeters;
+    std::function<void(bool)> setTerrorAudioDebug;
     std::function<void(const std::string&)> requestRoleChange;
+    std::function<void(const std::string&, const std::string&, bool)> audioPlay;
+    std::function<void()> audioStopAll;
     std::function<std::string()> playerDump;
     std::function<std::string()> sceneDump;
     std::function<void(const std::string&)> spawnRoleHere;

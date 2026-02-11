@@ -95,7 +95,8 @@ std::string CommandCategoryForUsage(const std::string& usage)
         return "Network";
     }
     if (command == "set_vsync" || command == "set_fps" || command == "set_tick" || command == "set_resolution" ||
-        command == "toggle_fullscreen" || command == "render_mode")
+        command == "toggle_fullscreen" || command == "render_mode" || command == "audio_play" ||
+        command == "audio_loop" || command == "audio_stop_all")
     {
         return "System";
     }
@@ -244,6 +245,36 @@ struct DeveloperConsole::Impl
             for (const std::string& assetId : assets)
             {
                 AddLog("  " + assetId);
+            }
+        });
+
+        RegisterCommand("audio_play <clip> [bus]", "Play one-shot audio clip (bus: music|sfx|ui|ambience)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() < 2 || context.audioPlay == nullptr)
+            {
+                AddLog("Usage: audio_play <clip> [bus]");
+                return;
+            }
+            const std::string bus = tokens.size() >= 3 ? tokens[2] : "sfx";
+            context.audioPlay(tokens[1], bus, false);
+            AddLog("Audio one-shot requested: " + tokens[1] + " (" + bus + ")");
+        });
+
+        RegisterCommand("audio_loop <clip> [bus]", "Play looping audio clip (bus: music|sfx|ui|ambience)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() < 2 || context.audioPlay == nullptr)
+            {
+                AddLog("Usage: audio_loop <clip> [bus]");
+                return;
+            }
+            const std::string bus = tokens.size() >= 3 ? tokens[2] : "music";
+            context.audioPlay(tokens[1], bus, true);
+            AddLog("Audio loop requested: " + tokens[1] + " (" + bus + ")");
+        });
+
+        RegisterCommand("audio_stop_all", "Stop all active audio loops/sounds", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.audioStopAll)
+            {
+                context.audioStopAll();
+                AddLog("All audio stopped.");
             }
         });
 
@@ -679,6 +710,22 @@ struct DeveloperConsole::Impl
                 context.setTerrorRadiusMeters(meters);
             }
             AddLog("Terror radius set to " + std::to_string(meters));
+        });
+
+        RegisterCommand("tr_debug on|off", "Toggle terror radius audio debug mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() != 2 || context.setTerrorAudioDebug == nullptr)
+            {
+                AddLog("Usage: tr_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+            context.setTerrorAudioDebug(enabled);
+            AddLog(std::string("Terror radius audio debug ") + (enabled ? "enabled." : "disabled."));
         });
 
         RegisterCommand("regen_loops [seed]", "Regenerate loop layout on main map (optional deterministic seed)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {

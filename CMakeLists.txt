@@ -70,6 +70,7 @@ find_package(OpenGL REQUIRED)
 set(ENGINE_SOURCES
     src/main.cpp
     external/glad/src/glad.c
+    engine/audio/AudioSystem.cpp
     engine/core/App.cpp
     engine/core/EventBus.cpp
     engine/core/Time.cpp
@@ -101,6 +102,7 @@ add_executable(asym_horror ${ENGINE_SOURCES})
 target_include_directories(asym_horror PRIVATE
     .
     external/glad/include
+    external/miniaudio
     external/stb
     ${enet_SOURCE_DIR}/include
     ${tinygltf_SOURCE_DIR}
@@ -122,6 +124,14 @@ endif()
 
 if(WIN32)
     target_link_libraries(asym_horror PRIVATE ws2_32 winmm comdlg32)
+endif()
+
+if(UNIX AND NOT APPLE)
+    find_library(ASOUND_LIBRARY asound)
+    if(ASOUND_LIBRARY)
+        target_link_libraries(asym_horror PRIVATE ${ASOUND_LIBRARY})
+    endif()
+    target_link_libraries(asym_horror PRIVATE ${CMAKE_DL_LIBS} m pthread)
 endif()
 
 if(MINGW)
