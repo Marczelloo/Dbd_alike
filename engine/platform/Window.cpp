@@ -45,6 +45,7 @@ bool Window::Initialize(const WindowSettings& settings)
     glfwMakeContextCurrent(m_window);
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, FramebufferResizeCallback);
+    glfwSetDropCallback(m_window, FileDropCallback);
     glfwGetFramebufferSize(m_window, &m_fbWidth, &m_fbHeight);
 
     SetVSync(settings.vsync);
@@ -200,6 +201,11 @@ void Window::SetResizeCallback(std::function<void(int, int)> callback)
     m_resizeCallback = std::move(callback);
 }
 
+void Window::SetFileDropCallback(std::function<void(const std::vector<std::string>&)> callback)
+{
+    m_fileDropCallback = std::move(callback);
+}
+
 void Window::FramebufferResizeCallback(GLFWwindow* window, int width, int height)
 {
     Window* self = static_cast<Window*>(glfwGetWindowUserPointer(window));
@@ -213,6 +219,29 @@ void Window::FramebufferResizeCallback(GLFWwindow* window, int width, int height
     if (self->m_resizeCallback)
     {
         self->m_resizeCallback(width, height);
+    }
+}
+
+void Window::FileDropCallback(GLFWwindow* window, int pathCount, const char** paths)
+{
+    Window* self = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    if (self == nullptr || pathCount <= 0 || paths == nullptr || !self->m_fileDropCallback)
+    {
+        return;
+    }
+
+    std::vector<std::string> dropped;
+    dropped.reserve(static_cast<std::size_t>(pathCount));
+    for (int i = 0; i < pathCount; ++i)
+    {
+        if (paths[i] != nullptr && paths[i][0] != '\0')
+        {
+            dropped.emplace_back(paths[i]);
+        }
+    }
+    if (!dropped.empty())
+    {
+        self->m_fileDropCallback(dropped);
     }
 }
 } // namespace engine::platform

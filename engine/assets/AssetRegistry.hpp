@@ -43,6 +43,10 @@ public:
     [[nodiscard]] std::vector<AssetEntry> ListDirectory(const std::string& relativeDir) const;
 
     [[nodiscard]] ImportResult ImportExternalFile(const std::string& sourcePath) const;
+    [[nodiscard]] ImportResult ImportExternalFileToDirectory(
+        const std::string& sourcePath,
+        const std::string& targetRelativeDirectory
+    ) const;
     [[nodiscard]] bool CreateFolder(const std::string& relativeDir, std::string* outError = nullptr) const;
     [[nodiscard]] bool DeletePath(const std::string& relativePath, std::string* outError = nullptr) const;
     [[nodiscard]] bool RenamePath(const std::string& fromRelativePath, const std::string& toRelativePath, std::string* outError = nullptr) const;

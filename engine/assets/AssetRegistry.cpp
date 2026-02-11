@@ -89,6 +89,14 @@ std::vector<AssetEntry> AssetRegistry::ListDirectory(const std::string& relative
 
 ImportResult AssetRegistry::ImportExternalFile(const std::string& sourcePath) const
 {
+    return ImportExternalFileToDirectory(sourcePath, "");
+}
+
+ImportResult AssetRegistry::ImportExternalFileToDirectory(
+    const std::string& sourcePath,
+    const std::string& targetRelativeDirectory
+) const
+{
     EnsureAssetDirectories();
     ImportResult result;
 
@@ -107,11 +115,34 @@ ImportResult AssetRegistry::ImportExternalFile(const std::string& sourcePath) co
     }
 
     const std::string ext = ToLower(source.extension().string());
-    const std::filesystem::path importDir = ImportDirectoryForExtension(ext);
+    std::filesystem::path importDir;
+    if (!targetRelativeDirectory.empty() && targetRelativeDirectory != ".")
+    {
+        importDir = AbsolutePath(targetRelativeDirectory);
+    }
+    else
+    {
+        importDir = ImportDirectoryForExtension(ext);
+    }
     if (importDir.empty())
     {
         result.message = "Unsupported extension: " + ext;
         return result;
+    }
+    {
+        std::error_code rootEc;
+        const std::filesystem::path rootCanonical = std::filesystem::weakly_canonical(m_assetsRoot, rootEc);
+        std::error_code dirEc;
+        const std::filesystem::path dirCanonical = std::filesystem::weakly_canonical(importDir, dirEc);
+        const std::filesystem::path effectiveDir = dirEc ? importDir.lexically_normal() : dirCanonical;
+        const std::filesystem::path effectiveRoot = rootEc ? m_assetsRoot.lexically_normal() : rootCanonical;
+        const std::string dirStr = effectiveDir.generic_string();
+        const std::string rootStr = effectiveRoot.generic_string();
+        if (dirStr.size() < rootStr.size() || dirStr.compare(0, rootStr.size(), rootStr) != 0)
+        {
+            result.message = "Target import directory must be inside assets root.";
+            return result;
+        }
     }
 
     std::filesystem::create_directories(importDir, ec);

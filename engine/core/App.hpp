@@ -306,6 +306,7 @@ private:
     double m_lastSnapshotReceivedSeconds = 0.0;
     double m_lastInputSentSeconds = 0.0;
     double m_lastSnapshotSentSeconds = 0.0;
+    std::vector<std::string> m_pendingDroppedFiles;
 
     std::ofstream m_networkLogFile;
 };

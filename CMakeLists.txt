@@ -75,6 +75,7 @@ set(ENGINE_SOURCES
     engine/core/Time.cpp
     engine/assets/AssetRegistry.cpp
     engine/assets/MeshLibrary.cpp
+    engine/fx/FxSystem.cpp
     engine/platform/Window.cpp
     engine/platform/Input.cpp
     engine/platform/ActionBindings.cpp
@@ -117,7 +118,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(asym_horror PRIVATE ws2_32 winmm)
+    target_link_libraries(asym_horror PRIVATE ws2_32 winmm comdlg32)
 endif()
 
 if(MINGW)

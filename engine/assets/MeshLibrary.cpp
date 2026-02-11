@@ -13,6 +13,11 @@
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_STB_IMAGE_WRITE
@@ -286,6 +291,529 @@ bool ReadAccessorVec3Float(
 
     return true;
 }
+
+bool ReadAccessorVec2Float(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::vec2>* outValues,
+    std::string* outError
+)
+{
+    if (outValues == nullptr)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec2 output buffer is null.";
+        }
+        return false;
+    }
+    if (accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor has invalid buffer view.";
+        }
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC2)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor is not vec2.";
+        }
+        return false;
+    }
+    if (accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Only float vec2 accessor is supported.";
+        }
+        return false;
+    }
+
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Buffer view references invalid buffer.";
+        }
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const std::size_t floatBytes = sizeof(float);
+    const std::size_t elementSize = 2 * floatBytes;
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : elementSize;
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec2 accessor offset out of range.";
+        }
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + elementSize > buffer.data.size())
+        {
+            if (outError != nullptr)
+            {
+                *outError = "Vec2 accessor data out of range.";
+            }
+            return false;
+        }
+
+        glm::vec2 value{0.0F};
+        std::memcpy(&value.x, buffer.data.data() + offset, floatBytes);
+        std::memcpy(&value.y, buffer.data.data() + offset + floatBytes, floatBytes);
+        outValues->push_back(value);
+    }
+
+    return true;
+}
+
+bool ReadAccessorVec4UInt(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::uvec4>* outValues,
+    std::string* outError
+)
+{
+    if (outValues == nullptr)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec4 uint output buffer is null.";
+        }
+        return false;
+    }
+    if (accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor has invalid buffer view.";
+        }
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC4)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor is not vec4.";
+        }
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Buffer view references invalid buffer.";
+        }
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    if (componentSize <= 0)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Unsupported component type for vec4 uint.";
+        }
+        return false;
+    }
+
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : static_cast<std::size_t>(componentSize * 4);
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec4 uint accessor offset out of range.";
+        }
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + static_cast<std::size_t>(componentSize * 4) > buffer.data.size())
+        {
+            if (outError != nullptr)
+            {
+                *outError = "Vec4 uint accessor data out of range.";
+            }
+            return false;
+        }
+
+        glm::uvec4 value{0U};
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::size_t at = offset + static_cast<std::size_t>(c * componentSize);
+            switch (accessor.componentType)
+            {
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                {
+                    std::uint8_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = static_cast<std::uint32_t>(v);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                {
+                    std::uint16_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = static_cast<std::uint32_t>(v);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+                {
+                    std::uint32_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = v;
+                    break;
+                }
+                default:
+                {
+                    if (outError != nullptr)
+                    {
+                        *outError = "Unsupported vec4 uint component type.";
+                    }
+                    return false;
+                }
+            }
+        }
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+float ReadComponentAsFloat(const std::uint8_t* src, int componentType, bool normalized)
+{
+    switch (componentType)
+    {
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
+        {
+            float v = 0.0F;
+            std::memcpy(&v, src, sizeof(v));
+            return v;
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+        {
+            std::uint8_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            return normalized ? static_cast<float>(v) / 255.0F : static_cast<float>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_BYTE:
+        {
+            std::int8_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return glm::max(-1.0F, static_cast<float>(v) / 127.0F);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+        {
+            std::uint16_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            return normalized ? static_cast<float>(v) / 65535.0F : static_cast<float>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_SHORT:
+        {
+            std::int16_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return glm::max(-1.0F, static_cast<float>(v) / 32767.0F);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+        {
+            std::uint32_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return static_cast<float>(v) / 4294967295.0F;
+        }
+        default:
+            return 0.0F;
+    }
+}
+
+bool ReadAccessorVec4Float(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::vec4>* outValues,
+    std::string* outError
+)
+{
+    if (outValues == nullptr)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec4 float output buffer is null.";
+        }
+        return false;
+    }
+    if (accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor has invalid buffer view.";
+        }
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC4)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor is not vec4.";
+        }
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Buffer view references invalid buffer.";
+        }
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    if (componentSize <= 0)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Unsupported component type for vec4 float.";
+        }
+        return false;
+    }
+
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : static_cast<std::size_t>(componentSize * 4);
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Vec4 float accessor offset out of range.";
+        }
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + static_cast<std::size_t>(componentSize * 4) > buffer.data.size())
+        {
+            if (outError != nullptr)
+            {
+                *outError = "Vec4 float accessor data out of range.";
+            }
+            return false;
+        }
+
+        glm::vec4 value{0.0F};
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::size_t at = offset + static_cast<std::size_t>(c * componentSize);
+            value[static_cast<std::size_t>(c)] = ReadComponentAsFloat(buffer.data.data() + at, accessor.componentType, accessor.normalized);
+        }
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+bool ReadAccessorMat4Float(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::mat4>* outValues,
+    std::string* outError
+)
+{
+    if (outValues == nullptr)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Mat4 output buffer is null.";
+        }
+        return false;
+    }
+    if (accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Accessor has invalid buffer view.";
+        }
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_MAT4 || accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Only float mat4 accessor is supported.";
+        }
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Buffer view references invalid buffer.";
+        }
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const std::size_t elementSize = sizeof(float) * 16U;
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : elementSize;
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        if (outError != nullptr)
+        {
+            *outError = "Mat4 accessor offset out of range.";
+        }
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + elementSize > buffer.data.size())
+        {
+            if (outError != nullptr)
+            {
+                *outError = "Mat4 accessor data out of range.";
+            }
+            return false;
+        }
+        glm::mat4 mat{1.0F};
+        for (int c = 0; c < 4; ++c)
+        {
+            for (int r = 0; r < 4; ++r)
+            {
+                float v = 0.0F;
+                std::memcpy(&v, buffer.data.data() + offset + static_cast<std::size_t>((c * 4 + r) * sizeof(float)), sizeof(float));
+                mat[c][r] = v;
+            }
+        }
+        outValues->push_back(mat);
+    }
+    return true;
+}
+
+glm::mat4 NodeLocalTransform(const tinygltf::Node& node)
+{
+    if (node.matrix.size() == 16U)
+    {
+        glm::mat4 m{1.0F};
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                // glTF stores matrices in column-major order.
+                m[c][r] = static_cast<float>(node.matrix[static_cast<std::size_t>(c * 4 + r)]);
+            }
+        }
+        return m;
+    }
+
+    glm::vec3 translation{0.0F};
+    if (node.translation.size() == 3U)
+    {
+        translation = glm::vec3{
+            static_cast<float>(node.translation[0]),
+            static_cast<float>(node.translation[1]),
+            static_cast<float>(node.translation[2]),
+        };
+    }
+
+    glm::quat rotation = glm::quat{1.0F, 0.0F, 0.0F, 0.0F};
+    if (node.rotation.size() == 4U)
+    {
+        rotation = glm::quat{
+            static_cast<float>(node.rotation[3]),
+            static_cast<float>(node.rotation[0]),
+            static_cast<float>(node.rotation[1]),
+            static_cast<float>(node.rotation[2]),
+        };
+        if (glm::length(rotation) > 1.0e-6F)
+        {
+            rotation = glm::normalize(rotation);
+        }
+    }
+
+    glm::vec3 scale{1.0F};
+    if (node.scale.size() == 3U)
+    {
+        scale = glm::vec3{
+            static_cast<float>(node.scale[0]),
+            static_cast<float>(node.scale[1]),
+            static_cast<float>(node.scale[2]),
+        };
+    }
+
+    const glm::mat4 identity{1.0F};
+    return glm::translate(identity, translation) * glm::mat4_cast(rotation) * glm::scale(identity, scale);
+}
+
+struct MeshInstanceData
+{
+    glm::mat4 world{1.0F};
+    int skinIndex = -1;
+};
+
+void CollectNodeInstances(
+    const tinygltf::Model& model,
+    int nodeIndex,
+    const glm::mat4& parentWorld,
+    std::vector<glm::mat4>* outNodeWorlds,
+    std::vector<std::vector<MeshInstanceData>>* outMeshInstances
+)
+{
+    if (outNodeWorlds == nullptr || outMeshInstances == nullptr || nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size()))
+    {
+        return;
+    }
+
+    const tinygltf::Node& node = model.nodes[static_cast<std::size_t>(nodeIndex)];
+    const glm::mat4 world = parentWorld * NodeLocalTransform(node);
+    (*outNodeWorlds)[static_cast<std::size_t>(nodeIndex)] = world;
+    if (node.mesh >= 0 && node.mesh < static_cast<int>(outMeshInstances->size()))
+    {
+        (*outMeshInstances)[static_cast<std::size_t>(node.mesh)].push_back(MeshInstanceData{
+            world,
+            node.skin,
+        });
+    }
+
+    for (int child : node.children)
+    {
+        CollectNodeInstances(model, child, world, outNodeWorlds, outMeshInstances);
+    }
+}
 } // namespace
 
 const MeshData* MeshLibrary::LoadMesh(const std::filesystem::path& absolutePath, std::string* outError)
@@ -411,9 +939,14 @@ MeshData MeshLibrary::LoadObj(const std::filesystem::path& absolutePath)
 
     out.geometry.positions.clear();
     out.geometry.normals.clear();
+    out.geometry.colors.clear();
+    out.geometry.uvs.clear();
     out.geometry.indices.clear();
+    out.surfaces.clear();
     out.geometry.positions.reserve(triangles.size() * 3);
     out.geometry.normals.reserve(triangles.size() * 3);
+    out.geometry.colors.reserve(triangles.size() * 3);
+    out.geometry.uvs.reserve(triangles.size() * 3);
     out.geometry.indices.reserve(triangles.size() * 3);
 
     glm::vec3 boundsMin{1.0e9F};
@@ -455,6 +988,8 @@ MeshData MeshLibrary::LoadObj(const std::filesystem::path& absolutePath)
             }
             out.geometry.positions.push_back(triPos[static_cast<std::size_t>(i)]);
             out.geometry.normals.push_back(n);
+            out.geometry.colors.push_back(glm::vec3{1.0F, 1.0F, 1.0F});
+            out.geometry.uvs.push_back(glm::vec2{0.0F, 0.0F});
             out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
         }
     }
@@ -466,6 +1001,9 @@ MeshData MeshLibrary::LoadObj(const std::filesystem::path& absolutePath)
     }
     out.boundsMin = boundsMin - center;
     out.boundsMax = boundsMax - center;
+    MeshSurfaceData surface{};
+    surface.geometry = out.geometry;
+    out.surfaces.push_back(std::move(surface));
     out.loaded = true;
     out.error.clear();
     return out;
@@ -503,19 +1041,76 @@ MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
 
     out.geometry.positions.clear();
     out.geometry.normals.clear();
+    out.geometry.colors.clear();
+    out.geometry.uvs.clear();
     out.geometry.indices.clear();
 
     glm::vec3 boundsMin{1.0e9F};
     glm::vec3 boundsMax{-1.0e9F};
 
+    std::vector<glm::mat4> nodeWorlds(model.nodes.size(), glm::mat4{1.0F});
+    std::vector<std::vector<MeshInstanceData>> meshInstances(model.meshes.size());
+    if (!model.scenes.empty())
+    {
+        const int sceneIndex = (model.defaultScene >= 0 && model.defaultScene < static_cast<int>(model.scenes.size()))
+                                   ? model.defaultScene
+                                   : 0;
+        const tinygltf::Scene& scene = model.scenes[static_cast<std::size_t>(sceneIndex)];
+        for (int rootNode : scene.nodes)
+        {
+            CollectNodeInstances(model, rootNode, glm::mat4{1.0F}, &nodeWorlds, &meshInstances);
+        }
+    }
+    for (std::size_t mi = 0; mi < meshInstances.size(); ++mi)
+    {
+        if (meshInstances[mi].empty())
+        {
+            meshInstances[mi].push_back(MeshInstanceData{glm::mat4{1.0F}, -1});
+        }
+    }
+
+    struct SkinCache
+    {
+        std::vector<int> joints;
+        std::vector<glm::mat4> inverseBindMatrices;
+    };
+    std::vector<SkinCache> skinCaches(model.skins.size());
+    for (std::size_t skinIndex = 0; skinIndex < model.skins.size(); ++skinIndex)
+    {
+        const tinygltf::Skin& skin = model.skins[skinIndex];
+        SkinCache cache;
+        cache.joints = skin.joints;
+        cache.inverseBindMatrices.assign(cache.joints.size(), glm::mat4{1.0F});
+        if (skin.inverseBindMatrices >= 0 && skin.inverseBindMatrices < static_cast<int>(model.accessors.size()))
+        {
+            const tinygltf::Accessor& accessor = model.accessors[static_cast<std::size_t>(skin.inverseBindMatrices)];
+            std::vector<glm::mat4> ibms;
+            if (ReadAccessorMat4Float(model, accessor, &ibms, nullptr))
+            {
+                const std::size_t count = glm::min(cache.joints.size(), ibms.size());
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    cache.inverseBindMatrices[i] = ibms[i];
+                }
+            }
+        }
+        skinCaches[skinIndex] = std::move(cache);
+    }
+
     bool emittedAnyTriangle = false;
 
-    for (const tinygltf::Mesh& mesh : model.meshes)
+    for (std::size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex)
     {
+        const tinygltf::Mesh& mesh = model.meshes[meshIndex];
+        const std::vector<MeshInstanceData>& instances = meshInstances[meshIndex];
         for (const tinygltf::Primitive& primitive : mesh.primitives)
         {
             const int mode = primitive.mode == -1 ? TINYGLTF_MODE_TRIANGLES : primitive.mode;
-            if (mode != TINYGLTF_MODE_TRIANGLES)
+            const bool trianglesMode =
+                (mode == TINYGLTF_MODE_TRIANGLES) ||
+                (mode == TINYGLTF_MODE_TRIANGLE_STRIP) ||
+                (mode == TINYGLTF_MODE_TRIANGLE_FAN);
+            if (!trianglesMode)
             {
                 continue;
             }
@@ -555,6 +1150,95 @@ MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
                 }
             }
 
+            glm::vec4 baseColorFactor{1.0F, 1.0F, 1.0F, 1.0F};
+            const tinygltf::Image* baseColorImage = nullptr;
+            int baseColorTexcoordSet = 0;
+            if (primitive.material >= 0 && primitive.material < static_cast<int>(model.materials.size()))
+            {
+                const tinygltf::Material& material = model.materials[static_cast<std::size_t>(primitive.material)];
+                const auto& pbr = material.pbrMetallicRoughness;
+                if (pbr.baseColorFactor.size() == 4U)
+                {
+                    baseColorFactor = glm::vec4{
+                        static_cast<float>(pbr.baseColorFactor[0]),
+                        static_cast<float>(pbr.baseColorFactor[1]),
+                        static_cast<float>(pbr.baseColorFactor[2]),
+                        static_cast<float>(pbr.baseColorFactor[3]),
+                    };
+                }
+                const int baseColorTextureIndex = pbr.baseColorTexture.index;
+                if (baseColorTextureIndex >= 0 && baseColorTextureIndex < static_cast<int>(model.textures.size()))
+                {
+                    baseColorTexcoordSet = pbr.baseColorTexture.texCoord;
+                    const tinygltf::Texture& texture = model.textures[static_cast<std::size_t>(baseColorTextureIndex)];
+                    if (texture.source >= 0 && texture.source < static_cast<int>(model.images.size()))
+                    {
+                        baseColorImage = &model.images[static_cast<std::size_t>(texture.source)];
+                    }
+                }
+            }
+            std::vector<glm::vec2> texcoords;
+            const std::string texcoordSemantic = "TEXCOORD_" + std::to_string(glm::max(0, baseColorTexcoordSet));
+            const auto texcoordIt = primitive.attributes.find(texcoordSemantic);
+            if (texcoordIt != primitive.attributes.end())
+            {
+                const int texcoordAccessorIndex = texcoordIt->second;
+                if (texcoordAccessorIndex >= 0 && texcoordAccessorIndex < static_cast<int>(model.accessors.size()))
+                {
+                    const tinygltf::Accessor& texcoordAccessor = model.accessors[static_cast<std::size_t>(texcoordAccessorIndex)];
+                    (void)ReadAccessorVec2Float(model, texcoordAccessor, &texcoords, nullptr);
+                }
+            }
+            else
+            {
+                const auto texcoord0 = primitive.attributes.find("TEXCOORD_0");
+                if (texcoord0 != primitive.attributes.end())
+                {
+                    const int texcoordAccessorIndex = texcoord0->second;
+                    if (texcoordAccessorIndex >= 0 && texcoordAccessorIndex < static_cast<int>(model.accessors.size()))
+                    {
+                        const tinygltf::Accessor& texcoordAccessor = model.accessors[static_cast<std::size_t>(texcoordAccessorIndex)];
+                        (void)ReadAccessorVec2Float(model, texcoordAccessor, &texcoords, nullptr);
+                    }
+                }
+            }
+
+            std::vector<glm::uvec4> jointIndices;
+            const auto jointsIt = primitive.attributes.find("JOINTS_0");
+            if (jointsIt != primitive.attributes.end())
+            {
+                const int jointsAccessorIndex = jointsIt->second;
+                if (jointsAccessorIndex >= 0 && jointsAccessorIndex < static_cast<int>(model.accessors.size()))
+                {
+                    const tinygltf::Accessor& jointsAccessor = model.accessors[static_cast<std::size_t>(jointsAccessorIndex)];
+                    (void)ReadAccessorVec4UInt(model, jointsAccessor, &jointIndices, nullptr);
+                }
+            }
+            std::vector<glm::vec4> jointWeights;
+            const auto weightsIt = primitive.attributes.find("WEIGHTS_0");
+            if (weightsIt != primitive.attributes.end())
+            {
+                const int weightsAccessorIndex = weightsIt->second;
+                if (weightsAccessorIndex >= 0 && weightsAccessorIndex < static_cast<int>(model.accessors.size()))
+                {
+                    const tinygltf::Accessor& weightsAccessor = model.accessors[static_cast<std::size_t>(weightsAccessorIndex)];
+                    (void)ReadAccessorVec4Float(model, weightsAccessor, &jointWeights, nullptr);
+                }
+            }
+
+            MeshSurfaceData primitiveSurface{};
+            if (baseColorImage != nullptr &&
+                baseColorImage->width > 0 &&
+                baseColorImage->height > 0 &&
+                baseColorImage->bits == 8 &&
+                !baseColorImage->image.empty())
+            {
+                primitiveSurface.albedoPixels = baseColorImage->image;
+                primitiveSurface.albedoWidth = baseColorImage->width;
+                primitiveSurface.albedoHeight = baseColorImage->height;
+                primitiveSurface.albedoChannels = glm::clamp(baseColorImage->component, 1, 4);
+            }
+
             std::vector<std::uint32_t> primitiveIndices;
             if (primitive.indices >= 0)
             {
@@ -583,59 +1267,245 @@ MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
                 continue;
             }
 
-            for (std::size_t triStart = 0; triStart + 2 < primitiveIndices.size(); triStart += 3)
+            std::vector<std::array<std::uint32_t, 3>> triangles;
+            triangles.reserve(primitiveIndices.size() / 3U + 2U);
+            if (mode == TINYGLTF_MODE_TRIANGLES)
             {
-                const std::uint32_t ia = primitiveIndices[triStart];
-                const std::uint32_t ib = primitiveIndices[triStart + 1];
-                const std::uint32_t ic = primitiveIndices[triStart + 2];
-                if (ia >= positions.size() || ib >= positions.size() || ic >= positions.size())
+                for (std::size_t triStart = 0; triStart + 2 < primitiveIndices.size(); triStart += 3)
                 {
-                    continue;
+                    triangles.push_back(std::array<std::uint32_t, 3>{
+                        primitiveIndices[triStart],
+                        primitiveIndices[triStart + 1],
+                        primitiveIndices[triStart + 2],
+                    });
                 }
-
-                const glm::vec3 a = positions[ia];
-                const glm::vec3 b = positions[ib];
-                const glm::vec3 c = positions[ic];
-
-                boundsMin = glm::min(boundsMin, a);
-                boundsMin = glm::min(boundsMin, b);
-                boundsMin = glm::min(boundsMin, c);
-                boundsMax = glm::max(boundsMax, a);
-                boundsMax = glm::max(boundsMax, b);
-                boundsMax = glm::max(boundsMax, c);
-
-                glm::vec3 fallbackNormal = glm::cross(b - a, c - a);
-                if (glm::length(fallbackNormal) > 1.0e-6F)
+            }
+            else if (mode == TINYGLTF_MODE_TRIANGLE_STRIP)
+            {
+                for (std::size_t i = 2; i < primitiveIndices.size(); ++i)
                 {
-                    fallbackNormal = glm::normalize(fallbackNormal);
+                    const bool odd = (i % 2U) == 1U;
+                    const std::uint32_t a = primitiveIndices[i - 2];
+                    const std::uint32_t b = primitiveIndices[i - 1];
+                    const std::uint32_t c = primitiveIndices[i];
+                    triangles.push_back(odd ? std::array<std::uint32_t, 3>{b, a, c}
+                                            : std::array<std::uint32_t, 3>{a, b, c});
                 }
-                else
+            }
+            else // TRIANGLE_FAN
+            {
+                const std::uint32_t root = primitiveIndices[0];
+                for (std::size_t i = 2; i < primitiveIndices.size(); ++i)
                 {
-                    fallbackNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+                    triangles.push_back(std::array<std::uint32_t, 3>{
+                        root,
+                        primitiveIndices[i - 1],
+                        primitiveIndices[i],
+                    });
                 }
+            }
 
-                const auto pickNormal = [&](std::uint32_t idx) {
-                    if (idx < normals.size())
+            for (const MeshInstanceData& instance : instances)
+            {
+                const glm::mat4& worldTransform = instance.world;
+                const glm::mat3 normalTransform = glm::inverseTranspose(glm::mat3(worldTransform));
+                const bool flipWinding = glm::determinant(glm::mat3(worldTransform)) < 0.0F;
+
+                bool canSkin = false;
+                std::vector<glm::mat4> skinJointMatrices;
+                if (instance.skinIndex >= 0 &&
+                    instance.skinIndex < static_cast<int>(skinCaches.size()) &&
+                    !jointIndices.empty() &&
+                    !jointWeights.empty())
+                {
+                    const SkinCache& skin = skinCaches[static_cast<std::size_t>(instance.skinIndex)];
+                    if (!skin.joints.empty())
                     {
-                        glm::vec3 n = normals[idx];
-                        if (glm::length(n) > 1.0e-6F)
+                        skinJointMatrices.assign(skin.joints.size(), glm::mat4{1.0F});
+                        const glm::mat4 invMeshWorld = glm::inverse(worldTransform);
+                        for (std::size_t ji = 0; ji < skin.joints.size(); ++ji)
                         {
-                            return glm::normalize(n);
+                            const int jointNode = skin.joints[ji];
+                            if (jointNode < 0 || jointNode >= static_cast<int>(nodeWorlds.size()))
+                            {
+                                continue;
+                            }
+                            skinJointMatrices[ji] = invMeshWorld * nodeWorlds[static_cast<std::size_t>(jointNode)] * skin.inverseBindMatrices[ji];
                         }
+                        canSkin = true;
                     }
-                    return fallbackNormal;
+                }
+
+                const auto skinVertex = [&](std::uint32_t idx, const glm::vec3& localPos, const glm::vec3& localNormal) {
+                    if (!canSkin || idx >= jointIndices.size() || idx >= jointWeights.size())
+                    {
+                        return std::pair<glm::vec3, glm::vec3>{localPos, localNormal};
+                    }
+
+                    const glm::uvec4 joints = jointIndices[idx];
+                    const glm::vec4 weights = jointWeights[idx];
+                    glm::vec3 skinnedPos{0.0F};
+                    glm::vec3 skinnedNormal{0.0F};
+                    float weightSum = 0.0F;
+
+                    for (int k = 0; k < 4; ++k)
+                    {
+                        const float w = weights[static_cast<std::size_t>(k)];
+                        if (w <= 1.0e-6F)
+                        {
+                            continue;
+                        }
+                        const std::uint32_t jointIndex = joints[static_cast<std::size_t>(k)];
+                        if (jointIndex >= skinJointMatrices.size())
+                        {
+                            continue;
+                        }
+                        const glm::mat4& jointMat = skinJointMatrices[static_cast<std::size_t>(jointIndex)];
+                        skinnedPos += w * glm::vec3(jointMat * glm::vec4(localPos, 1.0F));
+                        skinnedNormal += w * glm::mat3(jointMat) * localNormal;
+                        weightSum += w;
+                    }
+
+                    if (weightSum <= 1.0e-6F)
+                    {
+                        return std::pair<glm::vec3, glm::vec3>{localPos, localNormal};
+                    }
+
+                    glm::vec3 n = skinnedNormal;
+                    if (glm::length(n) > 1.0e-6F)
+                    {
+                        n = glm::normalize(n);
+                    }
+                    else
+                    {
+                        n = localNormal;
+                    }
+                    return std::pair<glm::vec3, glm::vec3>{skinnedPos, n};
                 };
 
-                out.geometry.positions.push_back(a);
-                out.geometry.positions.push_back(b);
-                out.geometry.positions.push_back(c);
-                out.geometry.normals.push_back(pickNormal(ia));
-                out.geometry.normals.push_back(pickNormal(ib));
-                out.geometry.normals.push_back(pickNormal(ic));
-                out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
-                out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
-                out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
-                emittedAnyTriangle = true;
+                for (const auto& tri : triangles)
+                {
+                    const std::uint32_t ia = tri[0];
+                    const std::uint32_t ib = flipWinding ? tri[2] : tri[1];
+                    const std::uint32_t ic = flipWinding ? tri[1] : tri[2];
+                    if (ia >= positions.size() || ib >= positions.size() || ic >= positions.size())
+                    {
+                        continue;
+                    }
+
+                    const glm::vec3 localNormalA = ia < normals.size() ? normals[ia] : glm::vec3{0.0F, 1.0F, 0.0F};
+                    const glm::vec3 localNormalB = ib < normals.size() ? normals[ib] : glm::vec3{0.0F, 1.0F, 0.0F};
+                    const glm::vec3 localNormalC = ic < normals.size() ? normals[ic] : glm::vec3{0.0F, 1.0F, 0.0F};
+                    const auto [skinnedA, skinnedNormalA] = skinVertex(ia, positions[ia], localNormalA);
+                    const auto [skinnedB, skinnedNormalB] = skinVertex(ib, positions[ib], localNormalB);
+                    const auto [skinnedC, skinnedNormalC] = skinVertex(ic, positions[ic], localNormalC);
+
+                    const glm::vec3 a = glm::vec3(worldTransform * glm::vec4(skinnedA, 1.0F));
+                    const glm::vec3 b = glm::vec3(worldTransform * glm::vec4(skinnedB, 1.0F));
+                    const glm::vec3 c = glm::vec3(worldTransform * glm::vec4(skinnedC, 1.0F));
+
+                    boundsMin = glm::min(boundsMin, a);
+                    boundsMin = glm::min(boundsMin, b);
+                    boundsMin = glm::min(boundsMin, c);
+                    boundsMax = glm::max(boundsMax, a);
+                    boundsMax = glm::max(boundsMax, b);
+                    boundsMax = glm::max(boundsMax, c);
+
+                    glm::vec3 fallbackNormal = glm::cross(b - a, c - a);
+                    if (glm::length(fallbackNormal) > 1.0e-6F)
+                    {
+                        fallbackNormal = glm::normalize(fallbackNormal);
+                    }
+                    else
+                    {
+                        fallbackNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+                    }
+
+                    const auto pickNormal = [&](std::uint32_t idx) {
+                        if (idx == ia)
+                        {
+                            glm::vec3 n = glm::vec3(normalTransform * skinnedNormalA);
+                            if (glm::length(n) > 1.0e-6F)
+                            {
+                                return glm::normalize(n);
+                            }
+                        }
+                        else if (idx == ib)
+                        {
+                            glm::vec3 n = glm::vec3(normalTransform * skinnedNormalB);
+                            if (glm::length(n) > 1.0e-6F)
+                            {
+                                return glm::normalize(n);
+                            }
+                        }
+                        else if (idx == ic)
+                        {
+                            glm::vec3 n = glm::vec3(normalTransform * skinnedNormalC);
+                            if (glm::length(n) > 1.0e-6F)
+                            {
+                                return glm::normalize(n);
+                            }
+                        }
+                        if (idx < normals.size() && !canSkin)
+                        {
+                            glm::vec3 n = glm::vec3(normalTransform * normals[idx]);
+                            if (glm::length(n) > 1.0e-6F)
+                            {
+                                return glm::normalize(n);
+                            }
+                        }
+                        return fallbackNormal;
+                    };
+                    const auto pickColor = [&](std::uint32_t idx) {
+                        (void)idx;
+                        const glm::vec3 factor = glm::vec3{baseColorFactor.r, baseColorFactor.g, baseColorFactor.b};
+                        return glm::clamp(factor, glm::vec3{0.0F}, glm::vec3{1.0F});
+                    };
+                    const auto pickUv = [&](std::uint32_t idx) {
+                        if (idx < texcoords.size())
+                        {
+                            return texcoords[idx];
+                        }
+                        return glm::vec2{0.0F, 0.0F};
+                    };
+
+                    out.geometry.positions.push_back(a);
+                    out.geometry.positions.push_back(b);
+                    out.geometry.positions.push_back(c);
+                    out.geometry.normals.push_back(pickNormal(ia));
+                    out.geometry.normals.push_back(pickNormal(ib));
+                    out.geometry.normals.push_back(pickNormal(ic));
+                    out.geometry.colors.push_back(pickColor(ia));
+                    out.geometry.colors.push_back(pickColor(ib));
+                    out.geometry.colors.push_back(pickColor(ic));
+                    out.geometry.uvs.push_back(pickUv(ia));
+                    out.geometry.uvs.push_back(pickUv(ib));
+                    out.geometry.uvs.push_back(pickUv(ic));
+                    out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
+                    out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
+                    out.geometry.indices.push_back(static_cast<std::uint32_t>(out.geometry.indices.size()));
+
+                    primitiveSurface.geometry.positions.push_back(a);
+                    primitiveSurface.geometry.positions.push_back(b);
+                    primitiveSurface.geometry.positions.push_back(c);
+                    primitiveSurface.geometry.normals.push_back(pickNormal(ia));
+                    primitiveSurface.geometry.normals.push_back(pickNormal(ib));
+                    primitiveSurface.geometry.normals.push_back(pickNormal(ic));
+                    primitiveSurface.geometry.colors.push_back(pickColor(ia));
+                    primitiveSurface.geometry.colors.push_back(pickColor(ib));
+                    primitiveSurface.geometry.colors.push_back(pickColor(ic));
+                    primitiveSurface.geometry.uvs.push_back(pickUv(ia));
+                    primitiveSurface.geometry.uvs.push_back(pickUv(ib));
+                    primitiveSurface.geometry.uvs.push_back(pickUv(ic));
+                    primitiveSurface.geometry.indices.push_back(static_cast<std::uint32_t>(primitiveSurface.geometry.indices.size()));
+                    primitiveSurface.geometry.indices.push_back(static_cast<std::uint32_t>(primitiveSurface.geometry.indices.size()));
+                    primitiveSurface.geometry.indices.push_back(static_cast<std::uint32_t>(primitiveSurface.geometry.indices.size()));
+                    emittedAnyTriangle = true;
+                }
+            }
+            if (!primitiveSurface.geometry.positions.empty())
+            {
+                out.surfaces.push_back(std::move(primitiveSurface));
             }
         }
     }
@@ -650,6 +1520,13 @@ MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
     for (glm::vec3& p : out.geometry.positions)
     {
         p -= center;
+    }
+    for (MeshSurfaceData& surface : out.surfaces)
+    {
+        for (glm::vec3& p : surface.geometry.positions)
+        {
+            p -= center;
+        }
     }
     out.boundsMin = boundsMin - center;
     out.boundsMax = boundsMax - center;

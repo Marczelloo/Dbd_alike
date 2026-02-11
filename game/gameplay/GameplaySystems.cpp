@@ -119,6 +119,13 @@ GameplaySystems::GameplaySystems()
 void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
 {
     m_eventBus = &eventBus;
+    m_fxSystem.Initialize("assets/fx");
+    m_fxSystem.SetSpawnCallback([this](const engine::fx::FxSpawnEvent& event) {
+        if (m_fxReplicationCallback)
+        {
+            m_fxReplicationCallback(event);
+        }
+    });
 
     m_eventBus->Subscribe("load_map", [this](const engine::core::Event& event) {
         if (!event.args.empty())
@@ -186,6 +193,11 @@ void GameplaySystems::CaptureInputFrame(
             command.lungeHeld = false;
             if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Hooked && controlsEnabled)
             {
+                const glm::vec2 mouseDelta = input.MouseDelta();
+                command.lookDelta += glm::vec2{mouseDelta.x, m_invertLookY ? -mouseDelta.y : mouseDelta.y};
+            }
+            if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Hooked && controlsEnabled)
+            {
                 command.interactPressed =
                     command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
                 command.jumpPressed = command.jumpPressed || input.IsKeyPressed(GLFW_KEY_SPACE);
@@ -207,11 +219,8 @@ void GameplaySystems::CaptureInputFrame(
         command.attackHeld = bindings.IsDown(input, engine::platform::InputAction::AttackShort) ||
                              bindings.IsDown(input, engine::platform::InputAction::AttackLunge);
         command.lungeHeld = bindings.IsDown(input, engine::platform::InputAction::AttackLunge);
-        command.lookDelta += input.MouseDelta();
-        if (m_invertLookY)
-        {
-            command.lookDelta.y = -command.lookDelta.y;
-        }
+        const glm::vec2 mouseDelta = input.MouseDelta();
+        command.lookDelta += glm::vec2{mouseDelta.x, m_invertLookY ? -mouseDelta.y : mouseDelta.y};
 
         command.interactPressed = command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
         command.jumpPressed = command.jumpPressed || input.IsKeyPressed(GLFW_KEY_SPACE);
@@ -316,7 +325,8 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
             inputLocked = true;
         }
 
-        if (!inputLocked && glm::length(command.lookDelta) > 1.0e-5F)
+        const bool allowHookLook = entity == m_survivor && m_survivorState == SurvivorHealthState::Hooked;
+        if ((!inputLocked || allowHookLook) && glm::length(command.lookDelta) > 1.0e-5F)
         {
             const float sensitivity = role == engine::scene::Role::Survivor ? m_survivorLookSensitivity : m_killerLookSensitivity;
             UpdateActorLook(entity, command.lookDelta, sensitivity);
@@ -428,11 +438,13 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
     m_lastSwingDebugTtl = std::max(0.0F, m_lastSwingDebugTtl - deltaSeconds);
     m_killerAttackFlashTtl = std::max(0.0F, m_killerAttackFlashTtl - deltaSeconds);
 
+    m_fxSystem.Update(deltaSeconds, m_cameraPosition);
     UpdateCamera(deltaSeconds);
 }
 
 void GameplaySystems::Render(engine::render::Renderer& renderer) const
 {
+    renderer.SetPostFxPulse(m_fxSystem.PostFxPulseColor(), m_fxSystem.PostFxPulseIntensity());
     renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F});
 
     renderer.DrawLine(glm::vec3{0.0F}, glm::vec3{2.0F, 0.0F, 0.0F}, glm::vec3{1.0F, 0.2F, 0.2F});
@@ -578,39 +590,76 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
         }
     }
 
-    const bool showFpWeapon =
-        m_controlledRole == ControlledRole::Killer &&
-        ResolveCameraMode() == CameraMode::FirstPerson;
-    if (showFpWeapon)
+    const bool showFpWeapon = m_controlledRole == ControlledRole::Killer && ResolveCameraMode() == CameraMode::FirstPerson;
+    const auto killerTransformIt = transforms.find(m_killer);
+    if (showFpWeapon && m_cameraInitialized && killerTransformIt != transforms.end())
     {
-        const glm::vec3 up{0.0F, 1.0F, 0.0F};
-        glm::vec3 right = glm::cross(m_cameraForward, up);
+        const engine::scene::Transform& killerTransform = killerTransformIt->second;
+        const float killerYaw = killerTransform.rotationEuler.y;
+        const float killerPitch = killerTransform.rotationEuler.x;
+
+        glm::vec3 forward = ForwardFromYawPitch(killerYaw, killerPitch);
+        if (glm::length(forward) < 1.0e-5F)
+        {
+            forward = glm::vec3{0.0F, 0.0F, -1.0F};
+        }
+        forward = glm::normalize(forward);
+
+        glm::vec3 right = glm::cross(forward, glm::vec3{0.0F, 1.0F, 0.0F});
         if (glm::length(right) < 1.0e-5F)
         {
             right = glm::vec3{1.0F, 0.0F, 0.0F};
         }
         right = glm::normalize(right);
+        const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-        float attackAnim = 0.0F;
+        float attackForwardOffset = 0.0F;
+        float attackUpOffset = 0.0F;
+        float attackSideOffset = 0.0F;
+        float attackRollDegrees = 0.0F;
         if (m_killerAttackState == KillerAttackState::ChargingLunge)
         {
-            attackAnim = -0.08F * glm::clamp(m_killerLungeChargeSeconds / std::max(0.01F, m_killerLungeChargeMaxSeconds), 0.0F, 1.0F);
+            const float charge01 = glm::clamp(m_killerLungeChargeSeconds / std::max(0.01F, m_killerLungeChargeMaxSeconds), 0.0F, 1.0F);
+            attackForwardOffset = -0.03F * charge01;
+            attackUpOffset = -0.03F * charge01;
+            attackSideOffset = -0.02F * charge01;
+            attackRollDegrees = -8.0F * charge01;
         }
         else if (m_killerAttackState == KillerAttackState::Lunging)
         {
-            attackAnim = 0.16F;
+            attackForwardOffset = 0.18F;
+            attackUpOffset = -0.08F;
+            attackSideOffset = 0.02F;
+            attackRollDegrees = 18.0F;
         }
         else if (m_killerAttackState == KillerAttackState::Recovering)
         {
-            attackAnim = -0.05F;
+            attackForwardOffset = -0.04F;
+            attackUpOffset = -0.05F;
+            attackSideOffset = -0.01F;
+            attackRollDegrees = -10.0F;
         }
 
+        const float sideOffset = 0.23F;
+        const float forwardOffset = 0.42F;
+        const float downOffset = -0.22F;
         const glm::vec3 weaponCenter =
             m_cameraPosition +
-            m_cameraForward * (0.52F + attackAnim) +
-            right * 0.22F +
-            glm::vec3{0.0F, -0.18F, 0.0F};
-        renderer.DrawBox(weaponCenter, glm::vec3{0.08F, 0.08F, 0.24F}, glm::vec3{0.18F, 0.18F, 0.18F});
+            forward * (forwardOffset + attackForwardOffset) +
+            right * (sideOffset + attackSideOffset) +
+            up * (downOffset + attackUpOffset);
+
+        const glm::vec3 weaponRotationDegrees{
+            glm::degrees(killerPitch) - 12.0F,
+            180.0F - glm::degrees(killerYaw),
+            28.0F + attackRollDegrees,
+        };
+        renderer.DrawOrientedBox(
+            weaponCenter,
+            glm::vec3{0.07F, 0.05F, 0.24F},
+            weaponRotationDegrees,
+            glm::vec3{0.18F, 0.18F, 0.18F}
+        );
     }
 
     if (m_terrorRadiusVisible && m_killer != 0)
@@ -778,6 +827,8 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
             renderer.DrawLine(m_lastSwingOrigin, endCenter - up * radiusAtEnd, hitColor);
         }
     }
+
+    m_fxSystem.Render(renderer, m_cameraPosition);
 }
 
 glm::mat4 GameplaySystems::BuildViewProjection(float aspectRatio) const
@@ -846,6 +897,10 @@ HudState GameplaySystems::BuildHudState() const
         hud.hookStageProgress = 0.0F;
     }
     hud.runtimeMessage = m_messages.empty() ? std::string{} : m_messages.front().text;
+    const engine::fx::FxStats fxStats = m_fxSystem.Stats();
+    hud.fxActiveInstances = fxStats.activeInstances;
+    hud.fxActiveParticles = fxStats.activeParticles;
+    hud.fxCpuMs = fxStats.cpuMs;
     if (m_controlledRole == ControlledRole::Survivor && m_survivorState == SurvivorHealthState::Carried)
     {
         hud.interactionPrompt = "Wiggle: Alternate A/D to escape";
@@ -1815,6 +1870,54 @@ void GameplaySystems::RequestQuit()
     m_quitRequested = true;
 }
 
+void GameplaySystems::SpawnFxDebug(const std::string& assetId)
+{
+    glm::vec3 forward = m_cameraForward;
+    const engine::scene::Entity controlled = ControlledEntity();
+    const auto controlledTransformIt = m_world.Transforms().find(controlled);
+    if (controlledTransformIt != m_world.Transforms().end() && glm::length(controlledTransformIt->second.forward) > 1.0e-5F)
+    {
+        forward = controlledTransformIt->second.forward;
+    }
+    if (glm::length(forward) <= 1.0e-5F)
+    {
+        forward = glm::vec3{0.0F, 0.0F, -1.0F};
+    }
+    const glm::vec3 origin = m_cameraInitialized ? (m_cameraPosition + m_cameraForward * 1.8F) : glm::vec3{0.0F, 1.0F, 0.0F};
+    SpawnGameplayFx(assetId, origin, forward, engine::fx::FxNetMode::Local);
+}
+
+void GameplaySystems::StopAllFx()
+{
+    m_fxSystem.StopAll();
+    m_chaseAuraFxId = 0;
+}
+
+std::vector<std::string> GameplaySystems::ListFxAssets() const
+{
+    return m_fxSystem.ListAssetIds();
+}
+
+std::optional<engine::fx::FxAsset> GameplaySystems::GetFxAsset(const std::string& assetId) const
+{
+    return m_fxSystem.GetAsset(assetId);
+}
+
+bool GameplaySystems::SaveFxAsset(const engine::fx::FxAsset& asset, std::string* outError)
+{
+    return m_fxSystem.SaveAsset(asset, outError);
+}
+
+void GameplaySystems::SetFxReplicationCallback(std::function<void(const engine::fx::FxSpawnEvent&)> callback)
+{
+    m_fxReplicationCallback = std::move(callback);
+}
+
+void GameplaySystems::SpawnReplicatedFx(const engine::fx::FxSpawnEvent& event)
+{
+    m_fxSystem.Spawn(event.assetId, event.position, event.forward, {}, engine::fx::FxNetMode::Local);
+}
+
 void GameplaySystems::BuildSceneFromMap(MapType mapType, unsigned int seed)
 {
     game::maps::TileGenerator generator;
@@ -1862,6 +1965,8 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     m_lastSwingRange = 0.0F;
     m_lastSwingHalfAngleRadians = 0.0F;
     m_lastSwingDebugTtl = 0.0F;
+    m_fxSystem.StopAll();
+    m_chaseAuraFxId = 0;
     m_chase = ChaseState{};
     m_interactionCandidate = InteractionCandidate{};
     m_cameraInitialized = false;
@@ -2689,6 +2794,14 @@ void GameplaySystems::ExecuteInteractionForRole(engine::scene::Entity actorEntit
             palletIt->second.breakTimer = 0.0F;
             palletIt->second.halfExtents = palletIt->second.droppedHalfExtents;
             palletTransformIt->second.position.y = palletIt->second.droppedCenterY;
+            const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                          : engine::fx::FxNetMode::Local;
+            SpawnGameplayFx(
+                "dust_puff",
+                palletTransformIt->second.position + glm::vec3{0.0F, 0.18F, 0.0F},
+                actorTransformIt->second.forward,
+                netMode
+            );
             AddRuntimeMessage("Pallet: standing -> dropped", 2.0F);
             TryStunKillerFromPallet(candidate.entity);
         }
@@ -2707,6 +2820,15 @@ void GameplaySystems::ExecuteInteractionForRole(engine::scene::Entity actorEntit
         {
             palletIt->second.breakTimer = palletIt->second.breakDuration;
             m_killerBreakingPallet = candidate.entity;
+            const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                          : engine::fx::FxNetMode::Local;
+            SpawnGameplayFx(
+                "hit_spark",
+                palletTransformIt != m_world.Transforms().end() ? palletTransformIt->second.position + glm::vec3{0.0F, 0.4F, 0.0F}
+                                                                 : glm::vec3{0.0F, 0.4F, 0.0F},
+                actorTransformIt->second.forward,
+                netMode
+            );
             AddRuntimeMessage("Pallet break started", 2.0F);
         }
         return;
@@ -2849,6 +2971,10 @@ bool GameplaySystems::ResolveKillerAttackHit(float range, float halfAngleRadians
     survivorTransformIt->second.position += knockbackDirection * 1.4F;
     m_lastHitConnected = true;
     m_killerAttackFlashTtl = 0.12F;
+    const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                  : engine::fx::FxNetMode::Local;
+    SpawnGameplayFx("hit_spark", survivorPoint, attackForward, netMode);
+    SpawnGameplayFx("blood_spray", survivorPoint + glm::vec3{0.0F, 0.08F, 0.0F}, attackForward, netMode);
     ApplySurvivorHit();
     AddRuntimeMessage("Killer hit confirmed", 1.3F);
     return true;
@@ -2971,6 +3097,9 @@ void GameplaySystems::UpdatePalletBreak(float fixedDt)
         auto transformIt = m_world.Transforms().find(m_killerBreakingPallet);
         if (transformIt != m_world.Transforms().end())
         {
+            const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                          : engine::fx::FxNetMode::Local;
+            SpawnGameplayFx("dust_puff", transformIt->second.position + glm::vec3{0.0F, 0.2F, 0.0F}, glm::vec3{0.0F, 1.0F, 0.0F}, netMode);
             transformIt->second.position.y = -20.0F;
         }
         AddRuntimeMessage("Pallet: dropped -> broken", 2.0F);
@@ -2980,6 +3109,7 @@ void GameplaySystems::UpdatePalletBreak(float fixedDt)
 
 void GameplaySystems::UpdateChaseState(float fixedDt)
 {
+    const bool wasChasing = m_chase.isChasing;
     const auto killerTransformIt = m_world.Transforms().find(m_killer);
     const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
     const auto survivorActorIt = m_world.Actors().find(m_survivor);
@@ -2991,50 +3121,89 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
         m_chase.isChasing = false;
         m_chase.distance = 0.0F;
         m_chase.hasLineOfSight = false;
-        return;
-    }
-
-    m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
-    m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
-
-    if (m_forcedChase.has_value())
-    {
-        m_chase.isChasing = *m_forcedChase;
-        return;
-    }
-
-    const std::vector<engine::physics::TriggerHit> chaseHits = m_physics.QueryCapsuleTriggers(
-        survivorTransformIt->second.position,
-        survivorActorIt->second.capsuleRadius,
-        survivorActorIt->second.capsuleHeight,
-        engine::physics::TriggerKind::Chase
-    );
-
-    const bool survivorInChaseTrigger = !chaseHits.empty();
-
-    if (!m_chase.isChasing)
-    {
-        if (survivorInChaseTrigger && m_chase.hasLineOfSight && m_chase.distance <= m_chase.startDistance)
-        {
-            m_chase.isChasing = true;
-            m_chase.lostSightTimer = 0.0F;
-        }
-        return;
-    }
-
-    if (!m_chase.hasLineOfSight || m_chase.distance > m_chase.endDistance)
-    {
-        m_chase.lostSightTimer += fixedDt;
     }
     else
     {
-        m_chase.lostSightTimer = 0.0F;
+        m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
+        m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+
+        if (m_forcedChase.has_value())
+        {
+            m_chase.isChasing = *m_forcedChase;
+        }
+        else
+        {
+            const std::vector<engine::physics::TriggerHit> chaseHits = m_physics.QueryCapsuleTriggers(
+                survivorTransformIt->second.position,
+                survivorActorIt->second.capsuleRadius,
+                survivorActorIt->second.capsuleHeight,
+                engine::physics::TriggerKind::Chase
+            );
+
+            const bool survivorInChaseTrigger = !chaseHits.empty();
+
+            if (!m_chase.isChasing)
+            {
+                if (survivorInChaseTrigger && m_chase.hasLineOfSight && m_chase.distance <= m_chase.startDistance)
+                {
+                    m_chase.isChasing = true;
+                    m_chase.lostSightTimer = 0.0F;
+                }
+            }
+            else
+            {
+                if (!m_chase.hasLineOfSight || m_chase.distance > m_chase.endDistance)
+                {
+                    m_chase.lostSightTimer += fixedDt;
+                }
+                else
+                {
+                    m_chase.lostSightTimer = 0.0F;
+                }
+
+                if (m_chase.lostSightTimer >= m_chase.endDelay)
+                {
+                    m_chase.isChasing = false;
+                    m_chase.lostSightTimer = 0.0F;
+                }
+            }
+        }
     }
 
-    if (m_chase.lostSightTimer >= m_chase.endDelay)
+    if (m_chase.isChasing)
     {
-        m_chase.isChasing = false;
-        m_chase.lostSightTimer = 0.0F;
+        if (killerTransformIt != m_world.Transforms().end())
+        {
+            const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                          : engine::fx::FxNetMode::Local;
+            if (m_chaseAuraFxId == 0)
+            {
+                m_chaseAuraFxId = SpawnGameplayFx(
+                    "chase_aura",
+                    killerTransformIt->second.position + glm::vec3{0.0F, 0.25F, 0.0F},
+                    killerTransformIt->second.forward,
+                    netMode
+                );
+            }
+            else
+            {
+                m_fxSystem.SetInstanceTransform(
+                    m_chaseAuraFxId,
+                    killerTransformIt->second.position + glm::vec3{0.0F, 0.25F, 0.0F},
+                    killerTransformIt->second.forward
+                );
+            }
+        }
+    }
+    else if (m_chaseAuraFxId != 0)
+    {
+        m_fxSystem.Stop(m_chaseAuraFxId);
+        m_chaseAuraFxId = 0;
+    }
+
+    if (m_chase.isChasing != wasChasing)
+    {
+        AddRuntimeMessage(m_chase.isChasing ? "Chase started" : "Chase ended", 1.0F);
     }
 }
 
@@ -3095,11 +3264,21 @@ void GameplaySystems::UpdateCamera(float deltaSeconds)
         desiredTarget = pivot + viewForward * 2.0F;
     }
 
+    const glm::vec3 shakeOffset = m_fxSystem.CameraShakeOffset();
+    desiredPosition += shakeOffset;
+    desiredTarget += shakeOffset * 0.6F;
+
     if (!m_cameraInitialized)
     {
         m_cameraPosition = desiredPosition;
         m_cameraTarget = desiredTarget;
         m_cameraInitialized = true;
+    }
+    else if (mode == CameraMode::FirstPerson)
+    {
+        // In first-person keep camera fully locked to actor look to avoid weapon/camera desync.
+        m_cameraPosition = desiredPosition;
+        m_cameraTarget = desiredTarget;
     }
     else
     {
@@ -3923,6 +4102,15 @@ void GameplaySystems::BeginWindowVault(engine::scene::Entity actorEntity, engine
     actor.lastVaultType = VaultTypeToText(vaultType);
     actor.collisionEnabled = false;
 
+    const glm::vec3 fxPos = windowTransformIt->second.position + glm::vec3{0.0F, 0.8F, 0.0F};
+    const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                  : engine::fx::FxNetMode::Local;
+    SpawnGameplayFx("dust_puff", fxPos, vaultDirection, netMode);
+    if (vaultType == VaultType::Fast)
+    {
+        SpawnGameplayFx("hit_spark", fxPos, vaultDirection, netMode);
+    }
+
     AddRuntimeMessage(std::string{"Vault: "} + actor.lastVaultType, 1.5F);
 }
 
@@ -3971,6 +4159,10 @@ void GameplaySystems::BeginPalletVault(engine::scene::Entity actorEntity, engine
     actor.forwardRunupDistance = 0.0F;
     actor.lastVaultType = std::string{"Pallet-"} + VaultTypeToText(vaultType);
     actor.collisionEnabled = false;
+
+    const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                  : engine::fx::FxNetMode::Local;
+    SpawnGameplayFx("dust_puff", palletTransformIt->second.position + glm::vec3{0.0F, 0.2F, 0.0F}, vaultDirection, netMode);
 
     AddRuntimeMessage("Vault started: " + actor.lastVaultType, 1.5F);
 }
@@ -4515,6 +4707,29 @@ void GameplaySystems::CompleteSkillCheck(bool success, bool timeout)
         }
     }
 
+    glm::vec3 fxOrigin{0.0F, 1.0F, 0.0F};
+    glm::vec3 fxForward{0.0F, 1.0F, 0.0F};
+    if (m_activeRepairGenerator != 0)
+    {
+        const auto generatorTransformIt = m_world.Transforms().find(m_activeRepairGenerator);
+        if (generatorTransformIt != m_world.Transforms().end())
+        {
+            fxOrigin = generatorTransformIt->second.position + glm::vec3{0.0F, 0.7F, 0.0F};
+            fxForward = generatorTransformIt->second.forward;
+        }
+    }
+    else
+    {
+        const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        if (survivorTransformIt != m_world.Transforms().end())
+        {
+            fxOrigin = survivorTransformIt->second.position + glm::vec3{0.0F, 0.8F, 0.0F};
+            fxForward = survivorTransformIt->second.forward;
+        }
+    }
+    const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                  : engine::fx::FxNetMode::Local;
+
     if (success)
     {
         if (hookSkillCheck)
@@ -4533,6 +4748,7 @@ void GameplaySystems::CompleteSkillCheck(bool success, bool timeout)
                 generatorIt->second.progress = glm::clamp(generatorIt->second.progress + 0.05F, 0.0F, 1.0F);
             }
         }
+        SpawnGameplayFx("hit_spark", fxOrigin, fxForward, netMode);
         AddRuntimeMessage("Skill Check success", 1.2F);
     }
     else
@@ -4556,6 +4772,7 @@ void GameplaySystems::CompleteSkillCheck(bool success, bool timeout)
                 generatorIt->second.progress = glm::clamp(generatorIt->second.progress - 0.1F, 0.0F, 1.0F);
             }
         }
+        SpawnGameplayFx("blood_spray", fxOrigin, -fxForward, netMode);
         AddRuntimeMessage(timeout ? "Skill Check missed (penalty)" : "Skill Check failed (penalty)", 1.3F);
     }
 
@@ -4831,6 +5048,20 @@ std::string GameplaySystems::BuildMovementStateText(engine::scene::Entity entity
         return "Walking";
     }
     return "Idle";
+}
+
+engine::fx::FxSystem::FxInstanceId GameplaySystems::SpawnGameplayFx(
+    const std::string& assetId,
+    const glm::vec3& position,
+    const glm::vec3& forward,
+    engine::fx::FxNetMode mode
+)
+{
+    if (assetId.empty())
+    {
+        return 0;
+    }
+    return m_fxSystem.Spawn(assetId, position, forward, {}, mode);
 }
 
 GameplaySystems::RoleCommand GameplaySystems::BuildLocalRoleCommand(

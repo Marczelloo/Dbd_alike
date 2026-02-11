@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -59,12 +60,15 @@ public:
     [[nodiscard]] DisplayMode GetDisplayMode() const { return m_displayMode; }
 
     void SetResizeCallback(std::function<void(int, int)> callback);
+    void SetFileDropCallback(std::function<void(const std::vector<std::string>&)> callback);
 
 private:
     static void FramebufferResizeCallback(GLFWwindow* window, int width, int height);
+    static void FileDropCallback(GLFWwindow* window, int pathCount, const char** paths);
 
     GLFWwindow* m_window = nullptr;
     std::function<void(int, int)> m_resizeCallback;
+    std::function<void(const std::vector<std::string>&)> m_fileDropCallback;
 
     int m_windowedX = 100;
     int m_windowedY = 100;
