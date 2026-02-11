@@ -741,6 +741,34 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 - `bloodlust_reset` - Reset bloodlust to tier 0
 - `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
 - `bloodlust_dump` - Print bloodlust state and speed info
+---
+## Phase B Fixes (2026-02)
+
+### Fixes Applied:
+1. **Blood Pools** — Now spawn on **Injured OR Downed** (was only Downed)
+2. **TR Audio Routing** — Killer never hears TR bands, Survivor-only
+3. **Killer Look Light** — Debug visualization, survivor-only rendering, config commands
+4. **Scratch Marks** — Thinner multi-segment streaks, faster spawn rate (0.08-0.15s)
+
+### B1: Audio Routing
+**Bug**: Killer heard TR bands after role switch
+**Fix**: TR audio now checks local role every frame
+**Result**: TAB role switch → Killer instantly hears silence
+
+### B3: Blood Pools
+**Bug**: Only spawned when Downed, not Injured
+**Fix**: Spawn condition now `Injured || Downed`
+**Visibility**: Killer-only, debug overlay support
+
+### B4: Killer Look Light
+**Bug**: Barely visible, no debug mode
+**Fix**: Light now disabled for killer view, cone debug visualization
+**Commands**: `killer_light on|off`, `killer_light_range <m>` (0-100m)
+
+### B2: Scratch Marks
+**Fix**: Thinner 3-segment streaks, faster spawn (0.08-0.15s interval)
+**Visibility**: Killer-only (debug mode shows to survivor too)
+
 - `scratch_debug on|off` - Toggle scratch marks debug overlay
 - `scratch_profile <name>` - Load scratch profile (future)
 - `blood_debug on|off` - Toggle blood pools debug overlay
@@ -748,6 +776,7 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 - `killer_light on|off` - Toggle killer look light
 - `killer_light_range <m>` - Set killer light range (0–100m)
 - `killer_light_debug on|off` - Toggle killer light debug overlay
+
 
 ### Audio Test Checklist
 1. Place audio files in `assets/audio/`
