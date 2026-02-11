@@ -665,7 +665,7 @@ bool App::Run()
         {
             DrawUiTestPanel();
         }
-        if (m_showLoadingScreenTestPanel && !m_loadingTestShowFull)
+        if (m_showLoadingScreenTestPanel && (m_appMode != AppMode::Loading || !m_loadingTestShowFull))
         {
             DrawLoadingScreenTestPanel();
         }
@@ -674,10 +674,19 @@ bool App::Run()
         if (m_connectingLoadingActive)
         {
             const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
-            // Fake progress: asymptotically approach 0.9 over ~8 seconds
-            const float fakeProgress = std::min(0.9F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
-            const std::string step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
-            DrawFullLoadingScreen(fakeProgress, "Establishing connection to the server...", step);
+            // Auto-dismiss after 15 seconds timeout
+            if (elapsed > 15.0)
+            {
+                std::cout << "[Loading] Timeout after 15s, dismissing loading screen\n";
+                m_connectingLoadingActive = false;
+            }
+            else
+            {
+                // Fake progress: asymptotically approach 0.95 over ~8 seconds
+                const float fakeProgress = std::min(0.95F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
+                const std::string step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+                DrawFullLoadingScreen(fakeProgress, "Establishing connection to the server...", step);
+            }
         }
 
         // Render ImGui debug windows BEFORE EndFrame
@@ -1089,7 +1098,7 @@ bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std:
     m_joinStartSeconds = glfwGetTime();
     m_connectedEndpoint.clear();
     m_menuNetStatus = "Joining " + ip + ":" + std::to_string(port) + " ...";
-    m_connectingLoadingActive = true;
+    m_connectingLoadingActive = m_showConnectingLoading;
     m_connectingLoadingStart = glfwGetTime();
     return true;
 }
@@ -3330,6 +3339,8 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_settingsOpenedFromPause = false;
     }
 
+    m_ui.Checkbox("loading_on_join", "Show loading screen on start/join", &m_showConnectingLoading);
+
     m_ui.Label("Session", m_ui.Theme().colorAccent);
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
@@ -3352,7 +3363,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
     if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
     {
-        StartSoloSession(mapName, roleName);
+        StartJoinSession("", static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
     }
 
     if (!savedMaps.empty())
@@ -3401,6 +3412,8 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     {
         StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
     }
+
+    m_ui.Checkbox("loading_on_join", "Show loading screen on join", &m_showConnectingLoading);
 
     if (m_ui.Button("refresh_lan", "Refresh LAN"))
     {
@@ -4274,19 +4287,32 @@ void App::DrawLoadingScreenTestPanel()
 
     m_ui.Label("Current Step: " + std::to_string(m_loadingTestCurrentStep + 1) + " / " + std::to_string(m_loadingTestSteps), m_ui.Theme().colorTextMuted);
 
-    m_ui.Checkbox("loading_show_full", "Full Screen Loading", &m_loadingTestShowFull);
-    if (m_loadingTestShowFull)
+    m_ui.Checkbox("loading_show_full", "Enable Full Screen Mode", &m_loadingTestShowFull);
+
+    m_ui.Spacer(8.0F);
+
+    if (m_ui.Button("loading_toggle_full", m_loadingTestShowFull ? "Show Full Screen" : "Show Full Screen (disabled)"))
     {
-        if (m_appMode != AppMode::Loading)
+        if (m_loadingTestShowFull && m_appMode != AppMode::Loading)
         {
             m_appMode = AppMode::Loading;
         }
-    }
-    else
-    {
-        if (m_appMode == AppMode::Loading)
+        else if (m_appMode == AppMode::Loading)
         {
             m_appMode = AppMode::MainMenu;
+        }
+    }
+
+    // Update progress even when in full screen mode
+    if (m_loadingTestAutoAdvance && m_loadingTestProgress < 1.0F)
+    {
+        m_loadingTestProgress += m_loadingTestSpeed * static_cast<float>(m_time.DeltaSeconds());
+        m_loadingTestProgress = std::min(1.0F, m_loadingTestProgress);
+        const int newStep = static_cast<int>(m_loadingTestProgress * m_loadingTestSteps);
+        if (newStep != m_loadingTestCurrentStep)
+        {
+            m_loadingTestCurrentStep = newStep;
+            m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
         }
     }
 
@@ -4309,18 +4335,6 @@ void App::DrawLoadingScreenTestPanel()
     }
     m_ui.PopLayout();
 
-    if (m_loadingTestAutoAdvance && m_loadingTestProgress < 1.0F)
-    {
-        m_loadingTestProgress += m_loadingTestSpeed * static_cast<float>(m_time.DeltaSeconds());
-        m_loadingTestProgress = std::min(1.0F, m_loadingTestProgress);
-        const int newStep = static_cast<int>(m_loadingTestProgress * m_loadingTestSteps);
-        if (newStep != m_loadingTestCurrentStep)
-        {
-            m_loadingTestCurrentStep = newStep;
-            m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
-        }
-    }
-
     m_ui.EndPanel();
 }
 
@@ -4333,17 +4347,23 @@ void App::DrawFullLoadingScreen(float progress01, const std::string& tip, const 
     const engine::ui::UiRect fullScreen{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h)};
     m_ui.BeginRootPanel("loading_screen_full", fullScreen, true);
 
+    // Use horizontal layout to center content horizontally
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 0.0F, 0.0F);
+
+    // Left spacer to center horizontally
+    m_ui.Spacer((w - 550.0F * scale) * 0.5F);
+
+    // Nested vertical layout for the content
     m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Vertical, 0.0F, 0.0F);
 
-    const glm::vec4 bgColor{0.02F, 0.02F, 0.04F, 1.0F};
-
+    // Top spacer to center vertically
     m_ui.Spacer(h * 0.35F);
+
     m_ui.Label("LOADING", m_ui.Theme().colorAccent, 1.8F);
 
     m_ui.Spacer(30.0F * scale);
 
     const float progressBarWidth = 500.0F * scale;
-    const float progressBarHeight = 16.0F * scale;
 
     m_ui.ProgressBar("loading_full_progress", progress01, std::to_string(static_cast<int>(progress01 * 100.0F)) + "%", progressBarWidth);
 
@@ -4362,7 +4382,10 @@ void App::DrawFullLoadingScreen(float progress01, const std::string& tip, const 
         m_ui.Label(stepText, m_ui.Theme().colorTextMuted, 0.8F);
     }
 
-    m_ui.PopLayout();
+    m_ui.PopLayout(); // End vertical layout
+    // Right spacer to complete centering is implicit via remaining space
+    m_ui.PopLayout(); // End horizontal layout
+
     m_ui.EndPanel();
 }
 

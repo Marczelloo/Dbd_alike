@@ -273,6 +273,7 @@ private:
     HudDragTarget m_hudResizeTarget = HudDragTarget::None;
 
     bool m_connectingLoadingActive = false;
+    bool m_showConnectingLoading = true;
     double m_connectingLoadingStart = 0.0;
 
     ControlsSettings m_controlsSettings{};
