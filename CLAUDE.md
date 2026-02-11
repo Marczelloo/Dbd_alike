@@ -126,6 +126,162 @@ Implement:
 
 ---
 
+---
+
+## 3.5) DBD-like Chase + Terror Radius (SOURCE OF TRUTH — NON-NEGOTIABLE)
+
+This project aims to match the _feel_ of Dead by Daylight for CHASE + TERROR RADIUS audio.  
+Do **not** reinterpret these rules. Implement exactly.
+
+### A) Definitions (do not mix concepts)
+
+- **CHASE**: a gameplay state (“In chase” / “Not in chase”), driven by LOS/FOV + distance + survivor sprinting.
+- **TERROR RADIUS (TR)**: survivor warning audio system driven primarily by **distance** to killer, using **stepped layers**.
+- **CHASE MUSIC**: an audio layer that plays only while `chaseActive == true`, replacing the _close_ TR feel.
+
+`BuildHudState().chaseActive` must reflect **CHASE state machine only** (not TR intensity).
+
+---
+
+### B) Chase rules (DBD-like, simplified but strict)
+
+#### Constants (FINAL)
+
+- Killer total FOV: **87°** (half-angle = 43.5°)
+- “Center FOV” constraint: **±35°** from killer forward
+- Chase start distance: **<= 12.0m**
+- Chase end distance: **>= 18.0m**
+- Chase end timeouts:
+  - LOS lost for **> 8.0s** → end chase
+  - Center-FOV lost for **> 8.0s** → end chase
+- Chase starts only if **Survivor is sprinting** (running)
+
+Chase can last indefinitely if LOS and center-FOV keep being reacquired (that’s fine).
+
+#### Required state machine
+
+Implement as a clear state machine:
+
+- `NotInChase`
+- `InChase`
+
+Track timers in chase system:
+
+- `timeSinceSeenLOS`
+- `timeSinceCenterFOV`
+- `timeInChase`
+
+#### Required inputs (minimum)
+
+- Killer forward vector + position
+- Survivor position
+- Survivor running/sprinting flag (or reliable speed-based proxy)
+- LOS test (raycast or existing visibility test)
+
+---
+
+### C) Terror Radius audio rules (DBD-like stepped layers)
+
+#### Radius
+
+Default TR radius: **32m** (data-driven via `assets/terror_radius/<killerId>.json` → `base_radius`)
+
+Distance is Survivor → Killer distance (use XZ/horizontal if you must choose; be consistent).
+
+#### Layer meaning (DO NOT INVERT)
+
+These names have fixed meaning:
+
+- `tr_far` = sound on the **OUTER EDGE** of TR (weakest)
+- `tr_mid` = sound in the **MIDDLE** of TR
+- `tr_close` = sound **CLOSE TO KILLER** (strongest)
+- `tr_chase` = chase music, **only** when chase is active
+
+#### Stepped bands (NO distance gradient)
+
+No continuous “intensity 0..1 over whole radius”.
+
+For base radius `R`:
+
+- `distance > R` → **silence** (all TR layers volume = 0)
+- `distance in (R * 0.66 .. R]` → `tr_far` ON (constant gain)
+- `distance in (R * 0.33 .. R * 0.66]` → `tr_mid` ON (constant gain)
+- `distance in [0 .. R * 0.33]` → `tr_close` ON (constant gain)
+
+Only one band is dominant at a time (stepped feel like DBD).
+
+#### Smoothing / crossfade (ONLY to prevent pops)
+
+Even though the _logic_ is stepped, audio must not click.
+Allow short smoothing:
+
+- **0.15–0.35s** lerp when switching bands or entering/exiting TR
+- This smoothing is NOT a “distance gradient”, only transition smoothing.
+
+#### Chase override (critical)
+
+When `chaseActive == true`:
+
+- `tr_chase` must be audible (constant within chase)
+- `tr_close` must be suppressed/replaced by `tr_chase` (DBD-like)
+- `tr_far` and `tr_mid` remain distance-based (or can be reduced—keep simple and consistent)
+  When chase ends:
+- fade out `tr_chase` quickly
+- return to correct distance band
+
+---
+
+### D) Debug & verification (MANDATORY)
+
+#### Viewport overlay must show:
+
+- distance_to_killer
+- in_LOS (bool)
+- in_center_FOV (bool)
+- survivor_sprinting (bool)
+- chaseActive (bool)
+- timeInChase
+- bloodlustTier (if implemented)
+- TR band active: FAR/MID/CLOSE/OUTSIDE
+- current per-layer volumes: far/mid/close/chase
+
+#### Console commands (must exist)
+
+- `tr_dump` → print TR state, band, per-layer volumes
+- `tr_radius <meters>` → set radius live
+- `tr_debug on|off` → overlay toggle (or extra debug)
+- `chase_force on|off` → force chaseActive for testing
+- `chase_dump` → print chase timers/state
+- `bloodlust_reset` → reset bloodlust (if bloodlust is implemented)
+
+---
+
+### E) Acceptance tests (must pass)
+
+1. TR:
+
+- Outside radius → silence
+- Enter radius → `tr_far` (outer edge) ON
+- Move closer → switch to `tr_mid`
+- Very close → switch to `tr_close`
+- No “smooth gradient” based on every meter; only stepped bands + short smoothing.
+
+2. Chase:
+
+- Survivor sprinting + within 12m + killer has LOS + in center FOV → chase starts
+- Break LOS > 8s OR break center FOV > 8s OR distance >= 18m → chase ends
+
+3. Chase/TR integration:
+
+- In chase → `tr_chase` ON, `tr_close` replaced
+- After chase ends → `tr_chase` OFF and TR returns to correct band
+
+4. Debug:
+
+- Overlay and console commands fully confirm behavior without guessing.
+
+---
+
 ## 4) Non-Negotiable UX / Debuggability
 
 ### Provide clear runtime diagnostics

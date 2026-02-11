@@ -985,6 +985,14 @@ HudState GameplaySystems::BuildHudState() const
     hud.chaseActive = m_chase.isChasing;
     hud.chaseDistance = m_chase.distance;
     hud.lineOfSight = m_chase.hasLineOfSight;
+    hud.inCenterFOV = m_chase.inCenterFOV;
+    hud.timeInChase = m_chase.timeInChase;
+    hud.timeSinceLOS = m_chase.timeSinceSeenLOS;
+    hud.timeSinceCenterFOV = m_chase.timeSinceCenterFOV;
+
+    // Get survivor sprinting state
+    const auto survivorActorIt = m_world.Actors().find(m_survivor);
+    hud.survivorSprinting = (survivorActorIt != m_world.Actors().end()) && survivorActorIt->second.sprinting;
 
     hud.collisionEnabled = m_collisionEnabled;
     hud.debugDrawEnabled = m_debugDrawEnabled;
@@ -1472,7 +1480,9 @@ void GameplaySystems::SetForcedChase(bool enabled)
     m_forcedChase = enabled;
     if (!enabled)
     {
-        m_chase.lostSightTimer = 0.0F;
+        // Reset timers when disabling forced chase
+        m_chase.timeSinceSeenLOS = 0.0F;
+        m_chase.timeSinceCenterFOV = 0.0F;
     }
 }
 
@@ -3223,76 +3233,104 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
         m_chase.isChasing = false;
         m_chase.distance = 0.0F;
         m_chase.hasLineOfSight = false;
-        m_chase.survivorNotRunningTimer = 0.0F;
+        m_chase.inCenterFOV = false;
+        m_chase.timeSinceSeenLOS = 0.0F;
+        m_chase.timeSinceCenterFOV = 0.0F;
+        m_chase.timeInChase = 0.0F;
         return;
+    }
+
+    // Calculate distance and LOS
+    m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
+    m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+
+    // Check if survivor is in killer's center FOV (±35°)
+    m_chase.inCenterFOV = IsSurvivorInKillerCenterFOV(
+        killerTransformIt->second.position,
+        killerTransformIt->second.forward,
+        survivorTransformIt->second.position
+    ); // ±35° DBD-like center FOV
+
+    // Track survivor running state from actor component
+    bool survivorIsRunning = false;
+    if (survivorActorIt != m_world.Actors().end())
+    {
+        survivorIsRunning = survivorActorIt->second.sprinting;
+    }
+
+    if (m_forcedChase.has_value())
+    {
+        m_chase.isChasing = *m_forcedChase;
     }
     else
     {
-        m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
-        m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+        // DBD-like chase rules:
+        // - Starts only if: survivor sprinting + distance <= 12m + LOS + in center FOV (±35°)
+        // - Ends if: distance >= 18m OR lost LOS > 8s OR lost center FOV > 8s
+        // - Chase can last indefinitely if LOS/center-FOV keep being reacquired
 
-        // Check if survivor is in killer's FOV
-        const bool survivorInFOV = IsSurvivorInKillerFOV(
-            killerTransformIt->second.position,
-            killerTransformIt->second.forward,
-            survivorTransformIt->second.position,
-            m_tuning.chaseFovDegrees
-        );
-
-        // Track survivor running state from actor component
-        bool survivorIsRunning = false;
-        if (survivorActorIt != m_world.Actors().end())
+        if (!m_chase.isChasing)
         {
-            survivorIsRunning = survivorActorIt->second.sprinting;
-        }
+            // Not in chase - check if we should start
+            const bool canStartChase =
+                survivorIsRunning &&
+                m_chase.distance <= m_chase.startDistance && // <= 12m
+                m_chase.hasLineOfSight &&
+                m_chase.inCenterFOV;
 
-        if (m_forcedChase.has_value())
-        {
-            m_chase.isChasing = *m_forcedChase;
+            if (canStartChase)
+            {
+                m_chase.isChasing = true;
+                m_chase.timeSinceSeenLOS = 0.0F;
+                m_chase.timeSinceCenterFOV = 0.0F;
+                m_chase.timeInChase = 0.0F;
+            }
         }
         else
         {
-            const bool canStartChase = survivorInFOV && m_chase.hasLineOfSight && survivorIsRunning;
-          const bool canMaintainChase = m_chase.isChasing && (m_chase.hasLineOfSight || survivorInFOV) && survivorIsRunning;
+            // Already in chase - update timers and check if we should end
 
-          if (!m_chase.isChasing && canStartChase && m_chase.distance <= m_chase.startDistance)
-          {
-              m_chase.isChasing = true;
-              m_chase.lostSightTimer = 0.0F;
-          }
-          else if (!canMaintainChase)
-          {
-              // Lost sight OR out of FOV OR stopped running
-              m_chase.lostSightTimer += fixedDt;
+            // Update time-in-chase counter
+            m_chase.timeInChase += fixedDt;
 
-              // Track survivor not running
-              if (!survivorIsRunning)
-              {
-                  m_chase.survivorNotRunningTimer += fixedDt;
-              }
-              else
-              {
-                  m_chase.survivorNotRunningTimer = 0.0F;
-              }
+            // Update timers based on current conditions
+            if (m_chase.hasLineOfSight)
+            {
+                m_chase.timeSinceSeenLOS = 0.0F;
+            }
+            else
+            {
+                m_chase.timeSinceSeenLOS += fixedDt;
+            }
 
-              // End chase if conditions not met for longer than delay
-              if (m_chase.lostSightTimer >= m_chase.endDelay ||
-                  (!survivorIsRunning && m_chase.survivorNotRunningTimer >= m_tuning.chaseStopRunningDelay))
-              {
-                  m_chase.isChasing = false;
-                  m_chase.lostSightTimer = 0.0F;
-                  m_chase.survivorNotRunningTimer = 0.0F;
-              }
-          }
-          else
-          {
-              // All conditions met, reset timers
-              m_chase.lostSightTimer = 0.0F;
-              m_chase.survivorNotRunningTimer = 0.0F;
-          }
+            if (m_chase.inCenterFOV)
+            {
+                m_chase.timeSinceCenterFOV = 0.0F;
+            }
+            else
+            {
+                m_chase.timeSinceCenterFOV += fixedDt;
+            }
+
+            // End chase conditions:
+            // 1. Distance >= endDistance (18m)
+            // 2. Lost LOS for > 8s
+            // 3. Lost center FOV for > 8s
+            const bool tooFar = m_chase.distance >= m_chase.endDistance;
+            const bool lostLOSLong = m_chase.timeSinceSeenLOS > m_chase.lostSightTimeout; // 8s
+            const bool lostCenterFOVLong = m_chase.timeSinceCenterFOV > m_chase.lostCenterFOVTimeout; // 8s
+
+            if (tooFar || lostLOSLong || lostCenterFOVLong)
+            {
+                m_chase.isChasing = false;
+                m_chase.timeSinceSeenLOS = 0.0F;
+                m_chase.timeSinceCenterFOV = 0.0F;
+                m_chase.timeInChase = 0.0F;
+            }
         }
     }
 
+    // Handle chase FX (aura)
     if (m_chase.isChasing)
     {
         if (killerTransformIt != m_world.Transforms().end())
@@ -5344,5 +5382,14 @@ bool GameplaySystems::IsSurvivorInKillerFOV(
     const float cosHalfFov = std::cos(fovRad * 0.5F);
 
     return glm::dot(killerFlat, dirToSurvivor) >= cosHalfFov;
+}
+
+bool GameplaySystems::IsSurvivorInKillerCenterFOV(
+    const glm::vec3& killerPos, const glm::vec3& killerForward,
+    const glm::vec3& survivorPos)
+{
+    // DBD-like: ±35° from killer's forward (center FOV for chase gating)
+    constexpr float centerFovDegrees = 35.0F;
+    return IsSurvivorInKillerFOV(killerPos, killerForward, survivorPos, centerFovDegrees * 2.0F);
 }
 } // namespace game::gameplay

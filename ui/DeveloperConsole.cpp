@@ -926,6 +926,24 @@ struct DeveloperConsole::Impl
             AddLog("Unknown perks subcommand. Use: perks list | perks equip | perks clear");
         });
 
+        RegisterCommand("chase_force on|off", "Force chase state on/off", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: chase_force on|off");
+                return;
+            }
+
+            bool enabled = true;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+
+            context.gameplay->SetForcedChase(enabled);
+            AddLog(std::string("Forced chase ") + (enabled ? "enabled." : "disabled."));
+        });
+
         RegisterCommand("set_chase on|off", "Force chase state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -942,6 +960,24 @@ struct DeveloperConsole::Impl
 
             context.gameplay->SetForcedChase(enabled);
             AddLog(std::string("Forced chase ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("chase_dump", "Print chase state debug info", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const auto hudState = context.gameplay->BuildHudState();
+            AddLog("=== Chase State ===");
+            AddLog(std::string("Active: ") + (hudState.chaseActive ? "YES" : "NO"));
+            AddLog("Distance: " + std::to_string(hudState.chaseDistance) + " m");
+            AddLog(std::string("Line of Sight: ") + (hudState.lineOfSight ? "YES" : "NO"));
+            AddLog(std::string("In Center FOV: ") + (hudState.inCenterFOV ? "YES" : "NO"));
+            AddLog(std::string("Survivor Sprinting: ") + (hudState.survivorSprinting ? "YES" : "NO"));
+            AddLog("Time in Chase: " + std::to_string(hudState.timeInChase) + " s");
+            AddLog("Time Since LOS: " + std::to_string(hudState.timeSinceLOS) + " s");
+            AddLog("Time Since Center FOV: " + std::to_string(hudState.timeSinceCenterFOV) + " s");
         });
 
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -1402,8 +1438,21 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             ImGui::Text("Speed: %.2f", hudState.playerSpeed);
             ImGui::Text("Grounded: %s", hudState.grounded ? "true" : "false");
             ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
-            ImGui::Text("Distance: %.2f", hudState.chaseDistance);
-            ImGui::Text("LOS: %s", hudState.lineOfSight ? "true" : "false");
+            ImGui::Text("Distance: %.2f m", hudState.chaseDistance);
+            ImGui::Text("LOS: %s | CenterFOV: %s", hudState.lineOfSight ? "true" : "false", hudState.inCenterFOV ? "true" : "false");
+            ImGui::Text("Sprinting: %s", hudState.survivorSprinting ? "true" : "false");
+            if (hudState.chaseActive)
+            {
+                ImGui::Text("Chase Time: %.1fs", hudState.timeInChase);
+            }
+            if (!hudState.lineOfSight)
+            {
+                ImGui::Text("Since LOS: %.1fs", hudState.timeSinceLOS);
+            }
+            if (!hudState.inCenterFOV)
+            {
+                ImGui::Text("Since CtrFOV: %.1fs", hudState.timeSinceCenterFOV);
+            }
             ImGui::Text("MoveState: %s", hudState.movementStateName.c_str());
             ImGui::Text("KillerAttack: %s", hudState.killerAttackStateName.c_str());
             ImGui::Text("LungeCharge: %.0f%%", hudState.lungeCharge01 * 100.0F);

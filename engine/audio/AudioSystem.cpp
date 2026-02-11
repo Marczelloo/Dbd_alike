@@ -214,11 +214,12 @@ AudioSystem::SoundHandle AudioSystem::PlayOneShot(const std::string& clipName, B
 
 AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus)
 {
-    return PlayLoop(clipName, bus, PlayOptions{});
+    return PlayLoop(clipName, bus, PlayOptions{}, 0.0F);
 }
 
-AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options)
+AudioSystem::SoundHandle AudioSystem::PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options, float loopDurationSeconds)
 {
+    (void)loopDurationSeconds; // Reserved for future use (e.g., auto-stop after duration)
     if (!m_initialized || m_engine == nullptr)
     {
         return 0;

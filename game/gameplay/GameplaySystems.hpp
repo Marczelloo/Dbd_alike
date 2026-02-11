@@ -106,6 +106,11 @@ struct HudState
     bool chaseActive = false;
     float chaseDistance = 0.0F;
     bool lineOfSight = false;
+    bool inCenterFOV = false;      // Survivor in killer's center FOV
+    bool survivorSprinting = false; // Survivor is sprinting
+    float timeInChase = 0.0F;     // Total time chase has been active
+    float timeSinceLOS = 0.0F;     // Time since killer had LOS
+    float timeSinceCenterFOV = 0.0F; // Time since survivor was in center FOV
 
     bool collisionEnabled = true;
     bool debugDrawEnabled = true;
@@ -187,8 +192,8 @@ public:
         float lungeRecoverSeconds = 0.58F;
 
         // Chase FOV configuration (degrees)
-        float chaseFovDegrees = 70.0F;
-        float chaseStopRunningDelay = 3.0F; // Seconds survivor must stop running before chase ends
+        float chaseFovDegrees = 87.0F;      // DBD-like: total FOV for chase detection
+        float chaseCenterFovDegrees = 35.0F; // DBD-like: center FOV for chase gating (±35° from forward)
         float shortRecoverSeconds = 0.52F;
         float missRecoverSeconds = 0.45F;
         float lungeSpeedStart = 7.0F;
@@ -453,12 +458,15 @@ private:
     {
         bool isChasing = false;
         bool hasLineOfSight = false;
+        bool inCenterFOV = false;          // Survivor in killer's center FOV (±35°)
         float distance = 0.0F;
-        float lostSightTimer = 0.0F;
-        float startDistance = 12.0F;
-        float endDistance = 18.0F;
-        float endDelay = 2.0F;
-        float survivorNotRunningTimer = 0.0F; // Time since survivor stopped running
+        float timeSinceSeenLOS = 0.0F;     // Time since killer had LOS to survivor
+        float timeSinceCenterFOV = 0.0F;   // Time since survivor was in center FOV
+        float timeInChase = 0.0F;          // Total time chase has been active
+        float startDistance = 12.0F;        // Chase start distance (DBD-like)
+        float endDistance = 18.0F;          // Chase end distance (DBD-like)
+        float lostSightTimeout = 8.0F;      // DBD-like: 8s lost LOS timeout
+        float lostCenterFOVTimeout = 8.0F;  // DBD-like: 8s lost center FOV timeout
     };
 
     struct TimedMessage
@@ -592,7 +600,10 @@ private:
     static engine::scene::Role ParseRoleEnum(const std::string& roleName);
     [[nodiscard]] static bool IsSurvivorInKillerFOV(
         const glm::vec3& killerPos, const glm::vec3& killerForward,
-        const glm::vec3& survivorPos, float fovDegrees = 70.0F);
+        const glm::vec3& survivorPos, float fovDegrees = 87.0F);
+    [[nodiscard]] static bool IsSurvivorInKillerCenterFOV(
+        const glm::vec3& killerPos, const glm::vec3& killerForward,
+        const glm::vec3& survivorPos); // Uses ±35° center FOV (DBD-like)
 
     engine::core::EventBus* m_eventBus = nullptr;
 

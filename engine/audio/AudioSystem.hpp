@@ -44,7 +44,6 @@ public:
     SoundHandle PlayOneShot(const std::string& clipName, Bus bus, const PlayOptions& options);
     SoundHandle PlayLoop(const std::string& clipName, Bus bus = Bus::Music);
     SoundHandle PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options, float loopDurationSeconds = 0.0F);
-    SoundHandle PlayLoop(const std::string& clipName, Bus bus, const PlayOptions& options);
     void Stop(SoundHandle handle);
     void StopAll();
     [[nodiscard]] bool SetHandleVolume(SoundHandle handle, float volume);
