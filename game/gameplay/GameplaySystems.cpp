@@ -1260,6 +1260,22 @@ glm::vec3 GameplaySystems::RolePosition(const std::string& roleName) const
     return transformIt->second.position;
 }
 
+glm::vec3 GameplaySystems::RoleForward(const std::string& roleName) const
+{
+    const engine::scene::Entity entity = RoleEntity(roleName);
+    const auto transformIt = m_world.Transforms().find(entity);
+    if (transformIt == m_world.Transforms().end())
+    {
+        return glm::vec3{0.0F, 0.0F, -1.0F};
+    }
+    const glm::vec3 f = transformIt->second.forward;
+    if (glm::length(f) < 1.0e-5F)
+    {
+        return glm::vec3{0.0F, 0.0F, -1.0F};
+    }
+    return glm::normalize(f);
+}
+
 std::string GameplaySystems::SurvivorHealthStateText() const
 {
     return SurvivorStateToText(m_survivorState);
@@ -3076,11 +3092,28 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
         m_chase.isChasing = false;
         m_chase.distance = 0.0F;
         m_chase.hasLineOfSight = false;
+        m_chase.survivorNotRunningTimer = 0.0F;
+        return;
     }
     else
     {
         m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
         m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+
+        // Check if survivor is in killer's FOV
+        const bool survivorInFOV = IsSurvivorInKillerFOV(
+            killerTransformIt->second.position,
+            killerTransformIt->second.forward,
+            survivorTransformIt->second.position,
+            m_tuning.chaseFovDegrees
+        );
+
+        // Track survivor running state from actor component
+        bool survivorIsRunning = false;
+        if (survivorActorIt != m_world.Actors().end())
+        {
+            survivorIsRunning = survivorActorIt->second.sprinting;
+        }
 
         if (m_forcedChase.has_value())
         {
@@ -3088,40 +3121,44 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
         }
         else
         {
-            const std::vector<engine::physics::TriggerHit> chaseHits = m_physics.QueryCapsuleTriggers(
-                survivorTransformIt->second.position,
-                survivorActorIt->second.capsuleRadius,
-                survivorActorIt->second.capsuleHeight,
-                engine::physics::TriggerKind::Chase
-            );
+            const bool canStartChase = survivorInFOV && m_chase.hasLineOfSight && survivorIsRunning;
+          const bool canMaintainChase = m_chase.isChasing && (m_chase.hasLineOfSight || survivorInFOV) && survivorIsRunning;
 
-            const bool survivorInChaseTrigger = !chaseHits.empty();
+          if (!m_chase.isChasing && canStartChase && m_chase.distance <= m_chase.startDistance)
+          {
+              m_chase.isChasing = true;
+              m_chase.lostSightTimer = 0.0F;
+          }
+          else if (!canMaintainChase)
+          {
+              // Lost sight OR out of FOV OR stopped running
+              m_chase.lostSightTimer += fixedDt;
 
-            if (!m_chase.isChasing)
-            {
-                if (survivorInChaseTrigger && m_chase.hasLineOfSight && m_chase.distance <= m_chase.startDistance)
-                {
-                    m_chase.isChasing = true;
-                    m_chase.lostSightTimer = 0.0F;
-                }
-            }
-            else
-            {
-                if (!m_chase.hasLineOfSight || m_chase.distance > m_chase.endDistance)
-                {
-                    m_chase.lostSightTimer += fixedDt;
-                }
-                else
-                {
-                    m_chase.lostSightTimer = 0.0F;
-                }
+              // Track survivor not running
+              if (!survivorIsRunning)
+              {
+                  m_chase.survivorNotRunningTimer += fixedDt;
+              }
+              else
+              {
+                  m_chase.survivorNotRunningTimer = 0.0F;
+              }
 
-                if (m_chase.lostSightTimer >= m_chase.endDelay)
-                {
-                    m_chase.isChasing = false;
-                    m_chase.lostSightTimer = 0.0F;
-                }
-            }
+              // End chase if conditions not met for longer than delay
+              if (m_chase.lostSightTimer >= m_chase.endDelay ||
+                  (!survivorIsRunning && m_chase.survivorNotRunningTimer >= m_tuning.chaseStopRunningDelay))
+              {
+                  m_chase.isChasing = false;
+                  m_chase.lostSightTimer = 0.0F;
+                  m_chase.survivorNotRunningTimer = 0.0F;
+              }
+          }
+          else
+          {
+              // All conditions met, reset timers
+              m_chase.lostSightTimer = 0.0F;
+              m_chase.survivorNotRunningTimer = 0.0F;
+          }
         }
     }
 
@@ -5142,5 +5179,24 @@ glm::vec3 GameplaySystems::ForwardFromYawPitch(float yaw, float pitch)
         std::sin(pitch),
         -std::cos(yaw) * cosPitch,
     });
+}
+
+bool GameplaySystems::IsSurvivorInKillerFOV(
+    const glm::vec3& killerPos, const glm::vec3& killerForward,
+    const glm::vec3& survivorPos, float fovDegrees)
+{
+    glm::vec3 toSurvivor = survivorPos - killerPos;
+    toSurvivor.y = 0.0F; // Flatten to XZ plane
+
+    const float distance = glm::length(toSurvivor);
+    if (distance < 1.0F) return true; // Too close, definitely in FOV
+
+    const glm::vec3 dirToSurvivor = glm::normalize(toSurvivor);
+    const glm::vec3 killerFlat = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+
+    const float fovRad = glm::radians(fovDegrees);
+    const float cosHalfFov = std::cos(fovRad * 0.5F);
+
+    return glm::dot(killerFlat, dirToSurvivor) >= cosHalfFov;
 }
 } // namespace game::gameplay

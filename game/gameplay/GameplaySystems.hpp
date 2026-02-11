@@ -153,6 +153,10 @@ public:
         float lungeHoldMinSeconds = 0.08F;
         float lungeDurationSeconds = 0.62F;
         float lungeRecoverSeconds = 0.58F;
+
+        // Chase FOV configuration (degrees)
+        float chaseFovDegrees = 70.0F;
+        float chaseStopRunningDelay = 3.0F; // Seconds survivor must stop running before chase ends
         float shortRecoverSeconds = 0.52F;
         float missRecoverSeconds = 0.45F;
         float lungeSpeedStart = 7.0F;
@@ -261,6 +265,7 @@ public:
     void Render(engine::render::Renderer& renderer) const;
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
     [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
+    [[nodiscard]] glm::vec3 CameraForward() const { return m_cameraForward; }
     [[nodiscard]] HudState BuildHudState() const;
 
     void LoadMap(const std::string& mapName);
@@ -279,6 +284,7 @@ public:
     [[nodiscard]] engine::scene::Entity RoleEntity(const std::string& roleName) const;
     [[nodiscard]] std::string MovementStateForRole(const std::string& roleName) const;
     [[nodiscard]] glm::vec3 RolePosition(const std::string& roleName) const;
+    [[nodiscard]] glm::vec3 RoleForward(const std::string& roleName) const;
     [[nodiscard]] std::string SurvivorHealthStateText() const;
 
     void TeleportSurvivor(const glm::vec3& position);
@@ -410,6 +416,7 @@ private:
         float startDistance = 12.0F;
         float endDistance = 18.0F;
         float endDelay = 2.0F;
+        float survivorNotRunningTimer = 0.0F; // Time since survivor stopped running
     };
 
     struct TimedMessage
@@ -534,6 +541,9 @@ private:
     [[nodiscard]] static float DistanceXZ(const glm::vec3& a, const glm::vec3& b);
     [[nodiscard]] static float DistancePointToSegment(const glm::vec3& point, const glm::vec3& segmentA, const glm::vec3& segmentB);
     [[nodiscard]] static glm::vec3 ForwardFromYawPitch(float yaw, float pitch);
+    [[nodiscard]] static bool IsSurvivorInKillerFOV(
+        const glm::vec3& killerPos, const glm::vec3& killerForward,
+        const glm::vec3& survivorPos, float fovDegrees = 70.0F);
 
     engine::core::EventBus* m_eventBus = nullptr;
 

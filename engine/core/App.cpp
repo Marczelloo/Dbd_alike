@@ -148,6 +148,27 @@ std::string RoleByteToName(std::uint8_t roleByte)
     return roleByte == 1U ? "killer" : "survivor";
 }
 
+audio::AudioSystem::Bus AudioBusFromName(const std::string& value)
+{
+    if (value == "music")
+    {
+        return audio::AudioSystem::Bus::Music;
+    }
+    if (value == "ui")
+    {
+        return audio::AudioSystem::Bus::Ui;
+    }
+    if (value == "ambience" || value == "ambient")
+    {
+        return audio::AudioSystem::Bus::Ambience;
+    }
+    if (value == "master")
+    {
+        return audio::AudioSystem::Bus::Master;
+    }
+    return audio::AudioSystem::Bus::Sfx;
+}
+
 glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
 {
     glm::mat4 transform{1.0F};
@@ -274,6 +295,7 @@ bool App::Run()
 
     (void)LoadControlsConfig();
     (void)LoadGraphicsConfig();
+    (void)LoadAudioConfig();
     (void)LoadGameplayConfig();
     (void)LoadHudLayoutConfig();
 
@@ -325,6 +347,13 @@ bool App::Run()
         return false;
     }
     m_ui.SetGlobalUiScale(m_hudLayout.hudScale);
+
+    if (!m_audio.Initialize("assets/audio"))
+    {
+        std::cerr << "Warning: failed to initialize audio backend.\n";
+    }
+    ApplyAudioSettings();
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_renderer.SetRenderMode(m_graphicsApplied.renderMode);
 
@@ -493,6 +522,8 @@ bool App::Run()
         {
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
+            m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
+            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()));
         }
         else if (inEditor)
         {
@@ -504,6 +535,7 @@ bool App::Run()
                 m_window.FramebufferHeight()
             );
         }
+        m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
 
         m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
         glm::mat4 viewProjection{1.0F};
@@ -511,6 +543,42 @@ bool App::Run()
         {
             m_renderer.SetLightingEnabled(true);
             m_gameplay.Render(m_renderer);
+
+            std::vector<render::PointLight> runtimePoints = m_runtimeMapPointLights;
+            std::vector<render::SpotLight> runtimeSpots = m_runtimeMapSpotLights;
+            if (m_killerLookLightEnabled && m_gameplay.RoleEntity("killer") != 0)
+            {
+                const glm::vec3 killerPos = m_gameplay.RolePosition("killer");
+                const glm::vec3 killerForward = m_gameplay.RoleForward("killer");
+
+                // Flatten forward to XZ plane and tilt downward by ~20 degrees to project on ground
+                const glm::vec3 killerFlatForward = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+                const float tiltDownRad = glm::radians(20.0F);
+                const float cosTilt = std::cos(tiltDownRad);
+                const float sinTilt = std::sin(tiltDownRad);
+                // Rotate forward vector around X-axis to tilt down
+                glm::vec3 lightDir = glm::vec3(
+                    killerFlatForward.x,
+                    killerFlatForward.y * cosTilt - killerFlatForward.z * sinTilt,
+                    killerFlatForward.y * sinTilt + killerFlatForward.z * cosTilt
+                );
+                lightDir = glm::normalize(lightDir);
+
+                const float innerRad = glm::radians(glm::clamp(m_killerLookLightInnerDeg, 2.0F, 75.0F));
+                const float outerRad = glm::radians(glm::clamp(m_killerLookLightOuterDeg, m_killerLookLightInnerDeg + 0.5F, 88.0F));
+                runtimeSpots.push_back(render::SpotLight{
+                    killerPos + glm::vec3{0.0F, 0.8F, 0.0F},  // Lowered from 1.45 to 0.8
+                    lightDir,  // Tilted direction
+                    glm::vec3{m_audioSettings.killerLightRed, m_audioSettings.killerLightGreen, m_audioSettings.killerLightBlue},  // Normalized red color (RGB 0-1 range)
+                    std::max(0.0F, m_killerLookLightIntensity),
+                    std::max(1.0F, m_killerLookLightRange),
+                    std::cos(innerRad),
+                    std::cos(outerRad),
+                });
+            }
+            m_renderer.SetPointLights(runtimePoints);
+            m_renderer.SetSpotLights(runtimeSpots);
+
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
@@ -800,6 +868,47 @@ bool App::Run()
         context.setTerrorRadiusMeters = [this](float meters) {
             m_gameplay.SetTerrorRadius(meters);
         };
+        context.setTerrorAudioDebug = [this](bool enabled) {
+            m_terrorAudioDebug = enabled;
+            if (enabled)
+            {
+                m_statusToastMessage = "Terror audio debug ON";
+            }
+            else
+            {
+                m_statusToastMessage = "Terror audio debug OFF";
+            }
+            m_statusToastUntilSeconds = glfwGetTime() + 2.0;
+        };
+        context.audioPlay = [this](const std::string& clip, const std::string& busName, bool loop) {
+            const audio::AudioSystem::Bus bus = AudioBusFromName(busName);
+            const audio::AudioSystem::PlayOptions options{};
+            audio::AudioSystem::SoundHandle handle = 0;
+            if (loop)
+            {
+                handle = m_audio.PlayLoop(clip, bus, options);
+                if (handle != 0)
+                {
+                    m_debugAudioLoops.push_back(handle);
+                }
+            }
+            else
+            {
+                handle = m_audio.PlayOneShot(clip, bus, options);
+            }
+            if (handle == 0)
+            {
+                AppendNetworkLog(std::string("AUDIO play failed: clip=") + clip + " bus=" + busName);
+            }
+        };
+        context.audioStopAll = [this]() {
+            for (const audio::AudioSystem::SoundHandle handle : m_debugAudioLoops)
+            {
+                m_audio.Stop(handle);
+            }
+            m_debugAudioLoops.clear();
+            m_audio.StopAll();
+        };
 
         m_console.Render(context, currentFps, hudState);
 
@@ -832,6 +941,7 @@ bool App::Run()
     m_network.Shutdown();
     m_console.Shutdown();
     m_ui.Shutdown();
+    m_audio.Shutdown();
     m_renderer.Shutdown();
     CloseNetworkLogFile();
     return true;
@@ -839,6 +949,11 @@ bool App::Run()
 
 void App::ResetToMainMenu()
 {
+    StopTerrorRadiusAudio();
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = 0;
+
     TransitionNetworkState(NetworkState::Disconnecting, "Reset to main menu");
     m_lanDiscovery.Stop();
     m_network.Disconnect();
@@ -859,6 +974,8 @@ void App::ResetToMainMenu()
     m_renderer.SetEnvironmentSettings(render::EnvironmentSettings{});
     m_renderer.SetPointLights({});
     m_renderer.SetSpotLights({});
+    m_runtimeMapPointLights.clear();
+    m_runtimeMapSpotLights.clear();
 
     m_sessionRoleName = "survivor";
     m_remoteRoleName = "killer";
@@ -889,6 +1006,10 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     m_settingsOpenedFromPause = false;
     m_menuNetStatus = "Solo session started.";
     m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_sessionMapName = mapName;
     m_sessionRoleName = NormalizeRoleName(roleName);
@@ -940,6 +1061,10 @@ bool App::StartHostSession(const std::string& mapName, const std::string& roleNa
     m_settingsMenuOpen = false;
     m_settingsOpenedFromPause = false;
     m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_sessionRoleName = NormalizeRoleName(roleName);
     m_remoteRoleName = OppositeRoleName(m_sessionRoleName);
@@ -1018,6 +1143,10 @@ bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std:
     m_settingsMenuOpen = false;
     m_settingsOpenedFromPause = false;
     m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_preferredJoinRole = NormalizeRoleName(preferredRole);
     m_sessionRoleName = m_preferredJoinRole;
@@ -2601,6 +2730,92 @@ bool App::SaveGraphicsConfig() const
     return true;
 }
 
+bool App::LoadAudioConfig()
+{
+    m_audioSettings = AudioSettings{};
+
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "audio.json";
+    if (!std::filesystem::exists(path))
+    {
+        return SaveAudioConfig();
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        m_audioStatus = "Failed to open audio config.";
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        m_audioStatus = "Invalid audio config. Using defaults.";
+        return SaveAudioConfig();
+    }
+
+    auto readFloat = [&](const char* key, float& target) {
+        if (root.contains(key) && root[key].is_number())
+        {
+            target = root[key].get<float>();
+        }
+    };
+    auto readBool = [&](const char* key, bool& target) {
+        if (root.contains(key) && root[key].is_boolean())
+        {
+            target = root[key].get<bool>();
+        }
+    };
+
+    readFloat("master", m_audioSettings.master);
+    readFloat("music", m_audioSettings.music);
+    readFloat("sfx", m_audioSettings.sfx);
+    readFloat("ui", m_audioSettings.ui);
+    readFloat("ambience", m_audioSettings.ambience);
+    readBool("muted", m_audioSettings.muted);
+    readFloat("killer_light_red", m_audioSettings.killerLightRed);
+    readFloat("killer_light_green", m_audioSettings.killerLightGreen);
+    readFloat("killer_light_blue", m_audioSettings.killerLightBlue);
+
+    m_audioSettings.master = glm::clamp(m_audioSettings.master, 0.0F, 1.0F);
+    m_audioSettings.music = glm::clamp(m_audioSettings.music, 0.0F, 1.0F);
+    m_audioSettings.sfx = glm::clamp(m_audioSettings.sfx, 0.0F, 1.0F);
+    m_audioSettings.ui = glm::clamp(m_audioSettings.ui, 0.0F, 1.0F);
+    m_audioSettings.ambience = glm::clamp(m_audioSettings.ambience, 0.0F, 1.0F);
+    return true;
+}
+
+bool App::SaveAudioConfig() const
+{
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "audio.json";
+
+    json root;
+    root["asset_version"] = m_audioSettings.assetVersion;
+    root["master"] = m_audioSettings.master;
+    root["music"] = m_audioSettings.music;
+    root["sfx"] = m_audioSettings.sfx;
+    root["ui"] = m_audioSettings.ui;
+    root["ambience"] = m_audioSettings.ambience;
+    root["muted"] = m_audioSettings.muted;
+    root["killer_light_red"] = m_audioSettings.killerLightRed;
+    root["killer_light_green"] = m_audioSettings.killerLightGreen;
+    root["killer_light_blue"] = m_audioSettings.killerLightBlue;
+
+    std::ofstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+    stream << root.dump(2) << "\n";
+    return true;
+}
+
 bool App::LoadGameplayConfig()
 {
     m_gameplayApplied = game::gameplay::GameplaySystems::GameplayTuning{};
@@ -2758,6 +2973,202 @@ void App::ApplyControlsSettings()
     );
 }
 
+void App::ApplyAudioSettings()
+{
+    m_audioSettings.master = glm::clamp(m_audioSettings.master, 0.0F, 1.0F);
+    m_audioSettings.music = glm::clamp(m_audioSettings.music, 0.0F, 1.0F);
+    m_audioSettings.sfx = glm::clamp(m_audioSettings.sfx, 0.0F, 1.0F);
+    m_audioSettings.ui = glm::clamp(m_audioSettings.ui, 0.0F, 1.0F);
+    m_audioSettings.ambience = glm::clamp(m_audioSettings.ambience, 0.0F, 1.0F);
+
+    const float muteMul = m_audioSettings.muted ? 0.0F : 1.0F;
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Master, m_audioSettings.master * muteMul);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Music, m_audioSettings.music);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Sfx, m_audioSettings.sfx);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Ui, m_audioSettings.ui);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Ambience, m_audioSettings.ambience);
+}
+
+bool App::LoadTerrorRadiusProfile(const std::string& killerId)
+{
+    StopTerrorRadiusAudio();
+    m_terrorAudioProfile = TerrorRadiusProfileAudio{};
+    m_terrorAudioProfile.killerId = killerId.empty() ? "default_killer" : killerId;
+
+    const std::filesystem::path dir = std::filesystem::path("assets") / "terror_radius";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / (m_terrorAudioProfile.killerId + ".json");
+
+    if (!std::filesystem::exists(path))
+    {
+        json defaults;
+        defaults["asset_version"] = 1;
+        defaults["killer_id"] = m_terrorAudioProfile.killerId;
+        defaults["base_radius"] = 24.0F;
+        defaults["layers"] = json::array({
+            json{{"clip", "tr_far"}, {"fade_in_start", 0.0F}, {"fade_in_end", 0.45F}, {"gain", 0.15F}},
+            json{{"clip", "tr_mid"}, {"fade_in_start", 0.25F}, {"fade_in_end", 0.75F}, {"gain", 0.2F}},
+            json{{"clip", "tr_close"}, {"fade_in_start", 0.55F}, {"fade_in_end", 1.0F}, {"gain", 0.25F}},
+            json{{"clip", "tr_chase"}, {"fade_in_start", 0.0F}, {"fade_in_end", 1.0F}, {"gain", 0.2F}, {"chase_only", true}},
+        });
+        std::ofstream out(path);
+        if (out.is_open())
+        {
+            out << defaults.dump(2) << "\n";
+        }
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+
+    if (root.contains("base_radius") && root["base_radius"].is_number())
+    {
+        m_terrorAudioProfile.baseRadius = glm::clamp(root["base_radius"].get<float>(), 4.0F, 120.0F);
+    }
+    if (root.contains("layers") && root["layers"].is_array())
+    {
+        for (const auto& layerJson : root["layers"])
+        {
+            if (!layerJson.is_object())
+            {
+                continue;
+            }
+            TerrorRadiusLayerAudio layer{};
+            if (layerJson.contains("clip") && layerJson["clip"].is_string())
+            {
+                layer.clip = layerJson["clip"].get<std::string>();
+            }
+            if (layer.clip.empty())
+            {
+                continue;
+            }
+            if (layerJson.contains("fade_in_start") && layerJson["fade_in_start"].is_number())
+            {
+                layer.fadeInStart = glm::clamp(layerJson["fade_in_start"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layerJson.contains("fade_in_end") && layerJson["fade_in_end"].is_number())
+            {
+                layer.fadeInEnd = glm::clamp(layerJson["fade_in_end"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layer.fadeInEnd < layer.fadeInStart)
+            {
+                std::swap(layer.fadeInEnd, layer.fadeInStart);
+            }
+            if (layerJson.contains("gain") && layerJson["gain"].is_number())
+            {
+                layer.gain = glm::clamp(layerJson["gain"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layerJson.contains("chase_only") && layerJson["chase_only"].is_boolean())
+            {
+                layer.chaseOnly = layerJson["chase_only"].get<bool>();
+            }
+            m_terrorAudioProfile.layers.push_back(layer);
+        }
+    }
+
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        const audio::AudioSystem::PlayOptions options{};
+        layer.handle = m_audio.PlayLoop(layer.clip, audio::AudioSystem::Bus::Music, options);
+        layer.currentVolume = 0.0F;
+        std::cout << "[TR Load] clip=" << layer.clip << " handle=" << layer.handle << "\n";
+        if (layer.handle != 0)
+        {
+            (void)m_audio.SetHandleVolume(layer.handle, 0.0F);
+        }
+        else
+        {
+            std::cerr << "[TR Load] Failed to load layer: " << layer.clip << "\n";
+        }
+    }
+    m_terrorAudioProfile.loaded = !m_terrorAudioProfile.layers.empty();
+    std::cout << "[TR Load] Loaded " << m_terrorAudioProfile.layers.size() << " layers, loaded=" << m_terrorAudioProfile.loaded << "\n";
+    return m_terrorAudioProfile.loaded;
+}
+
+void App::StopTerrorRadiusAudio()
+{
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        if (layer.handle != 0)
+        {
+            m_audio.Stop(layer.handle);
+            layer.handle = 0;
+        }
+        layer.currentVolume = 0.0F;
+    }
+    m_terrorAudioProfile.layers.clear();
+    m_terrorAudioProfile.loaded = false;
+}
+
+void App::UpdateTerrorRadiusAudio(float deltaSeconds)
+{
+    if (!m_terrorAudioProfile.loaded || m_appMode != AppMode::InGame)
+    {
+        return;
+    }
+
+    const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
+    const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
+    float intensity = 0.0F;
+    bool chaseActive = false;
+    if (hasSurvivor && hasKiller)
+    {
+        const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
+        const glm::vec3 killer = m_gameplay.RolePosition("killer");
+        const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
+        const float distance = glm::length(delta);
+        const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
+        intensity = glm::clamp(1.0F - distance / radius, 0.0F, 1.0F);
+        chaseActive = m_gameplay.BuildHudState().chaseActive;
+    }
+
+    // Always update layers even if one entity is missing
+    // (intensity will be 0, which fades all audio out)
+
+    const float smooth = glm::clamp(deltaSeconds * 8.0F, 0.0F, 1.0F);
+
+    // Debug: terror radius debug state (now toggled via console command)
+    // Visual cone drawing is in GameplaySystems.cpp::RenderDebug()
+
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        float w = 0.0F;
+        if (layer.fadeInEnd <= layer.fadeInStart + 1.0e-4F)
+        {
+            w = intensity >= layer.fadeInStart ? 1.0F : 0.0F;
+        }
+        else
+        {
+            w = glm::clamp((intensity - layer.fadeInStart) / (layer.fadeInEnd - layer.fadeInStart), 0.0F, 1.0F);
+        }
+        if (layer.chaseOnly && !chaseActive)
+        {
+            w = 0.0F;
+        }
+
+        const float target = w * layer.gain;
+        layer.currentVolume = glm::mix(layer.currentVolume, target, smooth);
+        if (layer.handle != 0)
+        {
+            (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
+        }
+    }
+}
+
 void App::ApplyGraphicsSettings(const GraphicsSettings& settings, bool startAutoConfirm)
 {
     const bool modeChanged =
@@ -2861,8 +3272,10 @@ void App::ApplyMapEnvironment(const std::string& mapName)
             });
         }
     }
-    m_renderer.SetPointLights(pointLights);
-    m_renderer.SetSpotLights(spotLights);
+    m_runtimeMapPointLights = pointLights;
+    m_runtimeMapSpotLights = spotLights;
+    m_renderer.SetPointLights(m_runtimeMapPointLights);
+    m_renderer.SetSpotLights(m_runtimeMapSpotLights);
 
     game::editor::EnvironmentAsset envAsset;
     if (!game::editor::LevelAssetIO::LoadEnvironment(mapAsset.environmentAssetId, &envAsset, &error))
@@ -3466,7 +3879,7 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
     m_ui.PopLayout();
     m_ui.Label("Tabs + scroll region. Use drag scrollbar on the right in long sections.", m_ui.Theme().colorTextMuted);
 
-    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 2);
+    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 3);
     m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
     {
         const glm::vec4 tabColor = m_ui.Theme().colorAccent;
@@ -3478,9 +3891,13 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         {
             m_settingsTabIndex = 1;
         }
-        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_audio", "Audio", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, 200.0F))
         {
             m_settingsTabIndex = 2;
+        }
+        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 3 ? &tabColor : nullptr, 200.0F))
+        {
+            m_settingsTabIndex = 3;
         }
     }
     m_ui.PopLayout();
@@ -3588,6 +4005,57 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         if (!m_graphicsStatus.empty())
         {
             m_ui.Label(m_graphicsStatus, m_ui.Theme().colorTextMuted);
+        }
+    }
+    else if (m_settingsTabIndex == 2)
+    {
+        bool changed = false;
+        changed |= m_ui.SliderFloat("audio_master", "Master", &m_audioSettings.master, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_music", "Music", &m_audioSettings.music, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_sfx", "SFX", &m_audioSettings.sfx, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_ui", "UI", &m_audioSettings.ui, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_amb", "Ambience", &m_audioSettings.ambience, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.Checkbox("audio_mute", "Mute All", &m_audioSettings.muted);
+        if (changed)
+        {
+            ApplyAudioSettings();
+        }
+
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("audio_apply_btn", "Apply", true, &m_ui.Theme().colorSuccess, 170.0F))
+        {
+            ApplyAudioSettings();
+            m_audioStatus = "Applied audio volumes.";
+        }
+        if (m_ui.Button("audio_save_btn", "Save To File", true, nullptr, 170.0F))
+        {
+            ApplyAudioSettings();
+            m_audioStatus = SaveAudioConfig() ? "Saved to config/audio.json." : "Failed to save audio config.";
+        }
+        if (m_ui.Button("audio_load_btn", "Load From File", true, nullptr, 170.0F))
+        {
+            if (LoadAudioConfig())
+            {
+                ApplyAudioSettings();
+                m_audioStatus = "Loaded audio config.";
+            }
+            else
+            {
+                m_audioStatus = "Failed to load audio config.";
+            }
+        }
+        if (m_ui.Button("audio_defaults_btn", "Defaults", true, &m_ui.Theme().colorDanger, 170.0F))
+        {
+            m_audioSettings = AudioSettings{};
+            ApplyAudioSettings();
+            m_audioStatus = "Audio defaults applied.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("Clips are resolved from assets/audio by name or explicit file path.", m_ui.Theme().colorTextMuted);
+        if (!m_audioStatus.empty())
+        {
+            m_ui.Label(m_audioStatus, m_ui.Theme().colorTextMuted);
         }
     }
     else
