@@ -394,6 +394,7 @@ private:
     TerrorRadiusProfileAudio m_terrorAudioProfile{};
     TerrorRadiusBand m_currentBand = TerrorRadiusBand::Outside;
     bool m_terrorAudioDebug = false;
+    bool m_chaseWasActive = false;  // Track previous frame's chase state for rapid fade-out
 
     std::ofstream m_networkLogFile;
 };

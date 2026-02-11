@@ -697,6 +697,11 @@ Place audio files in `assets/audio/`:
 Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 
 ### Terror Radius Profile (DBD-like Stepped Bands)
+- **Audio routing** (Phase B1):
+  - **Survivor hears**: TR bands (far/mid/close) + chase override rules
+  - **Killer hears**: ONLY chase music when actively chasing
+  - Debug overlay shows: `localRole`, `tr_enabled`, `chase_enabled_for_killer`
+- Profile: `assets/terror_radius/default_killer.json`
 - Profile: `assets/terror_radius/default_killer.json`
 - **Stepped bands** (NOT gradient):
   - **OUTSIDE** (distance > radius): All layers silent
@@ -736,6 +741,13 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 - `bloodlust_reset` - Reset bloodlust to tier 0
 - `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
 - `bloodlust_dump` - Print bloodlust state and speed info
+- `scratch_debug on|off` - Toggle scratch marks debug overlay
+- `scratch_profile <name>` - Load scratch profile (future)
+- `blood_debug on|off` - Toggle blood pools debug overlay
+- `blood_profile <name>` - Load blood profile (future)
+- `killer_light on|off` - Toggle killer look light
+- `killer_light_range <m>` - Set killer light range (0–100m)
+- `killer_light_debug on|off` - Toggle killer light debug overlay
 
 ### Audio Test Checklist
 1. Place audio files in `assets/audio/`
@@ -747,3 +759,55 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 7. Test `tr_dump` for band/volume info
 8. Test chase: start chase, verify tr_chase ON, tr_close SUPPRESSED
 4. W MP (Host/Join) sprawdź, że FX hosta pojawiają się też u klienta.
+
+---
+
+## Update: VFX System (Phase B)
+
+### What is new
+- **Scratch Marks** (DBD-like): Visual trail when survivor sprints
+- **Blood Pools**: Spawn when survivor is injured/downed
+- **Killer Look Light**: Spotlight cone for killer
+
+### Scratch Marks (Phase B2)
+- **Behavior**: Spawns behind survivor when sprinting
+- **Visibility**: Killer-only (DBD-like); survivors cannot see own marks
+- **Spawn interval**: 0.15–0.25s (data-driven)
+- **Lifetime**: 30s default, fades over time
+- **Pooled**: Ring buffer cap (default 64 marks)
+
+Config: `assets/vfx/scratch_profiles/default.json` (future: from JSON)
+
+Console commands:
+- `scratch_debug on|off` - Toggle debug overlay
+- `scratch_profile <name>` - Load profile (future)
+
+### Blood Pools (Phase B3)
+- **Behavior**: Spawns under injured/downed survivor
+- **Visibility**: Killer-only (DBD-like)
+- **Spawn interval**: 2s default (data-driven)
+- **Lifetime**: 120s default, fades quadratically
+- **Pooled**: Ring buffer cap (default 32 pools)
+
+Config: `assets/vfx/blood_profiles/default.json` (future: from JSON)
+
+Console commands:
+- `blood_debug on|off` - Toggle debug overlay
+- `blood_profile <name>` - Load profile (future)
+
+### Killer Look Light (Phase B4)
+- **Behavior**: Spotlight cone aligned with killer's forward
+- **Range**: 14m default (configurable)
+- **Angle**: 28° outer cone, 16° inner full-brightness
+- **Color**: Reddish tint (1.0, 0.15, 0.1)
+
+Console commands:
+- `killer_light on|off` - Toggle killer look light
+- `killer_light_range <m>` - Set light range (0–100m)
+- `killer_light_debug on|off` - Toggle debug overlay
+
+### VFX Test Checklist
+1. Sprint as survivor, switch to killer → verify scratch marks visible
+2. Get injured, move around → verify blood pools spawn
+3. Use `killer_light on|off` to verify spotlight appears/disappears
+4. Use debug overlays to confirm counts and values

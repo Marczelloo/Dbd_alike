@@ -365,6 +365,39 @@ float AudioSystem::GetBusVolume(Bus bus) const
     return m_busVolume[static_cast<std::size_t>(bus)];
 }
 
+std::uint64_t AudioSystem::GetSoundCursorInPcmFrames(SoundHandle handle) const
+{
+    if (!m_initialized || m_engine == nullptr)
+    {
+        return 0;
+    }
+    const auto it = m_engine->sounds.find(handle);
+    if (it == m_engine->sounds.end() || it->second == nullptr || !it->second->initialized)
+    {
+        return 0;
+    }
+    ma_uint64 cursor = 0;
+    if (ma_sound_get_cursor_in_pcm_frames(&it->second->sound, &cursor) == MA_SUCCESS)
+    {
+        return static_cast<std::uint64_t>(cursor);
+    }
+    return 0;
+}
+
+bool AudioSystem::SeekSoundToPcmFrame(SoundHandle handle, std::uint64_t frameIndex)
+{
+    if (!m_initialized || m_engine == nullptr)
+    {
+        return false;
+    }
+    const auto it = m_engine->sounds.find(handle);
+    if (it == m_engine->sounds.end() || it->second == nullptr || !it->second->initialized)
+    {
+        return false;
+    }
+    return ma_sound_seek_to_pcm_frame(&it->second->sound, static_cast<ma_uint64>(frameIndex)) == MA_SUCCESS;
+}
+
 void AudioSystem::SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up)
 {
     if (!m_initialized || m_engine == nullptr)

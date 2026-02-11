@@ -282,6 +282,146 @@ When `chaseActive == true`:
 
 ---
 
+---
+
+## 3.6) Bloodlust System (DBD-like — Strict Rules)
+
+Bloodlust is a **Killer-only mechanic** active only during an active chase.
+
+It exists to prevent infinite looping and rewards longer chases.
+
+This implementation must be deterministic and fully debug-visible.
+
+---
+
+### A) Bloodlust Tiers (FINAL VALUES)
+
+Bloodlust activates only when:
+
+- `chaseActive == true`
+- Killer is NOT stunned
+- Killer is NOT in attack cooldown
+- Killer is NOT breaking pallet
+
+#### Tier thresholds (time spent continuously in chase)
+
+- Tier 0: default (no bonus)
+- Tier 1: after **15 seconds** in chase → **120% base movement speed**
+- Tier 2: after **25 seconds** in chase → **125% base movement speed**
+- Tier 3: after **35 seconds** in chase → **130% base movement speed**
+
+Movement bonus applies multiplicatively to base killer speed.
+
+Example:
+If killer base speed = 4.6 m/s:
+
+- Tier 1 → 4.6 × 1.20
+- Tier 2 → 4.6 × 1.25
+- Tier 3 → 4.6 × 1.30
+
+---
+
+### B) Bloodlust Reset Conditions (MANDATORY)
+
+Bloodlust resets to Tier 0 when:
+
+- Killer successfully hits survivor
+- Killer is stunned (pallet stun)
+- Killer breaks a pallet
+- Chase ends (state transitions to NotInChase)
+
+Reset must:
+
+- Immediately clear tier
+- Reset `timeInChase` tracking for bloodlust
+
+---
+
+### C) Time Tracking
+
+Bloodlust uses:
+
+- `timeInChase` (continuous time inside `InChase`)
+- Do NOT accumulate across multiple chases
+- Do NOT accumulate while not in chase
+
+When chase ends:
+
+- Bloodlust tier = 0
+- timer resets
+
+---
+
+### D) Multiplayer Authority
+
+Bloodlust tier must be:
+
+- Server-authoritative
+- Replicated to clients
+- Used for:
+  - killer movement speed
+  - debug display
+  - HUD if needed
+
+Clients must NOT compute their own bloodlust independently.
+
+---
+
+### E) Debug Requirements (MANDATORY)
+
+Overlay must display:
+
+- bloodlustTier (0/1/2/3)
+- timeInChase
+- killerBaseSpeed
+- killerCurrentSpeed
+- speedMultiplier
+
+Console commands:
+
+- `bloodlust_reset` → force reset to Tier 0
+- `bloodlust_set <0|1|2|3>` → manually force tier for testing
+- `bloodlust_dump` → print current values
+
+---
+
+### F) Acceptance Tests
+
+1. Enter chase and keep LOS:
+   - At 15s → Tier 1
+   - At 25s → Tier 2
+   - At 35s → Tier 3
+
+2. Hit survivor:
+   - Tier resets immediately
+
+3. Break pallet:
+   - Tier resets immediately
+
+4. Lose chase:
+   - Tier resets immediately
+
+5. Debug overlay reflects correct tier and speed multiplier.
+
+---
+
+### G) Important Design Constraint
+
+Bloodlust logic must be separated from:
+
+- Terror Radius audio
+- Animation logic
+- VFX
+
+It should only influence:
+
+- Killer movement speed
+- Debug/HUD display
+
+No hidden coupling.
+
+---
+
 ## 4) Non-Negotiable UX / Debuggability
 
 ### Provide clear runtime diagnostics

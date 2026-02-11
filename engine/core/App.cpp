@@ -3052,7 +3052,7 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
             json{{"clip", "tr_far"}, {"fade_in_start", 0.0F}, {"fade_in_end", 0.45F}, {"gain", 0.15F}},
             json{{"clip", "tr_mid"}, {"fade_in_start", 0.25F}, {"fade_in_end", 0.75F}, {"gain", 0.2F}},
             json{{"clip", "tr_close"}, {"fade_in_start", 0.55F}, {"fade_in_end", 1.0F}, {"gain", 0.25F}},
-            json{{"clip", "tr_chase"}, {"fade_in_start", 0.0F}, {"fade_in_end", 1.0F}, {"gain", 0.2F}, {"chase_only", true}},
+            json{{"clip", "tr_chase"}, {"fade_in_start", 0.0F}, {"fade_in_end", 1.0F}, {"gain", 0.25F}, {"chase_only", true}},
         });
         std::ofstream out(path);
         if (out.is_open())
@@ -3126,6 +3126,7 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
         }
     }
 
+    // First pass: Start all TR layers at 0 volume
     for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
     {
         const audio::AudioSystem::PlayOptions options{};
@@ -3141,6 +3142,32 @@ bool App::LoadTerrorRadiusProfile(const std::string& killerId)
             std::cerr << "[TR Load] Failed to load layer: " << layer.clip << "\n";
         }
     }
+
+    // Second pass: Sync all layers to the same playback cursor
+    // This prevents phase jumps when switching to chase music
+    audio::AudioSystem::SoundHandle firstHandle = 0;
+    std::uint64_t referenceCursor = 0;
+
+    for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        if (layer.handle != 0)
+        {
+            if (firstHandle == 0)
+            {
+                // Use first successfully loaded layer as reference
+                firstHandle = layer.handle;
+                referenceCursor = m_audio.GetSoundCursorInPcmFrames(layer.handle);
+                std::cout << "[TR Load] Reference handle=" << layer.handle << " cursor=" << referenceCursor << "\n";
+            }
+            else
+            {
+                // Sync all other layers to the reference cursor
+                (void)m_audio.SeekSoundToPcmFrame(layer.handle, referenceCursor);
+                std::cout << "[TR Load] Synced " << layer.clip << " to cursor=" << referenceCursor << "\n";
+            }
+        }
+    }
+
     m_terrorAudioProfile.loaded = !m_terrorAudioProfile.layers.empty();
     std::cout << "[TR Load] Loaded " << m_terrorAudioProfile.layers.size() << " layers, loaded=" << m_terrorAudioProfile.loaded << "\n";
     return m_terrorAudioProfile.loaded;
@@ -3168,6 +3195,13 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
         return;
     }
 
+    // Phase B1: Audio routing based on local player role
+    // Survivor hears: TR bands (far/mid/close) + chase override
+    // Killer hears: ONLY chase music when in chase
+    const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+    const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+    (void)localPlayerIsSurvivor;  // Used for early-exit logic clarity
+
     const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
     const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
 
@@ -3183,6 +3217,32 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
             }
         }
         m_currentBand = TerrorRadiusBand::Outside;
+        m_chaseWasActive = false;
+        return;
+    }
+
+    // Early exit for Killer: only chase layer matters
+    if (localPlayerIsKiller)
+    {
+        const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+        const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
+
+        for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            float targetVolume = 0.0F;
+            // Killer only hears chase music when actively chasing
+            if (layer.chaseOnly && chaseActive)
+            {
+                targetVolume = layer.gain;
+            }
+            // All TR distance-based bands are silent for killer
+            layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, smooth);
+            if (layer.handle != 0)
+            {
+                (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
+            }
+        }
+        // Don't update band state for killer (not relevant)
         return;
     }
 
@@ -3193,6 +3253,10 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
     const float distance = glm::length(delta);
     const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
     const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+
+    // Track chase state transitions for anti-leak guard
+    const bool justEnteredChase = chaseActive && !m_chaseWasActive;
+    m_chaseWasActive = chaseActive;
 
     // DBD-like stepped bands (no gradient!)
     // FAR:  0.66R < dist <= R       (outer edge, weakest)
@@ -3218,22 +3282,29 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 
     m_currentBand = newBand;
 
-    // Smoothing factor based on configured smoothing time (0.15-0.35s)
+    // Normal smoothing factor (0.15-0.35s)
     const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
+
+    // Anti-leak rapid fade-out for entering chase (0.05s instead of normal smoothing)
+    const float rapidSmooth = glm::clamp(deltaSeconds / 0.05F, 0.0F, 1.0F);
 
     // Update each layer based on stepped band logic and chase override
     for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
     {
         float targetVolume = 0.0F;
 
-        // Chase layer (tr_chase) - only plays during chase
+        // ============================================================
+        // MUTUALLY EXCLUSIVE: Chase suppression logic BEFORE band logic
+        // ============================================================
         if (layer.chaseOnly)
         {
+            // Chase layer (tr_chase): ON during chase, OFF otherwise
             targetVolume = chaseActive ? layer.gain : 0.0F;
         }
-        // Distance-based layers (tr_far, tr_mid, tr_close)
         else
         {
+            // Distance-based layers (tr_far, tr_mid, tr_close)
+
             // Stepped band logic - each layer is fully ON or OFF based on its designated band
             // Layer names must contain "far", "mid", "close" to identify their band
             const std::string lowerClip = [&layer]() {
@@ -3245,20 +3316,21 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 
             if (lowerClip.find("far") != std::string::npos)
             {
-                // FAR layer: ON only in FAR band (or during chase for ambience)
+                // FAR layer: ON only in FAR band (continues during chase for ambience)
                 targetVolume = (newBand == TerrorRadiusBand::Far) ? layer.gain : 0.0F;
             }
             else if (lowerClip.find("mid") != std::string::npos)
             {
-                // MID layer: ON only in MID band
+                // MID layer: ON only in MID band (continues during chase)
                 targetVolume = (newBand == TerrorRadiusBand::Mid) ? layer.gain : 0.0F;
             }
             else if (lowerClip.find("close") != std::string::npos)
             {
-                // CLOSE layer: ON in CLOSE band, BUT SUPPRESSED during chase (replaced by chase music)
+                // CLOSE layer: MUST BE SUPPRESSED during chase (replaced by chase music)
+                // This suppression is based ONLY on chaseActive, NOT on LOS/FOV timers
                 if (chaseActive)
                 {
-                    targetVolume = 0.0F; // Chase override - suppress close layer
+                    targetVolume = 0.0F; // FORCE SUPPRESS CLOSE during chase
                 }
                 else
                 {
@@ -3280,8 +3352,19 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
             }
         }
 
-        // Apply smoothing only on transitions (prevent pops)
-        layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, smooth);
+        // ============================================================
+        // Apply smoothing with anti-leak guard for chase transitions
+        // ============================================================
+        float actualSmooth = smooth;
+
+        // Anti-leak: When entering chase, fade out non-chase layers rapidly
+        if (justEnteredChase && !layer.chaseOnly)
+        {
+            actualSmooth = rapidSmooth;
+        }
+
+        // Apply smoothing (AFTER suppression logic)
+        layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, actualSmooth);
         if (layer.handle != 0)
         {
             (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
@@ -3292,6 +3375,17 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 std::string App::DumpTerrorRadiusState() const
 {
     std::string out = "=== Terror Radius State ===\n";
+
+    // Phase B1: Local role and audio routing info
+    out += "Local Role: " + m_localPlayer.controlledRole + "\n";
+    const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+    const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+    out += "TR Enabled: " + std::string(localPlayerIsSurvivor ? "YES" : "NO") + "\n";
+    if (localPlayerIsKiller)
+    {
+        const auto hudState = m_gameplay.BuildHudState();
+        out += "Chase Enabled for Killer: " + std::string(hudState.chaseActive ? "YES" : "NO") + "\n";
+    }
 
     // Band name
     const char* bandName = "OUTSIDE";
@@ -3326,16 +3420,35 @@ std::string App::DumpTerrorRadiusState() const
     const auto hudState = m_gameplay.BuildHudState();
     out += std::string("Chase Active: ") + (hudState.chaseActive ? "YES" : "NO") + "\n";
 
-    // Per-layer volumes
+    // Bus volume
+    const float musicBusVol = m_audio.GetBusVolume(audio::AudioSystem::Bus::Music);
+    out += "Music Bus Volume: " + std::to_string(musicBusVol) + "\n";
+
+    // Per-layer volumes with detailed breakdown
     out += "Layer Volumes:\n";
     for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
     {
-        out += "  [" + layer.clip + "] " + std::to_string(layer.currentVolume) + " / " + std::to_string(layer.gain);
+        const float finalApplied = layer.currentVolume * layer.gain * musicBusVol;
+        out += "  [" + layer.clip + "]";
         if (layer.chaseOnly)
         {
             out += " (chase_only)";
         }
         out += "\n";
+
+        // Check if this is the close layer and if it's suppressed by chase
+        bool isCloseLayer = (layer.clip.find("close") != std::string::npos ||
+                           layer.clip.find("Close") != std::string::npos ||
+                           layer.clip.find("CLOSE") != std::string::npos);
+        if (isCloseLayer && hudState.chaseActive)
+        {
+            out += "    SUPPRESSED_BY_CHASE\n";
+        }
+
+        out += "    profileGain=" + std::to_string(layer.gain) + "\n";
+        out += "    currentVolume=" + std::to_string(layer.currentVolume) + "\n";
+        out += "    busVolume=" + std::to_string(musicBusVol) + "\n";
+        out += "    finalApplied=" + std::to_string(finalApplied) + "\n";
     }
 
     return out;
@@ -4548,6 +4661,136 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         }
     }
     m_ui.EndPanel();
+
+    // Draw TR debug overlay if enabled
+    if (m_terrorAudioDebug && m_terrorAudioProfile.loaded)
+    {
+        const float scale = m_ui.Scale();
+        const engine::ui::UiRect trDebugPanel{
+            (static_cast<float>(m_ui.ScreenWidth()) - 420.0F * scale) * 0.5F,
+            200.0F * scale,
+            420.0F * scale,
+            320.0F * scale,
+        };
+        m_ui.BeginPanel("tr_debug_overlay", trDebugPanel, true);
+        m_ui.Label("Terror Radius Audio Debug", m_ui.Theme().colorAccent, 1.05F);
+
+        // Phase B1: Audio routing info
+        const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+        const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+        const bool trEnabled = localPlayerIsSurvivor; // TR only for survivor
+        const bool chaseEnabledForKiller = localPlayerIsKiller && hudState.chaseActive; // Chase only for killer in chase
+
+        m_ui.Label("Local Role: " + m_localPlayer.controlledRole, localPlayerIsSurvivor ? m_ui.Theme().colorSuccess : m_ui.Theme().colorDanger);
+        m_ui.Label("TR Enabled: " + std::string(trEnabled ? "YES" : "NO"), trEnabled ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+        if (localPlayerIsKiller)
+        {
+            m_ui.Label("Chase Enabled for Killer: " + std::string(chaseEnabledForKiller ? "YES" : "NO"), chaseEnabledForKiller ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+        }
+
+        // Band name
+        const char* bandName = "OUTSIDE";
+        switch (m_currentBand)
+        {
+            case TerrorRadiusBand::Outside: bandName = "OUTSIDE"; break;
+            case TerrorRadiusBand::Far: bandName = "FAR"; break;
+            case TerrorRadiusBand::Mid: bandName = "MID"; break;
+            case TerrorRadiusBand::Close: bandName = "CLOSE"; break;
+        }
+        m_ui.Label("Band: " + std::string(bandName));
+
+        // Distance and radius
+        const glm::vec3 survivorPos = m_gameplay.RolePosition("survivor");
+        const glm::vec3 killerPos = m_gameplay.RolePosition("killer");
+        const glm::vec2 delta{survivorPos.x - killerPos.x, survivorPos.z - killerPos.z};
+        const float distance = glm::length(delta);
+        m_ui.Label("Distance: " + std::to_string(distance) + " m (Radius: " + std::to_string(m_terrorAudioProfile.baseRadius) + " m)");
+
+        // Chase state
+        m_ui.Label("Chase Active: " + std::string(hudState.chaseActive ? "YES" : "NO"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+
+        // Bus volumes
+        const float musicBusVol = m_audio.GetBusVolume(audio::AudioSystem::Bus::Music);
+        m_ui.Label("Music Bus: " + std::to_string(musicBusVol), m_ui.Theme().colorTextMuted);
+
+        // Per-layer volumes
+        m_ui.Label("Layer Volumes:", m_ui.Theme().colorAccent);
+        for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            const float busVol = musicBusVol;
+            const float finalApplied = layer.currentVolume * layer.gain * busVol;
+
+            std::string layerInfo = layer.clip;
+            if (layer.chaseOnly)
+            {
+                layerInfo += " [chase]";
+            }
+            layerInfo += ": " + std::to_string(finalApplied);
+
+            // Color code: red if suppressed (near 0), green if audible
+            if (finalApplied < 0.01F)
+            {
+                m_ui.Label(layerInfo, m_ui.Theme().colorTextMuted);
+            }
+            else
+            {
+                m_ui.Label(layerInfo, m_ui.Theme().colorSuccess);
+            }
+
+            // Detailed breakdown (smaller)
+            m_ui.Label(
+                "  gain=" + std::to_string(layer.gain) +
+                " cur=" + std::to_string(layer.currentVolume) +
+                " bus=" + std::to_string(busVol) +
+                " final=" + std::to_string(finalApplied),
+                m_ui.Theme().colorTextMuted, 0.85F
+            );
+        }
+
+        m_ui.EndPanel();
+    }
+
+    // Phase B2/B3: Scratch marks and blood pools debug overlays
+    if (m_gameplay.ScratchDebugEnabled() || m_gameplay.BloodDebugEnabled())
+    {
+        const float scale = m_ui.Scale();
+        const engine::ui::UiRect debugPanel{
+            (static_cast<float>(m_ui.ScreenWidth()) - 300.0F * scale) * 0.5F,
+            540.0F * scale,  // Below TR debug panel
+            300.0F * scale,
+            180.0F * scale,
+        };
+        m_ui.BeginPanel("scratch_blood_debug", debugPanel, true);
+        m_ui.Label("VFX Debug", m_ui.Theme().colorAccent, 1.05F);
+
+        if (m_gameplay.ScratchDebugEnabled())
+        {
+            m_ui.Label("=== Scratch Marks ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Active Count: " + std::to_string(hudState.scratchActiveCount));
+            m_ui.Label("Spawn Interval: " + std::to_string(hudState.scratchSpawnInterval) + " s");
+            m_ui.Label("(Visible only to Killer)", m_ui.Theme().colorTextMuted, 0.9F);
+        }
+
+        if (m_gameplay.BloodDebugEnabled())
+        {
+            m_ui.Label("=== Blood Pools ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Active Count: " + std::to_string(hudState.bloodActiveCount));
+            m_ui.Label("(Visible only to Killer)", m_ui.Theme().colorTextMuted, 0.9F);
+        }
+
+        // Phase B4: Killer Look Light debug
+        if (m_gameplay.KillerLookLightDebug())
+        {
+            m_ui.Label("=== Killer Light ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Enabled: " + std::string(hudState.killerLightEnabled ? "YES" : "NO"), hudState.killerLightEnabled ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+            m_ui.Label("Range: " + std::to_string(hudState.killerLightRange) + " m");
+            m_ui.Label("Intensity: " + std::to_string(hudState.killerLightIntensity));
+            m_ui.Label("Inner Angle: " + std::to_string(hudState.killerLightInnerAngle) + "°");
+            m_ui.Label("Outer Angle: " + std::to_string(hudState.killerLightOuterAngle) + "°");
+        }
+
+        m_ui.EndPanel();
+    }
 }
 
 void App::DrawUiTestPanel()

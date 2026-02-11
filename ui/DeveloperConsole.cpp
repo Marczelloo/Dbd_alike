@@ -1049,6 +1049,91 @@ struct DeveloperConsole::Impl
             AddLog("Killer Current Speed: " + std::to_string(hudState.killerCurrentSpeed) + " m/s");
         });
 
+        // Phase B2: Scratch marks debug
+        RegisterCommand("scratch_debug on|off", "Toggle scratch marks debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: scratch_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetScratchDebug(enabled);
+            AddLog(std::string("Scratch debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("scratch_profile <name>", "Load scratch profile (future: from JSON)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const std::string profile = tokens.size() > 1 ? tokens[1] : "default";
+            context.gameplay->SetScratchProfile(profile);
+            AddLog("Scratch profile set to: " + profile);
+        });
+
+        // Phase B3: Blood pools debug
+        RegisterCommand("blood_debug on|off", "Toggle blood pools debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: blood_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetBloodDebug(enabled);
+            AddLog(std::string("Blood debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("blood_profile <name>", "Load blood pool profile (future: from JSON)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const std::string profile = tokens.size() > 1 ? tokens[1] : "default";
+            context.gameplay->SetBloodProfile(profile);
+            AddLog("Blood profile set to: " + profile);
+        });
+
+        // Phase B4: Killer look light commands
+        RegisterCommand("killer_light on|off", "Toggle killer look light", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetKillerLookLightEnabled(enabled);
+            AddLog(std::string("Killer light ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("killer_light_range <m>", "Set killer light range", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_range <meters>");
+                return;
+            }
+            const float range = ParseFloatOr(0.0F, tokens[1]);
+            if (range <= 0.0F || range > 100.0F)
+            {
+                AddLog("Range must be between 0 and 100");
+                return;
+            }
+            context.gameplay->SetKillerLookLightRange(range);
+            AddLog("Killer light range set to " + std::to_string(range) + " m");
+        });
+
+        RegisterCommand("killer_light_debug on|off", "Toggle killer light debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetKillerLookLightDebug(enabled);
+            AddLog(std::string("Killer light debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {

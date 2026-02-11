@@ -48,6 +48,17 @@ struct RoleCommand;
 
 namespace game::gameplay
 {
+// Phase B4: Killer Look Light configuration
+struct KillerLookLight
+{
+    bool enabled = true;
+    float intensity = 1.1F;
+    float range = 14.0F;
+    float innerAngleDegrees = 16.0F;
+    float outerAngleDegrees = 28.0F;
+    glm::vec3 color{1.0F, 0.15F, 0.1F};
+};
+
 // HUD State - defined outside class for access from DeveloperConsole
 struct HudState
 {
@@ -117,6 +128,18 @@ struct HudState
     float bloodlustSpeedMultiplier = 1.0F; // Speed multiplier from bloodlust
     float killerBaseSpeed = 0.0F;    // Killer's base movement speed
     float killerCurrentSpeed = 0.0F;  // Killer's current speed after all multipliers
+
+    // Phase B2/B3: Scratch marks and blood pools debug info
+    int scratchActiveCount = 0;
+    int bloodActiveCount = 0;
+    float scratchSpawnInterval = 0.0F;
+
+    // Phase B4: Killer look light debug info
+    bool killerLightEnabled = true;
+    float killerLightRange = 14.0F;
+    float killerLightIntensity = 1.1F;
+    float killerLightInnerAngle = 16.0F;
+    float killerLightOuterAngle = 28.0F;
 
     bool collisionEnabled = true;
     bool debugDrawEnabled = true;
@@ -393,6 +416,23 @@ public:
     void SetKillerPerkLoadout(const perks::PerkLoadout& loadout);
     [[nodiscard]] perks::PerkSystem& GetPerkSystem() { return m_perkSystem; }
     [[nodiscard]] const perks::PerkSystem& GetPerkSystem() const { return m_perkSystem; }
+
+    // Phase B2/B3: Scratch Marks and Blood Pools debug control
+    void SetScratchDebug(bool enabled);
+    void SetBloodDebug(bool enabled);
+    void SetScratchProfile(const std::string& profileName);
+    void SetBloodProfile(const std::string& profileName);
+    [[nodiscard]] int GetActiveScratchCount() const { return static_cast<int>(m_scratchMarks.size()); }
+    [[nodiscard]] int GetActiveBloodPoolCount() const { return static_cast<int>(m_bloodPools.size()); }
+    [[nodiscard]] bool ScratchDebugEnabled() const { return m_scratchDebugEnabled; }
+    [[nodiscard]] bool BloodDebugEnabled() const { return m_bloodDebugEnabled; }
+
+    // Phase B4: Killer Look Light control
+    void SetKillerLookLightEnabled(bool enabled) { m_killerLookLight.enabled = enabled; }
+    void SetKillerLookLightRange(float range) { m_killerLookLight.range = range; }
+    void SetKillerLookLightDebug(bool enabled) { m_killerLookLightDebug = enabled; }
+    [[nodiscard]] bool KillerLookLightEnabled() const { return m_killerLookLight.enabled; }
+    [[nodiscard]] bool KillerLookLightDebug() const { return m_killerLookLightDebug; }
 
 private:
     enum class InteractionType
@@ -775,6 +815,67 @@ private:
     perks::PerkLoadout m_killerPerks;
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
+
+    // Phase B2/B3: Scratch Marks and Blood Pools
+    struct ScratchMark
+    {
+        glm::vec3 position{0.0F};
+        glm::vec3 direction{0.0F, 0.0F, -1.0F};
+        float age = 0.0F;
+        float lifetime = 30.0F;
+        float size = 0.35F;
+    };
+
+    struct BloodPool
+    {
+        glm::vec3 position{0.0F};
+        float age = 0.0F;
+        float lifetime = 120.0F;
+        float size = 0.5F;
+    };
+
+    struct ScratchProfile
+    {
+        float spawnIntervalMin = 0.15F;
+        float spawnIntervalMax = 0.25F;
+        float lifetime = 30.0F;
+        float sizeMin = 0.3F;
+        float sizeMax = 0.5F;
+        float jitterRadius = 0.8F;
+        int maxActive = 64;
+        bool allowSurvivorSeeOwn = false;
+    };
+
+    struct BloodProfile
+    {
+        float spawnInterval = 2.0F;
+        float lifetime = 120.0F;
+        float sizeMin = 0.4F;
+        float sizeMax = 0.7F;
+        int maxActive = 32;
+        bool onlyWhenMoving = true;
+        bool allowSurvivorSeeOwn = false;
+    };
+
+    void UpdateScratchMarks(float deltaSeconds, const glm::vec3& survivorPos, bool survivorSprinting);
+    void UpdateBloodPools(float deltaSeconds, const glm::vec3& survivorPos, bool survivorMoving);
+    void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
+    void RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const;
+    [[nodiscard]] bool CanSeeScratchMarks(bool localIsKiller) const;
+    [[nodiscard]] bool CanSeeBloodPools(bool localIsKiller) const;
+
+    std::vector<ScratchMark> m_scratchMarks;
+    std::vector<BloodPool> m_bloodPools;
+    float m_scratchSpawnAccumulator = 0.0F;
+    float m_scratchNextInterval = 0.2F;
+    float m_bloodSpawnAccumulator = 0.0F;
+    ScratchProfile m_scratchProfile{};
+    BloodProfile m_bloodProfile{};
+    bool m_scratchDebugEnabled = false;
+    bool m_bloodDebugEnabled = false;
+
+    KillerLookLight m_killerLookLight{};
+    bool m_killerLookLightDebug = false;
 };
 
 } // namespace game::gameplay

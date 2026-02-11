@@ -51,6 +51,10 @@ public:
     void SetBusVolume(Bus bus, float value01);
     [[nodiscard]] float GetBusVolume(Bus bus) const;
 
+    // Get/set cursor position for looping sounds (used for TR layer sync)
+    [[nodiscard]] std::uint64_t GetSoundCursorInPcmFrames(SoundHandle handle) const;
+    bool SeekSoundToPcmFrame(SoundHandle handle, std::uint64_t frameIndex);
+
     void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up = glm::vec3{0.0F, 1.0F, 0.0F});
 
 private:
