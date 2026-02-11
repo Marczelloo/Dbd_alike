@@ -85,9 +85,12 @@ set(ENGINE_SOURCES
     engine/physics/PhysicsWorld.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
+    game/ui/LoadingScreen.cpp
+    game/ui/LoadingManager.cpp
     game/maps/TileGenerator.cpp
     game/gameplay/GameplaySystems.cpp
     game/gameplay/SpawnSystem.cpp
+    game/gameplay/PerkSystem.cpp
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp

@@ -349,6 +349,17 @@ bool App::Run()
     m_gameplay.SetRenderModeLabel(RenderModeToText(m_renderer.GetRenderMode()));
     m_levelEditor.Initialize();
 
+    // Initialize loading manager
+    game::ui::LoadingContext loadingContext;
+    loadingContext.ui = &m_ui;
+    loadingContext.input = &m_input;
+    loadingContext.renderer = &m_renderer;
+    loadingContext.gameplay = &m_gameplay;
+    if (!m_loadingManager.Initialize(loadingContext))
+    {
+        std::cerr << "Failed to initialize loading manager.\n";
+    }
+
     if (!m_console.Initialize(m_window))
     {
         CloseNetworkLogFile();
@@ -567,7 +578,15 @@ bool App::Run()
             true,
         });
 
-        if (m_appMode == AppMode::MainMenu && !m_settingsMenuOpen)
+        if (m_appMode == AppMode::Loading)
+        {
+            UpdateLoading(static_cast<float>(m_time.DeltaSeconds()));
+            if (m_loadingManager.IsLoadingComplete())
+            {
+                FinishLoading();
+            }
+        }
+        else if (m_appMode == AppMode::MainMenu && !m_settingsMenuOpen)
         {
             if (m_useLegacyImGuiMenus)
             {
@@ -963,23 +982,6 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
 
     TransitionNetworkState(NetworkState::Offline, "Solo session");
     m_multiplayerMode = MultiplayerMode::Solo;
-    m_appMode = AppMode::InGame;
-    m_pauseMenuOpen = false;
-    m_settingsMenuOpen = false;
-    m_settingsOpenedFromPause = false;
-    m_menuNetStatus = "Solo session started.";
-    m_serverGameplayValues = false;
-
-    // Start loading screen if preference is enabled (after Offline transition)
-    if (m_showConnectingLoading)
-    {
-        m_connectingLoadingActive = true;
-        m_connectingLoadingStart = glfwGetTime();
-        m_joinTargetIp = ""; // Empty IP indicates solo mode
-        m_joinTargetPort = 0;
-        m_menuNetStatus = "Loading solo session...";
-    }
-
     m_sessionMapName = mapName;
     m_sessionRoleName = NormalizeRoleName(roleName);
     m_remoteRoleName = OppositeRoleName(m_sessionRoleName);
@@ -990,14 +992,18 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
         normalizedMap = "main";
     }
 
-    m_gameplay.SetNetworkAuthorityMode(false);
-    ApplyGameplaySettings(m_gameplayApplied, false);
-    m_gameplay.LoadMap(normalizedMap);
+    // Start loading screen
+    StartLoading(game::ui::LoadingScenario::SoloMatch);
+
+    m_serverGameplayValues = false;
+    m_pauseMenuOpen = false;
+    m_settingsMenuOpen = false;
+    m_settingsOpenedFromPause = false;
+
+    m_menuNetStatus = "Solo session started.";
+
     if (normalizedMap == "main")
     {
-        // Generate new random seed for each solo session
-        m_sessionSeed = std::random_device{}();
-        m_gameplay.RegenerateLoops(m_sessionSeed);
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
     }
     else if (normalizedMap == "collision_test")
@@ -1062,35 +1068,12 @@ bool App::StartHostSession(const std::string& mapName, const std::string& roleNa
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Test;
     }
 
+    // Start loading screen before setting up the actual game
+    StartLoading(game::ui::LoadingScenario::HostMatch);
+
     ApplyMapEnvironment(normalizedMap);
     InitializePlayerBindings();
     ApplyRoleMapping(m_sessionRoleName, m_remoteRoleName, "Host role selection", true, true);
-    m_defaultGamePort = port;
-
-    BuildLocalIpv4List();
-    const std::string primaryIp = PrimaryLocalIp();
-    const char* hostNameEnv = std::getenv("COMPUTERNAME");
-    if (hostNameEnv == nullptr)
-    {
-        hostNameEnv = std::getenv("HOSTNAME");
-    }
-    const std::string hostName = hostNameEnv != nullptr ? hostNameEnv : "DBD-Prototype";
-    m_lanDiscovery.StartHost(
-        m_lanDiscoveryPort,
-        port,
-        hostName,
-        normalizedMap,
-        1,
-        2,
-        kProtocolVersion,
-        kBuildId,
-        primaryIp
-    );
-
-    m_menuNetStatus = "Hosting on " + std::to_string(port) + ". Waiting for client...";
-    m_connectedEndpoint = primaryIp + ":" + std::to_string(port);
-    TransitionNetworkState(NetworkState::HostListening, "Hosting on " + primaryIp + ":" + std::to_string(port));
-    return true;
 }
 
 bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std::string& preferredRole)
@@ -1548,6 +1531,18 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     AppendValue(outBuffer, MapTypeToByte(snapshot.mapType));
     AppendValue(outBuffer, snapshot.seed);
 
+    auto writePerks = [&](const std::array<std::string, 3>& perkIds) {
+        for (const auto& perkId : perkIds)
+        {
+            const std::uint16_t length = static_cast<std::uint16_t>(std::min<std::size_t>(perkId.size(), 256));
+            AppendValue(outBuffer, length);
+            outBuffer.insert(outBuffer.end(), perkId.begin(), perkId.begin() + length);
+        }
+    };
+
+    writePerks(snapshot.survivorPerkIds);
+    writePerks(snapshot.killerPerkIds);
+
     auto writeActor = [&](const game::gameplay::GameplaySystems::ActorSnapshot& actor) {
         AppendValue(outBuffer, actor.position.x);
         AppendValue(outBuffer, actor.position.y);
@@ -1610,6 +1605,29 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
 
     outSnapshot.mapType = ByteToMapType(mapTypeByte);
     if (!ReadValue(buffer, offset, outSnapshot.seed))
+    {
+        return false;
+    }
+
+    auto readPerks = [&](std::array<std::string, 3>& perkIds) {
+        for (int i = 0; i < 3; ++i)
+        {
+            std::uint16_t length = 0;
+            if (!ReadValue(buffer, offset, length))
+            {
+                return false;
+            }
+            if (offset + length > buffer.size())
+            {
+                return false;
+            }
+            perkIds[i].assign(reinterpret_cast<const char*>(buffer.data() + offset), length);
+            offset += length;
+        }
+        return true;
+    };
+
+    if (!readPerks(outSnapshot.survivorPerkIds) || !readPerks(outSnapshot.killerPerkIds))
     {
         return false;
     }
@@ -5136,4 +5154,92 @@ std::string App::MapNameFromIndex(int index)
         default: return "main";
     }
 }
+
+// Loading Screen System
+void App::StartLoading(game::ui::LoadingScenario scenario, const std::string& title)
+{
+    m_appMode = AppMode::Loading;
+    m_loadingManager.BeginLoading(scenario, title);
+}
+
+void App::UpdateLoading(float deltaSeconds)
+{
+    m_loadingManager.UpdateAndRender(deltaSeconds);
+
+    // Handle error and cancel
+    if (m_loadingManager.GetLoadingScreen().HasError())
+    {
+        if (m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        {
+            CancelLoading();
+        }
+    }
+}
+
+void App::FinishLoading()
+{
+    // Determine what to do after loading
+    switch (m_loadingManager.GetCurrentScenario())
+    {
+        case game::ui::LoadingScenario::SoloMatch:
+            m_appMode = AppMode::InGame;
+            break;
+        case game::ui::LoadingScenario::HostMatch:
+        case game::ui::LoadingScenario::JoinMatch:
+            m_appMode = AppMode::InGame;
+            break;
+        case game::ui::LoadingScenario::EditorLevel:
+            m_appMode = AppMode::Editor;
+            break;
+        case game::ui::LoadingScenario::MainMenu:
+        case game::ui::LoadingScenario::Startup:
+        default:
+            m_appMode = AppMode::MainMenu;
+            break;
+    }
+
+    m_loadingManager.SetLoadingComplete(false);
+}
+
+void App::CancelLoading()
+{
+    m_loadingManager.CancelLoading();
+    ResetToMainMenu();
+}
+
+bool App::IsLoading() const
+{
+    return m_appMode == AppMode::Loading;
+}
+
+bool App::IsLoadingComplete() const
+{
+    return m_loadingManager.IsLoadingComplete();
+}
+
+void App::SetLoadingStage(game::ui::LoadingStage stage)
+{
+    m_loadingManager.GetLoadingScreen().SetStage(stage);
+}
+
+void App::UpdateLoadingProgress(float overall, float stage)
+{
+    m_loadingManager.GetLoadingScreen().SetOverallProgress(overall);
+    m_loadingManager.GetLoadingScreen().SetStageProgress(stage);
+}
+
+void App::SetLoadingTask(const std::string& task, const std::string& subtask)
+{
+    m_loadingManager.GetLoadingScreen().SetTask(task);
+    if (!subtask.empty())
+    {
+        m_loadingManager.GetLoadingScreen().SetSubtask(subtask);
+    }
+}
+
+void App::SetLoadingError(const std::string& error)
+{
+    m_loadingManager.SetError(error);
+}
+
 } // namespace engine::core
