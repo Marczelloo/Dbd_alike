@@ -1302,6 +1302,11 @@ void UiSystem::DrawText(float x, float y, std::string_view text, const glm::vec4
     }
 }
 
+void UiSystem::DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale)
+{
+    DrawText(x, y, text, color, fontScale);
+}
+
 void UiSystem::PushClipRect(const UiRect& rect)
 {
     ClipRect clip{

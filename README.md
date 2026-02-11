@@ -56,6 +56,8 @@ W grze: `Esc` otwiera Pause Menu (`Resume`, `Return to Main Menu`, `Quit`).
 - `F1`: toggle HUD overlay
 - `F2`: toggle debug draw (colliders/triggers/LOS/tile overlay)
 - `F3`: toggle render mode (`wireframe` <-> `filled`)
+- `F6`: toggle UI test panel
+- `F7`: toggle loading screen test panel
 - `F11`: fullscreen
 - `Esc`: pause menu
 

@@ -90,7 +90,7 @@ Generator output includes tile debug metadata (`center`, `bounds`, `loopId`, `ar
 
 ## 5. Debug/UI/Console
 
-`ui/DeveloperConsole`:
+`ui::DeveloperConsole`:
 - command registry + autocomplete + history
 - first-open discoverability (`help` auto print)
 - HUD overlay with:
@@ -98,6 +98,12 @@ Generator output includes tile debug metadata (`center`, `bounds`, `loopId`, `ar
   - controls hint
   - chase + interaction + physics debug
   - nearest loop tile id/archetype
+
+`ui::DeveloperToolbar`:
+- top toolbar (only in InGame mode) for managing debug windows
+- toggle buttons for: Network Debug, Players window, HUD overlay
+- displays real-time info: FPS, tick rate, render mode
+- integrates with existing debug flags in `App`
 
 Networking and simulation commands include:
 - `host`, `join`, `disconnect`

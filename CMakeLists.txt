@@ -91,6 +91,7 @@ set(ENGINE_SOURCES
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp
+    ui/DeveloperToolbar.cpp
 )
 
 add_executable(asym_horror ${ENGINE_SOURCES})

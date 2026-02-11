@@ -24,6 +24,8 @@ struct ConsoleContext
     bool* vsync = nullptr;
     int* fpsLimit = nullptr;
     bool* showDebugOverlay = nullptr;
+    bool* showMovementWindow = nullptr;
+    bool* showStatsWindow = nullptr;
     bool renderPlayerHud = true;
 
     std::function<void(bool)> applyVsync;

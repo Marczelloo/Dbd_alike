@@ -1070,102 +1070,121 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
     }
 
     const bool showOverlay = context.showDebugOverlay == nullptr || *context.showDebugOverlay;
+    const bool showMovement = context.showMovementWindow != nullptr && *context.showMovementWindow;
+    const bool showStats = context.showStatsWindow != nullptr && *context.showStatsWindow;
 
     if (context.renderPlayerHud)
     {
-        // Legacy ImGui gameplay HUD (disabled when custom HUD is active).
-        ImGui::SetNextWindowBgAlpha(0.46F);
-        ImGui::SetNextWindowPos(ImVec2(10.0F, 10.0F), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Player State", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        // Movement window (controlled by toolbar button)
+        if (showMovement)
         {
-        ImGui::Text("Role: %s", hudState.roleName.c_str());
-        ImGui::Text("State: %s", hudState.survivorStateName.c_str());
-        ImGui::Text("Move: %s", hudState.movementStateName.c_str());
-        ImGui::Text("Camera: %s", hudState.cameraModeName.c_str());
-        ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
-        ImGui::Text("Render: %s", hudState.renderModeName.c_str());
-        ImGui::Text("Attack: %s", hudState.killerAttackStateName.c_str());
-        if (hudState.roleName == "Killer")
-        {
-            ImGui::TextUnformatted(hudState.attackHint.c_str());
+            bool movementOpen = *context.showMovementWindow;
+            ImGui::SetNextWindowBgAlpha(0.46F);
+            ImGui::SetNextWindowPos(ImVec2(10.0F, 10.0F), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Movement", &movementOpen, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("Role: %s", hudState.roleName.c_str());
+                ImGui::Text("State: %s", hudState.survivorStateName.c_str());
+                ImGui::Text("Move: %s", hudState.movementStateName.c_str());
+                ImGui::Text("Camera: %s", hudState.cameraModeName.c_str());
+                ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
+                ImGui::Text("Render: %s", hudState.renderModeName.c_str());
+                ImGui::Text("Attack: %s", hudState.killerAttackStateName.c_str());
+                if (hudState.roleName == "Killer")
+                {
+                    ImGui::TextUnformatted(hudState.attackHint.c_str());
+                }
+                if (hudState.roleName == "Killer" && hudState.lungeCharge01 > 0.0F)
+                {
+                    ImGui::ProgressBar(hudState.lungeCharge01, ImVec2(220.0F, 0.0F), "Lunge momentum");
+                }
+                if (hudState.selfHealing)
+                {
+                    ImGui::ProgressBar(hudState.selfHealProgress, ImVec2(220.0F, 0.0F), "Self-heal");
+                }
+                if (hudState.roleName == "Survivor" && hudState.survivorStateName == "Carried")
+                {
+                    ImGui::TextUnformatted("Wiggle: Alternate A/D to escape");
+                    ImGui::ProgressBar(hudState.carryEscapeProgress, ImVec2(220.0F, 0.0F), "Carry escape");
+                }
+                ImGui::Text("Terror Radius: %s %.1fm", hudState.terrorRadiusVisible ? "ON" : "OFF", hudState.terrorRadiusMeters);
+            }
+            ImGui::End();
+            *context.showMovementWindow = movementOpen;
         }
-        if (hudState.roleName == "Killer" && hudState.lungeCharge01 > 0.0F)
-        {
-            ImGui::ProgressBar(hudState.lungeCharge01, ImVec2(220.0F, 0.0F), "Lunge momentum");
-        }
-        if (hudState.selfHealing)
-        {
-            ImGui::ProgressBar(hudState.selfHealProgress, ImVec2(220.0F, 0.0F), "Self-heal");
-        }
-        if (hudState.roleName == "Survivor" && hudState.survivorStateName == "Carried")
-        {
-            ImGui::TextUnformatted("Wiggle: Alternate A/D to escape");
-            ImGui::ProgressBar(hudState.carryEscapeProgress, ImVec2(220.0F, 0.0F), "Carry escape");
-        }
-        ImGui::Text("Terror Radius: %s %.1fm", hudState.terrorRadiusVisible ? "ON" : "OFF", hudState.terrorRadiusMeters);
-        ImGui::TextUnformatted("Press ~ for Console");
-        }
-        ImGui::End();
 
-        ImGui::SetNextWindowBgAlpha(0.46F);
-        ImGui::SetNextWindowPos(ImVec2(10.0F, 165.0F), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Generator Progress", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        // Stats window (controlled by toolbar button)
+        if (showStats)
         {
-        ImGui::Text("Generators: %d/%d", hudState.generatorsCompleted, hudState.generatorsTotal);
-        if (hudState.repairingGenerator)
-        {
-            ImGui::ProgressBar(hudState.activeGeneratorProgress, ImVec2(220.0F, 0.0F));
+            bool statsOpen = *context.showStatsWindow;
+            ImGui::SetNextWindowBgAlpha(0.46F);
+            ImGui::SetNextWindowPos(ImVec2(10.0F, 165.0F), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Stats", &statsOpen, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("Generators: %d/%d", hudState.generatorsCompleted, hudState.generatorsTotal);
+                if (hudState.repairingGenerator)
+                {
+                    ImGui::ProgressBar(hudState.activeGeneratorProgress, ImVec2(220.0F, 0.0F));
+                }
+                ImGui::Text("Speed: %.2f", hudState.playerSpeed);
+                ImGui::Text("Grounded: %s", hudState.grounded ? "true" : "false");
+                ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
+                ImGui::Text("Distance: %.2f", hudState.chaseDistance);
+                ImGui::Text("LOS: %s", hudState.lineOfSight ? "true" : "false");
+                ImGui::Text("Hook Stage: %d", hudState.hookStage);
+                ImGui::Text("Hook Progress: %.0f%%", hudState.hookStageProgress * 100.0F);
+            }
+            ImGui::End();
+            *context.showStatsWindow = statsOpen;
         }
-        }
-        ImGui::End();
 
         if (!hudState.interactionPrompt.empty())
         {
-        const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowBgAlpha(0.62F);
-        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5F, 0.5F));
-        if (ImGui::Begin("Interaction Prompt", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
-        {
-            ImGui::TextUnformatted(hudState.interactionPrompt.c_str());
-        }
-        ImGui::End();
+            const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+            ImGui::SetNextWindowBgAlpha(0.62F);
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5F, 0.5F));
+            if (ImGui::Begin("Interaction Prompt", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+            {
+                ImGui::TextUnformatted(hudState.interactionPrompt.c_str());
+            }
+            ImGui::End();
         }
 
         if (hudState.skillCheckActive)
         {
-        const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        const ImVec2 size{220.0F, 180.0F};
-        ImGui::SetNextWindowBgAlpha(0.70F);
-        ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5F, center.y + 90.0F), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-        if (ImGui::Begin("Skill Check Widget", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
-        {
-            ImGui::TextUnformatted("SKILL CHECK");
-            ImGui::TextUnformatted("Press SPACE in green zone");
+            const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+            const ImVec2 size{220.0F, 180.0F};
+            ImGui::SetNextWindowBgAlpha(0.70F);
+            ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5F, center.y + 90.0F), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+            if (ImGui::Begin("Skill Check Widget", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
+            {
+                ImGui::TextUnformatted("SKILL CHECK");
+                ImGui::TextUnformatted("Press SPACE in green zone");
 
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            const ImVec2 winPos = ImGui::GetWindowPos();
-            const ImVec2 localCenter = ImVec2(winPos.x + size.x * 0.5F, winPos.y + 108.0F);
-            constexpr float radius = 56.0F;
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                const ImVec2 winPos = ImGui::GetWindowPos();
+                const ImVec2 localCenter = ImVec2(winPos.x + size.x * 0.5F, winPos.y + 108.0F);
+                constexpr float radius = 56.0F;
 
-            drawList->AddCircle(localCenter, radius, IM_COL32(190, 190, 190, 255), 64, 2.0F);
+                drawList->AddCircle(localCenter, radius, IM_COL32(190, 190, 190, 255), 64, 2.0F);
 
-            constexpr float kPi = 3.1415926535F;
-            const float startAngle = -kPi * 0.5F;
-            const float successStart = startAngle + hudState.skillCheckSuccessStart * 2.0F * kPi;
-            const float successEnd = startAngle + hudState.skillCheckSuccessEnd * 2.0F * kPi;
-            drawList->PathArcTo(localCenter, radius + 1.0F, successStart, successEnd, 28);
-            drawList->PathStroke(IM_COL32(80, 220, 110, 255), false, 6.0F);
+                constexpr float kPi = 3.1415926535F;
+                const float startAngle = -kPi * 0.5F;
+                const float successStart = startAngle + hudState.skillCheckSuccessStart * 2.0F * kPi;
+                const float successEnd = startAngle + hudState.skillCheckSuccessEnd * 2.0F * kPi;
+                drawList->PathArcTo(localCenter, radius + 1.0F, successStart, successEnd, 28);
+                drawList->PathStroke(IM_COL32(80, 220, 110, 255), false, 6.0F);
 
-            const float needleAngle = startAngle + hudState.skillCheckNeedle * 2.0F * kPi;
-            const ImVec2 needleEnd{
-                localCenter.x + std::cos(needleAngle) * (radius - 5.0F),
-                localCenter.y + std::sin(needleAngle) * (radius - 5.0F),
-            };
-            drawList->AddLine(localCenter, needleEnd, IM_COL32(240, 80, 80, 255), 3.0F);
-            drawList->AddCircleFilled(localCenter, 4.0F, IM_COL32(240, 240, 240, 255));
-        }
-        ImGui::End();
+                const float needleAngle = startAngle + hudState.skillCheckNeedle * 2.0F * kPi;
+                const ImVec2 needleEnd{
+                    localCenter.x + std::cos(needleAngle) * (radius - 5.0F),
+                    localCenter.y + std::sin(needleAngle) * (radius - 5.0F),
+                };
+                drawList->AddLine(localCenter, needleEnd, IM_COL32(240, 80, 80, 255), 3.0F);
+                drawList->AddCircleFilled(localCenter, 4.0F, IM_COL32(240, 240, 240, 255));
+            }
+            ImGui::End();
         }
 
         if (showOverlay)

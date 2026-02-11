@@ -354,12 +354,15 @@ bool App::Run()
         CloseNetworkLogFile();
         return false;
     }
-
-    ResetToMainMenu();
-
+        if (!m_devToolbar.Initialize(m_window))
+        {
+            m_console.Shutdown();
+            CloseNetworkLogFile();
+            return false;
+        }
+    float currentFps = 0.0F;
     double fpsAccumulator = 0.0;
     int fpsFrames = 0;
-    float currentFps = 0.0F;
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
@@ -392,7 +395,8 @@ bool App::Run()
             }
         }
 
-        const bool controlsEnabled = (inGame || inEditor) && !m_pauseMenuOpen && !m_console.IsOpen() && !m_settingsMenuOpen;
+        const bool altHeld = m_input.IsKeyDown(GLFW_KEY_LEFT_ALT) || m_input.IsKeyDown(GLFW_KEY_RIGHT_ALT);
+        const bool controlsEnabled = (inGame || inEditor) && !m_pauseMenuOpen && !m_console.IsOpen() && !m_settingsMenuOpen && !altHeld;
         m_window.SetCursorCaptured(inGame && controlsEnabled);
 
         if (m_input.IsKeyPressed(GLFW_KEY_F11))
@@ -427,6 +431,12 @@ bool App::Run()
         {
             m_showUiTestPanel = !m_showUiTestPanel;
             m_statusToastMessage = m_showUiTestPanel ? "UI test panel ON" : "UI test panel OFF";
+            m_statusToastUntilSeconds = glfwGetTime() + 2.0;
+        }
+        if (m_input.IsKeyPressed(GLFW_KEY_F7))
+        {
+            m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
+            m_statusToastMessage = m_showLoadingScreenTestPanel ? "Loading screen test panel ON" : "Loading screen test panel OFF";
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         }
         if (m_input.IsKeyPressed(GLFW_KEY_F10))
@@ -541,6 +551,12 @@ bool App::Run()
 
         m_console.BeginFrame();
 
+        if (m_appMode == AppMode::Loading && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        {
+            m_loadingTestShowFull = false;
+            m_appMode = AppMode::MainMenu;
+        }
+
         m_ui.BeginFrame(engine::ui::UiSystem::BeginFrameArgs{
             &m_input,
             m_window.FramebufferWidth(),
@@ -560,6 +576,13 @@ bool App::Run()
             else
             {
                 DrawMainMenuUiCustom(&shouldQuit);
+            }
+        }
+        else if (m_appMode == AppMode::Loading)
+        {
+            if (m_loadingTestShowFull)
+            {
+                DrawFullLoadingScreen(m_loadingTestProgress, m_loadingTestTips[static_cast<std::size_t>(m_loadingTestSelectedTip) % m_loadingTestTips.size()], "Loading...");
             }
         }
         else if (m_appMode == AppMode::Editor)
@@ -642,19 +665,55 @@ bool App::Run()
         {
             DrawUiTestPanel();
         }
+        if (m_showLoadingScreenTestPanel && !m_loadingTestShowFull)
+        {
+            DrawLoadingScreenTestPanel();
+        }
 
-        m_ui.EndFrame();
+        // Draw connecting loading screen overlay
+        if (m_connectingLoadingActive)
+        {
+            const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
+            // Fake progress: asymptotically approach 0.9 over ~8 seconds
+            const float fakeProgress = std::min(0.9F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
+            const std::string step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+            DrawFullLoadingScreen(fakeProgress, "Establishing connection to the server...", step);
+        }
 
+        // Render ImGui debug windows BEFORE EndFrame
         if (m_showNetworkOverlay && (inGame || m_appMode == AppMode::MainMenu))
         {
             DrawNetworkOverlayUi(glfwGetTime());
         }
-        if (inGame && m_showDebugOverlay)
+        if (inGame && m_showPlayersWindow)
         {
             DrawPlayersDebugUi(glfwGetTime());
         }
 
+        m_ui.EndFrame();
+
+        // Build HUD state before rendering toolbar (needed for game stats display)
         const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+
+        // Render developer toolbar LAST to be on top of everything
+        if (m_appMode == AppMode::InGame)
+        {
+            ::ui::ToolbarContext toolbarContext;
+            toolbarContext.showNetworkOverlay = &m_showNetworkOverlay;
+            toolbarContext.showPlayersWindow = &m_showPlayersWindow;
+            toolbarContext.showDebugOverlay = &m_showDebugOverlay;
+            toolbarContext.showMovementWindow = &m_showMovementWindow;
+            toolbarContext.showStatsWindow = &m_showStatsWindow;
+            toolbarContext.showControlsWindow = &m_showControlsWindow;
+            toolbarContext.showUiTestPanel = &m_showUiTestPanel;
+            toolbarContext.showLoadingScreenTestPanel = &m_showLoadingScreenTestPanel;
+            toolbarContext.fps = currentFps;
+            toolbarContext.tickRate = m_fixedTickHz;
+            toolbarContext.renderMode = RenderModeToText(m_renderer.GetRenderMode());
+
+            m_devToolbar.Render(toolbarContext);
+        }
+
         ::ui::ConsoleContext context;
         context.gameplay = &m_gameplay;
         context.window = &m_window;
@@ -664,6 +723,8 @@ bool App::Run()
 
         bool showOverlayThisFrame = m_showDebugOverlay && m_appMode == AppMode::InGame;
         context.showDebugOverlay = &showOverlayThisFrame;
+        context.showMovementWindow = &m_showMovementWindow;
+        context.showStatsWindow = &m_showStatsWindow;
 
         context.applyVsync = [this](bool enabled) {
             m_vsyncEnabled = enabled;
@@ -821,6 +882,7 @@ bool App::Run()
     m_lanDiscovery.Stop();
     m_network.Shutdown();
     m_console.Shutdown();
+    m_devToolbar.Shutdown();
     m_ui.Shutdown();
     m_renderer.Shutdown();
     CloseNetworkLogFile();
@@ -1027,6 +1089,8 @@ bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std:
     m_joinStartSeconds = glfwGetTime();
     m_connectedEndpoint.clear();
     m_menuNetStatus = "Joining " + ip + ":" + std::to_string(port) + " ...";
+    m_connectingLoadingActive = true;
+    m_connectingLoadingStart = glfwGetTime();
     return true;
 }
 
@@ -1939,6 +2003,11 @@ void App::TransitionNetworkState(NetworkState state, const std::string& reason, 
     if (isError)
     {
         m_lastNetworkError = reason;
+    }
+    // Dismiss connecting loading screen on terminal states
+    if (state == NetworkState::Connected || state == NetworkState::Error || state == NetworkState::Offline)
+    {
+        m_connectingLoadingActive = false;
     }
     std::cout << m_statusToastMessage << "\n";
     AppendNetworkLog(m_statusToastMessage);
@@ -3241,7 +3310,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.BeginRootPanel("main_menu_custom", panel, true);
     m_ui.Label("Asymmetric Horror Prototype", 1.2F);
-    m_ui.Label("Press ~ for Console | F6 UI test | F10 Legacy UI toggle", m_ui.Theme().colorTextMuted);
+    m_ui.Label("Press ~ for Console | F6 UI test | F7 Loading test | F10 Legacy UI toggle", m_ui.Theme().colorTextMuted);
     if (m_ui.Button("toggle_legacy_ui", std::string("Legacy ImGui menus: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
     {
         m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
@@ -3249,6 +3318,10 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     if (m_ui.Button("toggle_ui_test", std::string("UI test panel: ") + (m_showUiTestPanel ? "ON" : "OFF")))
     {
         m_showUiTestPanel = !m_showUiTestPanel;
+    }
+    if (m_ui.Button("toggle_loading_test", std::string("Loading screen test: ") + (m_showLoadingScreenTestPanel ? "ON" : "OFF")))
+    {
+        m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
     }
 
     if (m_ui.Button("menu_settings", "Settings"))
@@ -3732,41 +3805,263 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         return true;
     };
 
-    const engine::ui::UiRect topLeft{
-        m_hudLayout.topLeftOffset.x * scale,
-        m_hudLayout.topLeftOffset.y * scale,
-        420.0F * scale,
-        260.0F * scale,
-    };
-    m_ui.BeginPanel("hud_top_left_custom", topLeft, true);
-    m_ui.Label(hudState.roleName + " | " + hudState.cameraModeName, 1.05F);
-    m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
-    m_ui.Label("Render: " + hudState.renderModeName + " | FPS: " + std::to_string(static_cast<int>(fps)), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed) + " | Grounded: " + (hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
-    m_ui.Label(
-        "Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal),
-        m_ui.Theme().colorAccent
-    );
-    m_ui.EndPanel();
+    const bool showOverlay = m_showDebugOverlay;
+    const bool showMovement = m_showMovementWindow && showOverlay;
+    const bool showStats = m_showStatsWindow && showOverlay;
+    const bool showControls = m_showControlsWindow && showOverlay;
 
-    const engine::ui::UiRect topRight{
-        static_cast<float>(m_ui.ScreenWidth()) - (360.0F * scale) - m_hudLayout.topRightOffset.x * scale,
-        m_hudLayout.topRightOffset.y * scale,
-        360.0F * scale,
-        250.0F * scale,
-    };
-    m_ui.BeginPanel("hud_controls_custom", topRight, true);
-    m_ui.Label("Controls", 1.03F);
-    m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
-    m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
-    m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
-    if (hudState.roleName == "Killer")
+    const float screenW = static_cast<float>(m_ui.ScreenWidth());
+    const float screenH = static_cast<float>(m_ui.ScreenHeight());
+    const float windowW = static_cast<float>(std::max(1, m_window.WindowWidth()));
+    const float windowH = static_cast<float>(std::max(1, m_window.WindowHeight()));
+    const glm::vec2 mouseUi = m_input.MousePosition() * glm::vec2{screenW / windowW, screenH / windowH};
+
+    const float leftX = m_hudLayout.topLeftOffset.x * scale;
+    const float leftY = m_hudLayout.topLeftOffset.y * scale;
+    const float defaultLeftWidth = 420.0F * scale;
+    const float defaultMovementHeight = 310.0F * scale;
+    const float defaultStatsHeight = 260.0F * scale;
+    const float panelSpacing = 10.0F * scale;
+    const float safeTop = std::max(36.0F * scale, (m_ui.Theme().baseFontSize + 12.0F) * scale);
+
+    const float minPanelW = 200.0F * scale;
+    const float minPanelH = 100.0F * scale;
+    const float maxPanelW = screenW * 0.8F;
+    const float maxPanelH = screenH * 0.8F;
+
+    // Initialize default sizes on first use
+    if (m_hudMovementSize.x < 0.0F) m_hudMovementSize = glm::vec2{defaultLeftWidth, defaultMovementHeight};
+    if (m_hudStatsSize.x < 0.0F) m_hudStatsSize = glm::vec2{defaultLeftWidth, defaultStatsHeight};
+    if (m_hudControlsSize.x < 0.0F) m_hudControlsSize = glm::vec2{360.0F * scale, 200.0F * scale};
+
+    if (m_hudMovementPos.x < 0.0F || m_hudMovementPos.y < 0.0F)
     {
-        m_ui.Label("LMB click: Short | Hold LMB: Lunge", m_ui.Theme().colorTextMuted);
+        m_hudMovementPos = glm::vec2{leftX, leftY};
     }
-    m_ui.Label("~ Console | F1/F2 Debug | F3 Render", m_ui.Theme().colorTextMuted);
-    m_ui.EndPanel();
+    if (m_hudStatsPos.x < 0.0F || m_hudStatsPos.y < 0.0F)
+    {
+        m_hudStatsPos = glm::vec2{leftX, leftY + m_hudMovementSize.y + panelSpacing};
+    }
+    if (m_hudControlsPos.x < 0.0F || m_hudControlsPos.y < 0.0F)
+    {
+        m_hudControlsPos = glm::vec2{
+            screenW - m_hudControlsSize.x - m_hudLayout.topRightOffset.x * scale,
+            m_hudLayout.topRightOffset.y * scale,
+        };
+    }
+
+    auto clampPanel = [&](glm::vec2& pos, const glm::vec2& size) {
+        const float maxX = std::max(0.0F, screenW - size.x);
+        const float maxY = std::max(safeTop, screenH - size.y);
+        pos.x = std::clamp(pos.x, 0.0F, maxX);
+        pos.y = std::clamp(pos.y, safeTop, maxY);
+    };
+
+    const float headerHeight = std::max(24.0F * scale, m_ui.Theme().baseFontSize * scale + 10.0F * scale);
+    const float resizeGripSize = 14.0F * scale;
+
+    // Draw a visible drag header bar at the top of each panel
+    auto drawDragHeader = [&](const glm::vec2& pos, const glm::vec2& size, const std::string& title) {
+        const engine::ui::UiRect headerRect{pos.x, pos.y, size.x, headerHeight};
+        const glm::vec4 headerBg{0.22F, 0.24F, 0.30F, 0.85F};
+        const glm::vec4 headerBorder{0.35F, 0.38F, 0.45F, 0.9F};
+        m_ui.DrawRect(headerRect, headerBg);
+        m_ui.DrawRectOutline(headerRect, 1.0F, headerBorder);
+        const float textX = pos.x + 8.0F * scale;
+        const float textY = pos.y + 3.0F * scale;
+        m_ui.DrawTextLabel(textX, textY, title, glm::vec4{0.7F, 0.75F, 0.82F, 1.0F}, 0.85F);
+        // Draw grip dots to hint at draggability
+        const float dotY = pos.y + headerHeight * 0.5F;
+        const float dotStartX = pos.x + size.x - 28.0F * scale;
+        const glm::vec4 dotColor{0.5F, 0.52F, 0.58F, 0.7F};
+        for (int i = 0; i < 3; ++i)
+        {
+            const float dx = dotStartX + static_cast<float>(i) * 6.0F * scale;
+            m_ui.DrawRect(engine::ui::UiRect{dx, dotY - 1.0F * scale, 3.0F * scale, 3.0F * scale}, dotColor);
+        }
+    };
+
+    // Draw resize grip at bottom-right corner
+    auto drawResizeGrip = [&](const glm::vec2& pos, const glm::vec2& size) {
+        const float gx = pos.x + size.x - resizeGripSize;
+        const float gy = pos.y + size.y - resizeGripSize;
+        const glm::vec4 gripColor{0.45F, 0.48F, 0.55F, 0.6F};
+        // Draw two diagonal lines as resize hint
+        for (int i = 0; i < 3; ++i)
+        {
+            const float off = static_cast<float>(i) * 4.0F * scale;
+            m_ui.DrawRect(engine::ui::UiRect{gx + resizeGripSize - 3.0F * scale - off, gy + resizeGripSize - 1.0F * scale, 3.0F * scale, 1.0F * scale}, gripColor);
+            m_ui.DrawRect(engine::ui::UiRect{gx + resizeGripSize - 1.0F * scale, gy + resizeGripSize - 3.0F * scale - off, 1.0F * scale, 3.0F * scale}, gripColor);
+        }
+    };
+
+    auto handleDrag = [&](HudDragTarget target, glm::vec2& pos, const glm::vec2& size) {
+        const engine::ui::UiRect header{pos.x, pos.y, size.x, headerHeight};
+        const bool hovering = header.Contains(mouseUi.x, mouseUi.y);
+
+        if (m_hudDragTarget == HudDragTarget::None && !m_hudResizing && hovering && m_input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            m_hudDragTarget = target;
+            m_hudDragOffset = mouseUi - pos;
+        }
+
+        if (m_hudDragTarget == target)
+        {
+            if (m_input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
+            {
+                pos = mouseUi - m_hudDragOffset;
+            }
+            else
+            {
+                m_hudDragTarget = HudDragTarget::None;
+            }
+        }
+
+        clampPanel(pos, size);
+    };
+
+    auto handleResize = [&](HudDragTarget target, const glm::vec2& pos, glm::vec2& size) {
+        const engine::ui::UiRect grip{pos.x + size.x - resizeGripSize, pos.y + size.y - resizeGripSize, resizeGripSize, resizeGripSize};
+        const bool hoveringGrip = grip.Contains(mouseUi.x, mouseUi.y);
+
+        if (!m_hudResizing && m_hudDragTarget == HudDragTarget::None && hoveringGrip && m_input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            m_hudResizing = true;
+            m_hudResizeTarget = target;
+        }
+
+        if (m_hudResizing && m_hudResizeTarget == target)
+        {
+            if (m_input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
+            {
+                size.x = std::clamp(mouseUi.x - pos.x, minPanelW, maxPanelW);
+                size.y = std::clamp(mouseUi.y - pos.y, minPanelH, maxPanelH);
+            }
+            else
+            {
+                m_hudResizing = false;
+                m_hudResizeTarget = HudDragTarget::None;
+            }
+        }
+    };
+
+    if (showMovement)
+    {
+        handleDrag(HudDragTarget::Movement, m_hudMovementPos, m_hudMovementSize);
+        handleResize(HudDragTarget::Movement, m_hudMovementPos, m_hudMovementSize);
+        drawDragHeader(m_hudMovementPos, m_hudMovementSize, "Movement");
+        const engine::ui::UiRect movementRect{
+            m_hudMovementPos.x,
+            m_hudMovementPos.y + headerHeight,
+            m_hudMovementSize.x,
+            m_hudMovementSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_movement_custom", movementRect, true);
+        m_ui.Label("Role: " + hudState.roleName, 1.05F);
+        m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
+        m_ui.Label("Camera: " + hudState.cameraModeName + " | Render: " + hudState.renderModeName, m_ui.Theme().colorTextMuted);
+        m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+        m_ui.Label("Attack: " + hudState.killerAttackStateName, m_ui.Theme().colorTextMuted);
+        if (hudState.roleName == "Killer")
+        {
+            m_ui.Label(hudState.attackHint, m_ui.Theme().colorTextMuted);
+        }
+        if (hudState.roleName == "Killer" && hudState.lungeCharge01 > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_lunge_progress_custom",
+                hudState.lungeCharge01,
+                std::to_string(static_cast<int>(hudState.lungeCharge01 * 100.0F)) + "%"
+            );
+        }
+        if (hudState.selfHealing)
+        {
+            m_ui.ProgressBar(
+                "hud_selfheal_progress_custom",
+                hudState.selfHealProgress,
+                std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%"
+            );
+        }
+        if (hudState.roleName == "Survivor" && hudState.survivorStateName == "Carried")
+        {
+            m_ui.Label("Wiggle: Alternate A/D to escape", m_ui.Theme().colorTextMuted);
+            m_ui.ProgressBar(
+                "hud_carry_escape_custom",
+                hudState.carryEscapeProgress,
+                std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.Label(
+            "Terror Radius: " + std::string(hudState.terrorRadiusVisible ? "ON " : "OFF ") + std::to_string(hudState.terrorRadiusMeters) + "m",
+            m_ui.Theme().colorTextMuted
+        );
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudMovementPos, m_hudMovementSize);
+    }
+
+    if (showStats)
+    {
+        handleDrag(HudDragTarget::Stats, m_hudStatsPos, m_hudStatsSize);
+        handleResize(HudDragTarget::Stats, m_hudStatsPos, m_hudStatsSize);
+        drawDragHeader(m_hudStatsPos, m_hudStatsSize, "Stats");
+        const engine::ui::UiRect statsRect{
+            m_hudStatsPos.x,
+            m_hudStatsPos.y + headerHeight,
+            m_hudStatsSize.x,
+            m_hudStatsSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_stats_custom", statsRect, true);
+        m_ui.Label("Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal), m_ui.Theme().colorAccent);
+        if (hudState.repairingGenerator)
+        {
+            m_ui.ProgressBar(
+                "hud_gen_progress_custom",
+                hudState.activeGeneratorProgress,
+                std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Grounded: " + std::string(hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+        m_ui.Label("Distance: " + std::to_string(hudState.chaseDistance), m_ui.Theme().colorTextMuted);
+        m_ui.Label("LOS: " + std::string(hudState.lineOfSight ? "true" : "false"), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorTextMuted);
+        if (hudState.hookStageProgress > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_hook_progress_custom",
+                hudState.hookStageProgress,
+                std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudStatsPos, m_hudStatsSize);
+    }
+
+    if (showControls)
+    {
+        handleDrag(HudDragTarget::Controls, m_hudControlsPos, m_hudControlsSize);
+        handleResize(HudDragTarget::Controls, m_hudControlsPos, m_hudControlsSize);
+        drawDragHeader(m_hudControlsPos, m_hudControlsSize, "Controls");
+        const engine::ui::UiRect topRight{
+            m_hudControlsPos.x,
+            m_hudControlsPos.y + headerHeight,
+            m_hudControlsSize.x,
+            m_hudControlsSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_controls_custom", topRight, true);
+        m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
+        m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
+        m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
+        if (hudState.roleName == "Killer")
+        {
+            m_ui.Label("LMB click: Short | Hold LMB: Lunge", m_ui.Theme().colorTextMuted);
+        }
+        m_ui.Label("~ Console | F1/F2 Debug | F3 Render", m_ui.Theme().colorTextMuted);
+        m_ui.Label("ALT: Release cursor for UI", m_ui.Theme().colorTextMuted);
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudControlsPos, m_hudControlsSize);
+    }
 
     if (isActionablePrompt(hudState.interactionPrompt))
     {
@@ -3849,11 +4144,12 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
 void App::DrawUiTestPanel()
 {
     const float scale = m_ui.Scale();
+    const float topY = 48.0F * scale; // clear the developer toolbar
     const engine::ui::UiRect panel{
         18.0F * scale,
-        18.0F * scale,
+        topY,
         std::min(440.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 36.0F * scale),
-        std::min(760.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 36.0F * scale),
+        std::min(760.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - topY - 18.0F * scale),
     };
     m_ui.BeginPanel("ui_test_panel", panel, true);
     m_ui.Label("UI Test Panel", 1.1F);
@@ -3928,6 +4224,145 @@ void App::DrawUiTestPanel()
         m_uiTestCaptured.clear();
     }
 
+    m_ui.EndPanel();
+}
+
+void App::DrawLoadingScreenTestPanel()
+{
+    const float scale = m_ui.Scale();
+    const float topY = 48.0F * scale; // clear the developer toolbar
+    const engine::ui::UiRect panel{
+        18.0F * scale,
+        topY,
+        std::min(440.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 36.0F * scale),
+        std::min(680.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - topY - 18.0F * scale),
+    };
+    m_ui.BeginPanel("loading_screen_test_panel", panel, true);
+    m_ui.Label("Loading Screen Test Panel", 1.1F);
+    m_ui.Label("Test loading screen UI and progress animations.", m_ui.Theme().colorTextMuted);
+
+    m_ui.SliderFloat("loading_speed", "Loading Speed", &m_loadingTestSpeed, 0.1F, 2.0F, "%.2f");
+    m_ui.SliderInt("loading_steps", "Loading Steps", &m_loadingTestSteps, 1, 10);
+
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+    if (m_ui.Button("loading_start", "Start Loading"))
+    {
+        m_loadingTestProgress = 0.0F;
+        m_loadingTestAutoAdvance = true;
+        m_loadingTestCurrentStep = 0;
+        m_statusToastMessage = "Loading started";
+        m_statusToastUntilSeconds = glfwGetTime() + 1.0;
+    }
+    if (m_ui.Button("loading_pause", m_loadingTestAutoAdvance ? "Pause" : "Resume"))
+    {
+        m_loadingTestAutoAdvance = !m_loadingTestAutoAdvance;
+    }
+    if (m_ui.Button("loading_reset", "Reset"))
+    {
+        m_loadingTestProgress = 0.0F;
+        m_loadingTestAutoAdvance = false;
+        m_loadingTestCurrentStep = 0;
+        m_statusToastMessage = "Loading reset";
+        m_statusToastUntilSeconds = glfwGetTime() + 1.0;
+    }
+    m_ui.PopLayout();
+
+    m_ui.Label("Loading Progress:", m_ui.Theme().colorAccent);
+    m_ui.ProgressBar("loading_progress_bar", m_loadingTestProgress, std::to_string(static_cast<int>(m_loadingTestProgress * 100.0F)) + "%");
+
+    m_ui.SliderFloat("loading_manual", "Manual Progress", &m_loadingTestProgress, 0.0F, 1.0F, "%.2f");
+
+    m_ui.Label("Current Step: " + std::to_string(m_loadingTestCurrentStep + 1) + " / " + std::to_string(m_loadingTestSteps), m_ui.Theme().colorTextMuted);
+
+    m_ui.Checkbox("loading_show_full", "Full Screen Loading", &m_loadingTestShowFull);
+    if (m_loadingTestShowFull)
+    {
+        if (m_appMode != AppMode::Loading)
+        {
+            m_appMode = AppMode::Loading;
+        }
+    }
+    else
+    {
+        if (m_appMode == AppMode::Loading)
+        {
+            m_appMode = AppMode::MainMenu;
+        }
+    }
+
+    m_ui.Checkbox("loading_show_tips", "Show Tips", &m_loadingTestShowTips);
+    if (m_loadingTestShowTips)
+    {
+        m_ui.Label("Tip:", m_ui.Theme().colorAccent);
+        const std::string& tip = m_loadingTestTips[static_cast<std::size_t>(m_loadingTestSelectedTip) % m_loadingTestTips.size()];
+        m_ui.Label(tip, 0.9F);
+    }
+
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+    if (m_ui.Button("tip_prev", "Previous Tip"))
+    {
+        m_loadingTestSelectedTip = (m_loadingTestSelectedTip - 1 + static_cast<int>(m_loadingTestTips.size())) % static_cast<int>(m_loadingTestTips.size());
+    }
+    if (m_ui.Button("tip_next", "Next Tip"))
+    {
+        m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
+    }
+    m_ui.PopLayout();
+
+    if (m_loadingTestAutoAdvance && m_loadingTestProgress < 1.0F)
+    {
+        m_loadingTestProgress += m_loadingTestSpeed * static_cast<float>(m_time.DeltaSeconds());
+        m_loadingTestProgress = std::min(1.0F, m_loadingTestProgress);
+        const int newStep = static_cast<int>(m_loadingTestProgress * m_loadingTestSteps);
+        if (newStep != m_loadingTestCurrentStep)
+        {
+            m_loadingTestCurrentStep = newStep;
+            m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
+        }
+    }
+
+    m_ui.EndPanel();
+}
+
+void App::DrawFullLoadingScreen(float progress01, const std::string& tip, const std::string& stepText)
+{
+    const float scale = m_ui.Scale();
+    const int w = m_ui.ScreenWidth();
+    const int h = m_ui.ScreenHeight();
+
+    const engine::ui::UiRect fullScreen{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h)};
+    m_ui.BeginRootPanel("loading_screen_full", fullScreen, true);
+
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Vertical, 0.0F, 0.0F);
+
+    const glm::vec4 bgColor{0.02F, 0.02F, 0.04F, 1.0F};
+
+    m_ui.Spacer(h * 0.35F);
+    m_ui.Label("LOADING", m_ui.Theme().colorAccent, 1.8F);
+
+    m_ui.Spacer(30.0F * scale);
+
+    const float progressBarWidth = 500.0F * scale;
+    const float progressBarHeight = 16.0F * scale;
+
+    m_ui.ProgressBar("loading_full_progress", progress01, std::to_string(static_cast<int>(progress01 * 100.0F)) + "%", progressBarWidth);
+
+    m_ui.Spacer(40.0F * scale);
+
+    if (!tip.empty())
+    {
+        m_ui.Label("Tip:", m_ui.Theme().colorTextMuted, 0.9F);
+        m_ui.Label(tip, 0.85F);
+    }
+
+    m_ui.Spacer(h * 0.25F);
+
+    if (!stepText.empty())
+    {
+        m_ui.Label(stepText, m_ui.Theme().colorTextMuted, 0.8F);
+    }
+
+    m_ui.PopLayout();
     m_ui.EndPanel();
 }
 
