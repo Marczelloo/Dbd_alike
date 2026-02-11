@@ -1,5 +1,7 @@
 #include "game/gameplay/GameplaySystems.hpp"
 #include "game/gameplay/SpawnSystem.hpp"
+#include "game/gameplay/PerkSystem.hpp"
+#include "engine/scene/Components.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1001,6 +1003,31 @@ HudState GameplaySystems::BuildHudState() const
         hud.penetrationDepth = actor.lastPenetrationDepth;
         hud.vaultTypeName = actor.lastVaultType;
         hud.movementStateName = BuildMovementStateText(controlled, actor);
+
+        // Populate perk debug info for both roles
+        const auto populatePerkDebug = [&](engine::scene::Role role, std::vector<HudState::ActivePerkDebug>& outDebug, float& outSpeedMod) {
+            const auto& activePerkStates = m_perkSystem.GetActivePerks(role);
+            for (const auto& state : activePerkStates)
+            {
+                const auto* perk = m_perkSystem.GetPerk(state.perkId);
+                if (!perk) continue;
+
+                HudState::ActivePerkDebug debug;
+                debug.id = state.perkId;
+                debug.name = perk->name;
+                debug.isActive = state.isActive;
+                debug.activeRemainingSeconds = state.activeRemainingSeconds;
+                debug.cooldownRemainingSeconds = state.cooldownRemainingSeconds;
+                debug.stacks = state.currentStacks;
+                outDebug.push_back(debug);
+            }
+
+            // Get speed modifier for display (sample with sprint=true to show max effect)
+            outSpeedMod = m_perkSystem.GetSpeedModifier(role, true, false, false);
+        };
+
+        populatePerkDebug(engine::scene::Role::Survivor, hud.activePerksSurvivor, hud.speedModifierSurvivor);
+        populatePerkDebug(engine::scene::Role::Killer, hud.activePerksKiller, hud.speedModifierKiller);
     }
 
     auto pushDebugLabel = [&](engine::scene::Entity entity, const std::string& name, bool killer) {
