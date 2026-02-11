@@ -696,19 +696,46 @@ Place audio files in `assets/audio/`:
 
 Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 
-### Terror Radius Profile
+### Terror Radius Profile (DBD-like Stepped Bands)
 - Profile: `assets/terror_radius/default_killer.json`
-- Layers: FAR (0-45%), MID (25-75%), CLOSE (55-100%), CHASE (chase only)
-- Crossfade based on killer-survivor distance
-- Base radius: 24m (configurable via `tr_set <meters>`)
+- **Stepped bands** (NOT gradient):
+  - **OUTSIDE** (distance > radius): All layers silent
+  - **FAR** (0.66R < dist <= R): tr_far ON, others OFF
+  - **MID** (0.33R < dist <= 0.66R): tr_mid ON, others OFF
+  - **CLOSE** (0 <= dist <= 0.33R): tr_close ON, others OFF
+- **Chase override**: When chase active, tr_chase ON, tr_close SUPPRESSED
+- Smoothing: 0.15-0.35s crossfade on transitions only
+- Base radius: 32m (configurable via `tr_radius <meters>`)
+- Layer files: `tr_far.wav`, `tr_mid.wav`, `tr_close.wav`, `tr_chase.wav`
 
-### Console Commands (Audio)
+### Chase System (DBD-like)
+- **Start conditions**: Survivor sprinting + distance <= 12m + LOS + in center FOV (+-35deg)
+- **End conditions**: Distance >= 18m OR lost LOS > 8s OR lost center FOV > 8s
+- Killer FOV: 87deg total (half 43.5deg)
+- Center FOV: +-35deg from killer forward
+- **Chase can persist indefinitely** if LOS/center-FOV keeps being reacquired
+
+### Bloodlust System (DBD-like)
+- **Tier 1**: At 15s in chase -> 120% speed multiplier
+- **Tier 2**: At 25s in chase -> 125% speed multiplier
+- **Tier 3**: At 35s in chase -> 130% speed multiplier
+- **Reset triggers** (immediate): Hit survivor, stunned by pallet, break pallet, chase ends
+
+### Console Commands (Audio/Chase/Bloodlust)
 - `audio_play <clip> [bus]` - Play one-shot (bus: music|sfx|ui|ambience)
 - `audio_loop <clip> [bus]` - Play looping clip
 - `audio_stop_all` - Stop all audio
 - `tr_debug on|off` - Toggle terror radius audio debug
 - `tr_vis on|off` - Toggle terror radius visualization (F5)
 - `tr_set <meters>` - Set terror radius distance
+- `tr_radius <m>` - Alias for tr_set
+- `tr_dump` - Print TR state, band, per-layer volumes
+- `chase_force on|off` - Force chase state
+- `set_chase on|off` - Alias for chase_force
+- `chase_dump` - Print chase state, timers, conditions
+- `bloodlust_reset` - Reset bloodlust to tier 0
+- `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
+- `bloodlust_dump` - Print bloodlust state and speed info
 
 ### Audio Test Checklist
 1. Place audio files in `assets/audio/`
@@ -716,6 +743,7 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 3. Test: `audio_play tr_far music`
 4. Test: `audio_loop tr_close music`
 5. Start solo session, move killer near survivor
-6. Observe smooth audio layer transitions
-7. Test `tr_debug on` for debug info
+6. Observe stepped audio transitions (FAR->MID->CLOSE)
+7. Test `tr_dump` for band/volume info
+8. Test chase: start chase, verify tr_chase ON, tr_close SUPPRESSED
 4. W MP (Host/Join) sprawdź, że FX hosta pojawiają się też u klienta.

@@ -1,124 +1,95 @@
-# DECISIONS — Architecture and Design Decisions Log
+# DECISIONS.md - Architecture Decisions Rationale
 
-## Audio System
+## Terror Radius: Stepped Bands vs Gradient
 
-### Decision: Use miniaudio instead of other libraries
-**Date:** 2026-02-11 (by previous agent)
-**Rationale:**
-- Single-header library, easy integration
-- Cross-platform (Windows, Linux, macOS)
-- Supports 3D spatial audio out of the box
-- Permissive license (public domain/Unlicense)
+### Decision
+Use stepped bands for TR audio instead of distance-based gradient.
 
-**Alternatives considered:**
-- SDL_mixer: Extra dependency, we already use GLFW
-- OpenAL: More verbose API, requires additional loader for common formats
-- FMOD: Commercial license needed for distribution
+### Rationale
+1. **DBD Fidelity**: Dead by Daylight uses distinct "heart beat" stages that are stepped, not smooth
+2. **Gameplay Clarity**: Players can clearly tell which band they're in
+3. **Performance**: Simpler logic, no per-frame intensity calculations
+4. **Audio Design**: Each layer can have its own character (Far = slow thump, Close = fast pounding)
 
-**Tradeoffs:**
-- miniaudio is lower-level - more code for features we might need (e.g. custom effects)
-- We accept this for simplicity of integration
+### Trade-offs
+- Pro: Clear gameplay feedback (players know exactly where they stand)
+- Con: Less smooth audio transitions (mitigated by 0.15-0.35s smoothing)
 
----
+## TR Smoothing Duration
 
-## Terror Radius Audio Design
+### Decision
+Use 0.15-0.35s crossfade only on band transitions.
 
-### Decision: Layered crossfade approach
-**Rationale:**
-- Multiple layers (FAR/MID/CLOSE/CHASE) allow smooth transitions
-- Crossfade based on distance prevents audio "pops"
-- Chase-only layer adds tension when killer is actively pursuing
+### Rationale
+1. **Audio Quality**: Prevents clicking/popping when switching bands
+2. **Gameplay Accuracy**: Short smoothing keeps the stepped feel intact
+3. **DBD-like**: Matches the "heart beat acceleration" feel
 
-**Implementation:**
-- Distance-based intensity: `clamp(1 - distance/baseRadius, 0, 1)`
-- Each layer has `fadeInStart` and `fadeInEnd` for crossfade ranges
-- Chase layer only active when `chaseActive == true`
+## Bloodlust: Immediate Reset vs Decay
 
-**Tradeoffs:**
-- Requires 4 audio files per killer
-- Memory: 4 simultaneous looped streams (acceptable for modern hardware)
+### Decision
+Reset bloodlust to tier 0 immediately on hit/stun/pallet break/chase end.
 
----
+### Rationale
+1. **DBD Mechanics**: In DBD, bloodlust resets completely when these events occur
+2. **Killer Counterplay**: Survivors can deliberately reset bloodlust by forcing pallet breaks
+3. **Simplicity**: No complex decay curves to tune
 
-## Scratch Marks Implementation
+### Trade-offs
+- Pro: Clear reset points, strategic for survivors
+- Con: Punishes killer heavily (requires new 35s chase for max tier)
 
-### Decision: FxSystem trail emitter for scratch marks
-**Rationale:**
-- Trail emitter already supports continuous line segments
-- Client-side cosmetic: no server bandwidth cost
-- Fade-out built into FxSystem alphaOverLife curve
+## Bloodlust: Server-Authoritative vs Local Compute
 
-**Multiplayer Safety:**
-- `FxNetMode::Local` - each client spawns from survivor position
-- Position is replicated in snapshot, so scratch marks appear roughly correct
-- Small desync acceptable for cosmetic effect
+### Decision (Current Implementation)
+Compute bloodlust locally for now; defer server replication.
 
-**Alternative rejected:**
-- Server-authoritative scratch marks: Would add packet spam for cosmetic-only effect
+### Rationale
+1. **Simplicity**: Full networking overhaul not in scope for this phase
+2. **Performance**: No extra network bandwidth
+3. **Local Testing**: Allows immediate testing without multiplayer setup
 
----
+### Future Work
+- Make bloodlust tier server-authoritative
+- Replicate tier in Snapshot
+- Clients read replicated value, don't compute independently
 
-## Blood Pools Implementation
+## Chase: Center FOV Constraint (+-35deg)
 
-### Decision: Server broadcast for blood pools
-**Rationale:**
-- Blood pools indicate damage state - gameplay-relevant information
-- Must be synchronized across all clients
-- FxSystem already supports `FxNetMode::ServerBroadcast`
+### Decision
+Require survivor to be within +-35deg of killer's forward to START chase.
 
-**Implementation:**
-- Spawn on survivor state change: Healthy → Injured
-- On survivor hit, trigger Fx spawn at position
-- FxSystem calls `m_spawnCallback` which App forwards to network
+### Rationale
+1. **DBD Mechanics**: Killer must be "looking at" survivor to start chase
+2. **Counterplay**: Survivors can break LOS without triggering chase by staying peripheral
+3. **Clarity**: Clear visual feedback when chase actually starts
 
-**Tradeoffs:**
-- Adds network traffic per hit
-- Acceptable: hit events are infrequent (~1-2 per second max)
+### Trade-offs
+- Pro: Prevents accidental chase activation
+- Con: Survivors can "orbit" killer just outside center FOV
 
----
+## Chase: Timeout Values (8s)
 
-## Character Roster Design
+### Decision
+Use exactly 8.0s for both lost LOS and lost center FOV timeouts.
 
-### Decision: Data-driven JSON characters
-**Rationale:**
-- Consistent with existing asset patterns (loops, maps, terror_radius)
-- Easy to add new characters without code changes
-- `asset_version` allows future schema migration
+### Rationale
+1. **DBD Reference**: Matches Dead by Daylight's chase lose timing
+2. **Gameplay Balance**: Long enough for brief jukes, not so long that chase feels unfair
+3. **Consistency**: Single timeout value for both conditions
 
-**Schema (planned):**
-```json
-{
-  "asset_version": 1,
-  "id": "survivor_meg",
-  "display_name": "Meg Thomas",
-  "model_path": "assets/models/survivor_meg.gltf",
-  "role": "survivor",
-  "perks": [...],
-  "cosmetics": {...}
-}
-```
+## Constants Summary
 
-**Multiplayer:**
-- Host authoritative for final assignment
-- Client sends preferred character in handshake
-- Host can override (e.g., duplicate character selection)
-
----
-
-## Killer Look Light
-
-### Decision: Implemented as SpotLight in renderer
-**Date:** Already implemented before 2026-02-11
-**Rationale:**
-- Renderer already supports SpotLight type
-- Reuses existing lighting system
-- Performance: GPU-based, no extra draw calls
-
-**Configuration:**
-- `m_killerLookLightEnabled`: toggle
-- `m_killerLookLightIntensity`: brightness multiplier
-- `m_killerLookLightRange`: max distance
-- `m_killerLookLightInnerDeg`/`OuterDeg`: cone angles
-
-**Future consideration:**
-- Expose to Gameplay Tuning UI for player configuration
+| Constant | Value | Source |
+|----------|--------|--------|
+| Killer FOV | 87deg (half 43.5deg) | CLAUDE.md spec |
+| Center FOV | +-35deg | CLAUDE.md spec |
+| Chase start distance | <= 12m | CLAUDE.md spec |
+| Chase end distance | >= 18m | CLAUDE.md spec |
+| Lost LOS timeout | 8.0s | CLAUDE.md spec |
+| Lost center FOV timeout | 8.0s | CLAUDE.md spec |
+| TR base radius | 32m | CLAUDE.md spec |
+| TR band thresholds | 0.33R, 0.66R | CLAUDE.md spec |
+| Bloodlust tier 1 | 15s -> 120% | CLAUDE.md spec |
+| Bloodlust tier 2 | 25s -> 125% | CLAUDE.md spec |
+| Bloodlust tier 3 | 35s -> 130% | CLAUDE.md spec |

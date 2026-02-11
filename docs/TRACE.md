@@ -1,103 +1,103 @@
-# TRACE — Reproduction Steps for Current Known Issues
+# TRACE.md - Reproduction Steps
 
-## Issue: Audio Files Missing
+## Chase System Testing
 
-### Expected
-- Running `audio_play tr_far` should play a sound
-- Terror radius should produce layered audio based on distance
+### Test 1: Chase Start Conditions
+**Expected**: Chase starts only when all conditions are met
+1. Load main map with survivor and killer spawned
+2. Move survivor within 12m of killer
+3. Have killer face survivor (within +-35deg center FOV)
+4. Survivor must be sprinting
+5. **Result**: Chase starts (HUD shows "Chase: ON")
 
-### Actual
-- Audio system initializes but no files exist in `assets/audio/`
-- `ResolveClipPath()` returns empty path, `PlayOneShot()` returns handle 0
+### Test 2: Chase End - Distance
+**Expected**: Chase ends when survivor moves too far
+1. Start chase (Test 1)
+2. Move survivor to >= 18m from killer
+3. **Result**: Chase ends immediately (HUD shows "Chase: OFF")
 
-### Reproduction Steps
-1. Build and run the game
-2. Press `~` to open console
-3. Type `audio_play tr_far music`
-4. Observe: No audio plays
+### Test 3: Chase End - Lost LOS
+**Expected**: Chase ends after 8s of no LOS
+1. Start chase
+2. Break LOS (hide behind wall)
+3. **Result**: Chase ends after 8s (timeSinceLOS reaches 8.0)
 
-### Root Cause
-- `assets/audio/` directory is empty
-- No default audio files included in repo
+### Test 4: Chase End - Lost Center FOV
+**Expected**: Chase ends after 8s outside center FOV
+1. Start chase
+2. Move to killer's side (outside +-35deg cone)
+3. **Result**: Chase ends after 8s (timeSinceCenterFOV reaches 8.0)
 
-### Fix Status
-- PENDING: Need to either:
-  1. Add placeholder audio files to repo
-  2. Document required audio files in README
-  3. Provide generation script for test tones
+### Test 5: Console Commands
+1. Run `chase_force on` - chase starts immediately
+2. Run `chase_dump` - prints all state values
 
----
+## Terror Radius Testing
 
-## Issue: tr_debug Command Not Verified
+### Test 1: Stepped Bands
+**Expected**: Distinct bands, no gradient
+1. Place killer at origin
+2. Move survivor to 35m (outside 32m radius)
+3. **Result**: Silence (all volumes 0)
+4. Move to 25m (FAR band: 21.12m < dist <= 32m)
+5. **Result**: tr_far fades in over 0.15-0.35s
+6. Move to 20m (still FAR band)
+7. **Result**: tr_far stays ON
+8. Move to 12m (MID band: 10.56m < dist <= 21.12m)
+9. **Result**: tr_far fades out, tr_mid fades in
+10. Move to 8m (CLOSE band: 0 <= dist <= 10.56m)
+11. **Result**: tr_mid fades out, tr_close fades in
 
-### Expected
-- `tr_debug on|off` should toggle debug visualization for terror radius audio
-- Should show layer volumes, distance, intensity values
+### Test 2: Chase Override
+1. Start chase (tr_chase should be ON)
+2. **Result**: tr_close volume = 0 (suppressed)
+3. End chase
+4. **Result**: tr_chase fades out, tr_close returns
 
-### Actual
-- Command is registered in DeveloperConsole (line 715-729)
-- `ConsoleContext::setTerrorAudioDebug` callback exists
-- Wiring to App `m_terrorAudioDebug` not confirmed
+### Test 3: Console Commands
+1. Run `tr_radius 40` - radius changes to 40m
+2. Run `tr_dump` - prints band and all layer volumes
 
-### Reproduction Steps
-1. Run game, start solo session
-2. Press `~` to open console
-3. Type `tr_debug on`
-4. Observe: No visible feedback of debug state
+## Bloodlust Testing
 
-### Fix Status
-- PENDING: Need to verify callback wiring in App.cpp
-- May need HUD overlay for TR debug values
+### Test 1: Tier Progression
+**Expected**: Tiers at exactly 15s, 25s, 35s
+1. Start chase
+2. Run `bloodlust_dump` - tier 0, speed 100%
+3. Wait 15s in chase
+4. **Result**: Tier 1, speed 120%
+5. Wait another 10s (total 25s)
+6. **Result**: Tier 2, speed 125%
+7. Wait another 10s (total 35s)
+8. **Result**: Tier 3, speed 130%
 
----
+### Test 2: Reset on Hit
+1. Reach bloodlust tier 2 or 3
+2. Hit survivor
+3. **Result**: Bloodlust immediately resets to tier 0
 
-## Issue: Killer Look Light Configuration Not Exposed
+### Test 3: Reset on Stun
+1. Reach bloodlust tier 2 or 3
+2. Get stunned by pallet
+3. **Result**: Bloodlust immediately resets to tier 0
 
-### Expected
-- User should be able to configure killer light (range, angle, intensity)
-- Settings panel should include these options
+### Test 4: Reset on Pallet Break
+1. Reach bloodlust tier 2 or 3
+2. Break pallet while in chase
+3. **Result**: Bloodlust immediately resets to tier 0
 
-### Actual
-- Light works hardcoded (App.cpp lines 549-564)
-- Variables exist: `m_killerLookLightEnabled`, etc.
-- Not exposed to settings UI
+### Test 5: Reset on Chase End
+1. Reach bloodlust tier 2 or 3
+2. End chase (distance >= 18m or LOS lost >8s)
+3. **Result**: Bloodlust immediately resets to tier 0
 
-### Reproduction Steps
-1. Start game as killer
-2. Observe light cone in front of killer
-3. Try to change light range via settings
-4. Result: No UI option exists
+## Verification Checklist
 
-### Fix Status
-- PENDING: Add Killer Light settings to Gameplay Tuning UI
-- LOW PRIORITY: Feature works, just not user-configurable
-
----
-
-## Smoke Test Checklist (Multiplayer)
-
-### After Each Audio/FX Change
-
-1. Host session on port 7777
-2. Join from second instance (127.0.0.1:7777)
-3. Verify:
-   - [ ] Killer approaches survivor - terror radius audio changes
-   - [ ] Survivor sprinting - scratch marks appear on both clients
-   - [ ] Survivor hit - blood pools appear on both clients
-   - [ ] Killer look light visible only to killer player
-4. Check console: `net_status`, `net_dump`
-5. Check `logs/network.log` for FX replication events
-
----
-
-## Performance Verification
-
-### After FX Implementation
-
-1. Enable FPS counter (F1 overlay)
-2. Spawn 20+ scratch marks rapidly
-3. Spawn 10+ blood pools
-4. Verify:
-   - FPS stays above 60
-   - No per-frame allocations in FxSystem::Update()
-   - `fx_cpu_ms` in HUD remains under 1.0ms
+- [ ] Chase starts only with sprinting + LOS + center FOV + <=12m
+- [ ] Chase ends when >=18m OR lost LOS >8s OR lost center FOV >8s
+- [ ] TR: stepped bands with silence outside radius
+- [ ] TR: chase suppresses tr_close
+- [ ] Bloodlust: tiers at 15/25/35s
+- [ ] Bloodlust: resets on hit/stun/pallet/chase end
+- [ ] Overlay: shows all debug info
+- [ ] Console: all commands work
