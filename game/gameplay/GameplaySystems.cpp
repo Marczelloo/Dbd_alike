@@ -473,39 +473,6 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
     // Update perk system (cooldowns, active durations)
     m_perkSystem.UpdateActiveStates(deltaSeconds);
 
-    // Phase B2/B3: Update scratch marks and blood pools
-    const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
-    if (survivorTransformIt != m_world.Transforms().end())
-    {
-        const glm::vec3 survivorPos = survivorTransformIt->second.position;
-        const auto survivorActorIt = m_world.Actors().find(m_survivor);
-
-        bool survivorSprinting = false;
-        bool survivorMoving = false;
-
-        if (survivorActorIt != m_world.Actors().end())
-        {
-            const RoleCommand* command = nullptr;
-            if (m_controlledRole == ControlledRole::Survivor)
-            {
-                command = &m_localSurvivorCommand;
-            }
-            else if (m_remoteSurvivorCommand.has_value())
-            {
-                command = &m_remoteSurvivorCommand.value();
-            }
-
-            if (command != nullptr)
-            {
-                survivorSprinting = command->sprinting;
-                survivorMoving = glm::length(command->moveAxis) > 0.1F;
-            }
-        }
-
-        UpdateScratchMarks(deltaSeconds, survivorPos, survivorSprinting);
-        UpdateBloodPools(deltaSeconds, survivorPos, survivorMoving);
-    }
-
     for (auto it = m_messages.begin(); it != m_messages.end();)
     {
         it->ttl -= deltaSeconds;
