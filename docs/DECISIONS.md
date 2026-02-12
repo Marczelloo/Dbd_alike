@@ -184,3 +184,43 @@ Use fixed-size `std::array` with head pointer instead of `std::vector`.
 ### Constants
 - `kScratchMarkPoolSize = 64` - max simultaneous scratch marks
 - `kBloodPoolPoolSize = 32` - max simultaneous blood pools
+
+## Items/Add-ons/Powers: Data-Driven Catalog + Modifier Context (2026-02-12)
+
+### Decision
+Use JSON-driven catalog (`items/addons/powers/characters`) with aggregated modifier contexts instead of hardcoding IDs in gameplay flow.
+
+### Rationale
+1. **Scalability**: New item/power/add-on does not require editing central gameplay switch blocks.
+2. **Separation of concerns**: Definitions live in assets; runtime logic reads parameters and hook modifiers.
+3. **Multiplayer safety**: Host snapshot carries selected IDs and runtime state (charges/traps), clients render/apply replicated state.
+4. **Extensibility**: Same pattern can later be reused for perks/status effects/events.
+
+### Implementation Notes
+- `game/gameplay/LoadoutSystem.*`:
+  - `GameplayCatalog` (load + default asset bootstrap)
+  - `LoadoutSurvivor` / `LoadoutKiller`
+  - `AddonModifierContext` (stat/hook aggregation)
+- `GameplaySystems`:
+  - loadout selection APIs
+  - runtime item/power update loops
+  - bear trap entity/state lifecycle
+
+### Trade-offs
+- Pro: Minimal ifology in core gameplay loops.
+- Pro: Add-ons can combine add/mul/override consistently.
+- Con: More runtime validation needed for mismatched add-on targets.
+
+## Bear Trap Power: Server-Authoritative Trap State (2026-02-12)
+
+### Decision
+Trap trigger/escape logic runs in gameplay authority loop; trap state replicated in snapshot (`Armed/Triggered/Disarmed`, attempts/chance/trapped entity).
+
+### Rationale
+1. **Correctness**: Avoids divergent escape outcomes between peers.
+2. **Debuggability**: Host can inspect trap states (`power_dump`, HUD debug fields).
+3. **Future ready**: Can later move to dedicated net messages if packet budget needs optimization.
+
+### Add-on Examples
+- `serrated_jaws`: hook modifier on trap escape (`bleed_multiplier`).
+- `tighter_springs`: stat modifiers (`escape_chance_step`, `max_escape_attempts`).

@@ -101,3 +101,63 @@
 - [ ] Bloodlust: resets on hit/stun/pallet/chase end
 - [ ] Overlay: shows all debug info
 - [ ] Console: all commands work
+
+## Loadout / Item / Power Testing (New)
+
+### Test 1: Catalog bootstrap
+1. Delete `assets/items`, `assets/addons`, `assets/powers`, `assets/characters` folders (or move them temporarily).
+2. Run game once.
+3. **Expected**: default JSON assets are recreated automatically.
+
+### Test 2: Survivor item loadout
+1. In main menu choose item + add-ons, or use:
+   - `item_set medkit`
+   - `item_addon_a bandage_roll`
+   - `item_addon_b surgical_tape`
+2. Run `item_dump`.
+3. **Expected**: selected IDs and non-zero charges are shown.
+
+### Test 3: Medkit usage
+1. Injure survivor.
+2. Hold item-use condition (no active interact target; hold interact key).
+3. **Expected**: medkit charges decrease, heal progresses, survivor reaches `Healthy`.
+
+### Test 4: Toolbox usage
+1. Equip `toolbox`, start repairing generator.
+2. Hold repair.
+3. **Expected**: generator progress increases faster while toolbox charges are consumed.
+
+### Test 5: Flashlight usage
+1. Equip `flashlight`.
+2. Aim at killer and hold use.
+3. **Expected**: after exposure window killer gets short stun; flashlight cooldown starts.
+
+### Test 6: Map usage
+1. Equip `map`.
+2. Press use (with no interact target).
+3. **Expected**: map pulse message appears and nearby trap count is reported.
+
+### Test 7: Bear trap power
+1. Equip killer power `bear_trap` (or choose killer with this power).
+2. Place traps with interact (no other interaction target) or `trap_spawn`.
+3. Walk survivor into trap.
+4. **Expected**: survivor enters `Trapped`, movement blocked, HUD shows attempts/chance.
+5. Press `E` repeatedly as trapped survivor.
+6. **Expected**: escape chance rises; on success state becomes `Injured`.
+
+### Test 8: Trap add-ons
+1. Set:
+   - `power_set bear_trap`
+   - `power_addon_a tighter_springs`
+   - `power_addon_b serrated_jaws`
+2. Trigger trap and attempt escape.
+3. **Expected**:
+   - slower chance growth / more attempts with `tighter_springs`
+   - escape message includes serrated-jaws bleed feedback
+
+### Test 9: Multiplayer replication smoke
+1. Start host + client.
+2. Place trap on host, step in on client survivor.
+3. **Expected**: both peers show same trap/survivor trapped state and attempt/chance progression.
+4. Run `power_dump` and `item_dump` on host.
+5. **Expected**: values are coherent with HUD and observed behavior.

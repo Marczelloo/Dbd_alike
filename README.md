@@ -613,6 +613,68 @@ Map assets now include authored light instances used by both editor viewport and
   - light shading is visible in `Filled` viewport mode
   - `Auto Lit Preview` in editor forces `Filled` when lights are active
 
+## Update: Loadouts (Items/Add-ons/Powers) + Bear Trap
+
+New data-driven gameplay catalog is now available:
+
+- `assets/items/*.json`
+- `assets/addons/*.json`
+- `assets/powers/*.json`
+- `assets/characters/survivors/*.json`
+- `assets/characters/killers/*.json`
+
+Default assets are auto-generated on startup if missing.
+
+### Survivor Item Loadout
+
+- 1 item max + up to 2 add-ons.
+- Base items implemented:
+  - `medkit`
+  - `toolbox`
+  - `flashlight`
+  - `map`
+
+### Killer Power Loadout
+
+- 1 power max + up to 2 add-ons.
+- Implemented power:
+  - `bear_trap`
+- Example power add-ons:
+  - `serrated_jaws`
+  - `tighter_springs`
+
+### Character Roster
+
+- Survivors and killers are selected by character IDs from JSON assets.
+- Survivors share gameplay rules; killers can define `power_id`.
+- Main menu now includes character and loadout selectors (custom UI).
+
+### Multiplayer Replication
+
+- Snapshot now includes:
+  - selected survivor/killer character IDs
+  - survivor item/power loadout IDs
+  - survivor item runtime (charges/active)
+  - bear trap state list (position/state/escape data)
+
+### New Console Commands
+
+- `item_set <id|none>`
+- `item_addon_a <id|none>`
+- `item_addon_b <id|none>`
+- `power_set <id|none>`
+- `power_addon_a <id|none>`
+- `power_addon_b <id|none>`
+- `addon_set_a <id|none>` (alias for current role)
+- `addon_set_b <id|none>` (alias for current role)
+- `item_dump`
+- `power_dump`
+- `set_survivor <characterId>`
+- `set_killer <characterId>`
+- `trap_spawn`
+- `trap_clear`
+- `trap_debug on|off`
+
 ## Update: FX System MVP (VFX + Gameplay Hooks)
 
 Nowy moduł `engine/fx` dodaje data-driven system efektów:
