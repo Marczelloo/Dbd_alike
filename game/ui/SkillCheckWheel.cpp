@@ -15,7 +15,7 @@ SkillCheckWheel::SkillCheckWheel()
 
 bool SkillCheckWheel::Initialize(engine::ui::UiSystem* uiSystem, engine::render::Renderer* renderer)
 {
-    if (!uiSystem || !renderer)
+    if (!uiSystem)
     {
         return false;
     }
@@ -42,6 +42,7 @@ void SkillCheckWheel::Update(float deltaSeconds)
         return;
     }
 
+    // Rotate needle - the game handles timeout/fail logic
     m_state.needleAngle += m_state.rotationSpeed * deltaSeconds;
     if (m_state.needleAngle >= 360.0F)
     {
@@ -51,34 +52,28 @@ void SkillCheckWheel::Update(float deltaSeconds)
 
 void SkillCheckWheel::Render()
 {
-    if (!m_ui || !m_renderer || !m_state.active)
+    if (!m_ui)
     {
-        if (m_state.hitFeedbackTime > 0.0F && m_ui)
-        {
-            const int screenWidth = m_ui->ScreenWidth();
-            const int screenHeight = m_ui->ScreenHeight();
-            const float centerX = static_cast<float>(screenWidth) / 2.0F;
-            const float centerY = static_cast<float>(screenHeight) / 2.0F;
-            DrawHitFeedback(centerX, centerY);
-        }
         return;
     }
 
     const int screenWidth = m_ui->ScreenWidth();
     const int screenHeight = m_ui->ScreenHeight();
-    const float scale = m_ui->Scale();
     const float centerX = static_cast<float>(screenWidth) / 2.0F;
     const float centerY = static_cast<float>(screenHeight) / 2.0F;
 
-    DrawWheel(centerX, centerY);
-    DrawSuccessZoneArc(centerX, centerY, m_state.successZoneStart, m_state.successZoneEnd, false);
-    
-    if (m_state.bonusZoneEnd > m_state.bonusZoneStart)
+    if (m_state.active)
     {
-        DrawSuccessZoneArc(centerX, centerY, m_state.bonusZoneStart, m_state.bonusZoneEnd, true);
+        DrawWheel(centerX, centerY);
+        DrawSuccessZoneArc(centerX, centerY, m_state.successZoneStart, m_state.successZoneEnd, false);
+        
+        if (m_state.bonusZoneEnd > m_state.bonusZoneStart)
+        {
+            DrawSuccessZoneArc(centerX, centerY, m_state.bonusZoneStart, m_state.bonusZoneEnd, true);
+        }
+        
+        DrawNeedle(centerX, centerY, m_state.needleAngle);
     }
-    
-    DrawNeedle(centerX, centerY, m_state.needleAngle);
 
     if (m_state.hitFeedbackTime > 0.0F)
     {
@@ -88,13 +83,26 @@ void SkillCheckWheel::Render()
 
 void SkillCheckWheel::TriggerSkillCheck(float successStart01, float successEnd01, float bonusWidth01)
 {
+    float successStart = successStart01 * 360.0F;
+    float successEnd = successEnd01 * 360.0F;
+    float successWidth = successEnd - successStart;
+    
+    const float reactionTime = successWidth / m_state.rotationSpeed;
+    if (reactionTime < kMinReactionTime)
+    {
+        const float requiredWidth = kMinReactionTime * m_state.rotationSpeed;
+        const float center = (successStart + successEnd) / 2.0F;
+        successStart = std::max(0.0F, center - requiredWidth / 2.0F);
+        successEnd = std::min(360.0F, center + requiredWidth / 2.0F);
+        successWidth = successEnd - successStart;
+    }
+    
     m_state.active = true;
     m_state.needleAngle = 0.0F;
-    m_state.successZoneStart = successStart01 * 360.0F;
-    m_state.successZoneEnd = successEnd01 * 360.0F;
+    m_state.successZoneStart = successStart;
+    m_state.successZoneEnd = successEnd;
     
-    const float successWidth = m_state.successZoneEnd - m_state.successZoneStart;
-    const float bonusCenter = (m_state.successZoneStart + m_state.successZoneEnd) / 2.0F;
+    const float bonusCenter = (successStart + successEnd) / 2.0F;
     const float bonusHalfWidth = (bonusWidth01 * successWidth) / 2.0F;
     
     m_state.bonusZoneStart = bonusCenter - bonusHalfWidth;
@@ -108,79 +116,51 @@ void SkillCheckWheel::TriggerSkillCheck(float successStart01, float successEnd01
 
 void SkillCheckWheel::HandleInput()
 {
-    if (!m_state.active)
-    {
-        return;
-    }
-
-    static bool spaceWasPressed = false;
-    bool spaceIsPressed = glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_SPACE) == GLFW_PRESS;
-    
-    if (spaceIsPressed && !spaceWasPressed)
-    {
-        float needle = m_state.needleAngle;
-        while (needle >= 360.0F) needle -= 360.0F;
-        while (needle < 0.0F) needle += 360.0F;
-        
-        bool inBonus = (needle >= m_state.bonusZoneStart && needle <= m_state.bonusZoneEnd);
-        bool inSuccess = (needle >= m_state.successZoneStart && needle <= m_state.successZoneEnd);
-        
-        if (inBonus)
-        {
-            EndSkillCheck(true, true);
-        }
-        else if (inSuccess)
-        {
-            EndSkillCheck(true, false);
-        }
-        else
-        {
-            EndSkillCheck(false, false);
-        }
-    }
-    
-    spaceWasPressed = spaceIsPressed;
+    // Input is handled by GameplaySystems - this wheel is visualization only
 }
 
 void SkillCheckWheel::DrawWheel(float centerX, float centerY)
 {
     const float scale = m_ui->Scale();
     const float radius = m_state.wheelRadius * scale;
+    const float innerRadius = radius * 0.65F;
     
-    for (int i = 0; i < kCircleSegments; ++i)
-    {
-        float a1 = static_cast<float>(i) / kCircleSegments * 6.28318F;
-        float a2 = static_cast<float>(i + 1) / kCircleSegments * 6.28318F;
-        
-        glm::vec3 p1{centerX + std::cos(a1) * radius, centerY + std::sin(a1) * radius, 0.0F};
-        glm::vec3 p2{centerX + std::cos(a2) * radius, centerY + std::sin(a2) * radius, 0.0F};
-        
-        m_renderer->DrawOverlayLine(p1, p2, glm::vec3{0.3F, 0.3F, 0.35F});
-    }
+    // Outer ring - dark background
+    engine::ui::UiRect outerRect{
+        centerX - radius,
+        centerY - radius,
+        radius * 2.0F,
+        radius * 2.0F
+    };
+    m_ui->DrawRect(outerRect, glm::vec4{0.1F, 0.1F, 0.12F, 0.95F});
     
-    const float innerRadius = radius * 0.7F;
-    for (int i = 0; i < kCircleSegments; ++i)
-    {
-        float a1 = static_cast<float>(i) / kCircleSegments * 6.28318F;
-        float a2 = static_cast<float>(i + 1) / kCircleSegments * 6.28318F;
-        
-        glm::vec3 p1{centerX + std::cos(a1) * innerRadius, centerY + std::sin(a1) * innerRadius, 0.0F};
-        glm::vec3 p2{centerX + std::cos(a2) * innerRadius, centerY + std::sin(a2) * innerRadius, 0.0F};
-        
-        m_renderer->DrawOverlayLine(p1, p2, glm::vec3{0.2F, 0.2F, 0.22F});
-    }
+    // Inner circle - darker
+    engine::ui::UiRect innerRect{
+        centerX - innerRadius,
+        centerY - innerRadius,
+        innerRadius * 2.0F,
+        innerRadius * 2.0F
+    };
+    m_ui->DrawRect(innerRect, glm::vec4{0.05F, 0.05F, 0.06F, 0.95F});
 }
 
 void SkillCheckWheel::DrawSuccessZoneArc(float centerX, float centerY, float startAngle, float endAngle, bool isBonus)
 {
     const float scale = m_ui->Scale();
-    const float outerRadius = m_state.wheelRadius * scale * 0.95F;
-    const float innerRadius = m_state.wheelRadius * scale * 0.7F;
+    const float radius = m_state.wheelRadius * scale;
     
-    glm::vec3 color = isBonus ? glm::vec3{0.2F, 0.9F, 0.3F} : glm::vec3{0.3F, 0.7F, 0.4F};
+    const float startRad = (startAngle - 90.0F) * 3.14159265F / 180.0F;
+    const float endRad = (endAngle - 90.0F) * 3.14159265F / 180.0F;
     
-    const float startRad = startAngle * 3.14159265F / 180.0F - 1.5708F;
-    const float endRad = endAngle * 3.14159265F / 180.0F - 1.5708F;
+    const float outerRadius = radius * 0.95F;
+    const float innerRadius = radius * 0.65F;
+    const float arcWidth = outerRadius - innerRadius;
+    
+    glm::vec4 color = isBonus 
+        ? glm::vec4{0.2F, 0.9F, 0.3F, 0.95F}
+        : glm::vec4{0.3F, 0.7F, 0.4F, 0.9F};
+    
+    // Draw arc as connected trapezoids
     const int segments = 16;
     const float angleStep = (endRad - startRad) / static_cast<float>(segments);
     
@@ -188,43 +168,58 @@ void SkillCheckWheel::DrawSuccessZoneArc(float centerX, float centerY, float sta
     {
         float a1 = startRad + static_cast<float>(i) * angleStep;
         float a2 = startRad + static_cast<float>(i + 1) * angleStep;
+        float midAngle = (a1 + a2) / 2.0F;
         
-        glm::vec3 outer1{centerX + std::cos(a1) * outerRadius, centerY + std::sin(a1) * outerRadius, 0.0F};
-        glm::vec3 outer2{centerX + std::cos(a2) * outerRadius, centerY + std::sin(a2) * outerRadius, 0.0F};
+        // Calculate the center and size of this segment
+        float midRadius = (outerRadius + innerRadius) / 2.0F;
+        float arcLength = midRadius * std::abs(angleStep);
         
-        m_renderer->DrawOverlayLine(outer1, outer2, color);
+        // Make segment at least 8 pixels wide for visibility
+        float segWidth = std::max(arcLength, 8.0F * scale);
+        float segHeight = arcWidth;
         
-        glm::vec3 inner1{centerX + std::cos(a1) * innerRadius, centerY + std::sin(a1) * innerRadius, 0.0F};
-        glm::vec3 inner2{centerX + std::cos(a2) * innerRadius, centerY + std::sin(a2) * innerRadius, 0.0F};
+        float segX = centerX + std::cos(midAngle) * midRadius - segWidth / 2.0F;
+        float segY = centerY + std::sin(midAngle) * midRadius - segHeight / 2.0F;
         
-        m_renderer->DrawOverlayLine(inner1, inner2, color);
-        
-        m_renderer->DrawOverlayLine(outer1, inner1, color);
+        engine::ui::UiRect segRect{segX, segY, segWidth, segHeight};
+        m_ui->DrawRect(segRect, color);
     }
 }
 
 void SkillCheckWheel::DrawNeedle(float centerX, float centerY, float angle)
 {
     const float scale = m_ui->Scale();
-    const float length = m_state.wheelRadius * scale;
-    const float angleRad = angle * 3.14159265F / 180.0F - 1.5708F;
+    const float radius = m_state.wheelRadius * scale;
     
-    glm::vec3 start{centerX, centerY, 0.0F};
-    glm::vec3 end{centerX + std::cos(angleRad) * length, centerY + std::sin(angleRad) * length, 0.0F};
+    // Needle angle starts from top
+    const float angleRad = (angle - 90.0F) * 3.14159265F / 180.0F;
+    const float needleLength = radius * 0.95F;
     
-    m_renderer->DrawOverlayLine(start, end, glm::vec3{1.0F, 1.0F, 1.0F});
+    // Needle tip position
+    const float tipX = centerX + std::cos(angleRad) * needleLength;
+    const float tipY = centerY + std::sin(angleRad) * needleLength;
     
-    const float tipRadius = 10.0F * scale;
-    for (int i = 0; i < 8; ++i)
-    {
-        float a1 = static_cast<float>(i) / 8.0F * 6.28318F;
-        float a2 = static_cast<float>(i + 1) / 8.0F * 6.28318F;
-        
-        glm::vec3 p1{end.x + std::cos(a1) * tipRadius, end.y + std::sin(a1) * tipRadius, 0.0F};
-        glm::vec3 p2{end.x + std::cos(a2) * tipRadius, end.y + std::sin(a2) * tipRadius, 0.0F};
-        
-        m_renderer->DrawOverlayLine(p1, p2, glm::vec3{1.0F, 0.3F, 0.3F});
-    }
+    // Draw needle as a thick line (rectangle from center to tip)
+    const float needleWidth = 8.0F * scale;
+    
+    // Simple approach: draw a small rect at tip and a line
+    engine::ui::UiRect needleBody{
+        centerX - needleWidth / 2.0F,
+        centerY,
+        needleWidth,
+        needleLength
+    };
+    m_ui->DrawRect(needleBody, glm::vec4{0.95F, 0.95F, 0.95F, 1.0F});
+    
+    // Red circle at tip
+    const float tipSize = 18.0F * scale;
+    engine::ui::UiRect tipRect{
+        tipX - tipSize / 2.0F,
+        tipY - tipSize / 2.0F,
+        tipSize,
+        tipSize
+    };
+    m_ui->DrawRect(tipRect, glm::vec4{0.95F, 0.2F, 0.2F, 1.0F});
 }
 
 void SkillCheckWheel::DrawHitFeedback(float centerX, float centerY)
@@ -240,21 +235,21 @@ void SkillCheckWheel::DrawHitFeedback(float centerX, float centerY)
     if (m_state.hitBonus)
     {
         feedbackText = "GREAT!";
-        textColor = glm::vec4{0.2F, 0.9F, 0.4F, alpha};
+        textColor = glm::vec4{0.2F, 0.95F, 0.4F, alpha};
     }
     else if (m_state.hitSuccess)
     {
         feedbackText = "GOOD";
-        textColor = glm::vec4{0.4F, 0.8F, 0.5F, alpha};
+        textColor = glm::vec4{0.4F, 0.85F, 0.5F, alpha};
     }
     else
     {
         feedbackText = "MISS";
-        textColor = glm::vec4{0.9F, 0.2F, 0.2F, alpha};
+        textColor = glm::vec4{0.95F, 0.25F, 0.25F, alpha};
     }
     
     const float textY = centerY + m_state.wheelRadius * scale + 50.0F * scale;
-    m_ui->DrawTextLabel(centerX - 40.0F * scale, textY, feedbackText, textColor, 1.8F * scale);
+    m_ui->DrawTextLabel(centerX - 50.0F * scale, textY, feedbackText, textColor, 1.8F * scale);
 }
 
 void SkillCheckWheel::EndSkillCheck(bool success, bool bonus)

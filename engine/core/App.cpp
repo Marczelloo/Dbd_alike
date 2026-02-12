@@ -601,6 +601,16 @@ bool App::Run()
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
         }
+        else if (inLobby)
+        {
+            m_renderer.SetLightingEnabled(true);
+            const float aspect = m_window.FramebufferHeight() > 0
+                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
+                                     : (16.0F / 9.0F);
+            viewProjection = m_lobbyScene.BuildViewProjection(aspect);
+            m_renderer.SetCameraWorldPosition(m_lobbyScene.CameraPosition());
+            m_lobbyScene.Render3D();
+        }
         else
         {
             m_renderer.SetLightingEnabled(true);
@@ -719,14 +729,27 @@ bool App::Run()
             
             if (hudState.skillCheckActive)
             {
-                m_skillCheckWheel.GetState().active = true;
-                m_skillCheckWheel.GetState().successZoneStart = hudState.skillCheckSuccessStart;
-                m_skillCheckWheel.GetState().successZoneEnd = hudState.skillCheckSuccessEnd;
+                if (!m_skillCheckWheel.IsActive())
+                {
+                    m_skillCheckWheel.TriggerSkillCheck(
+                        hudState.skillCheckSuccessStart,
+                        hudState.skillCheckSuccessEnd,
+                        0.15F
+                    );
+                }
+                // Sync needle position from game state
                 m_skillCheckWheel.GetState().needleAngle = hudState.skillCheckNeedle * 360.0F;
+            }
+            else
+            {
+                if (m_skillCheckWheel.IsActive())
+                {
+                    // Skill check ended in game - show feedback
+                    m_skillCheckWheel.GetState().active = false;
+                }
             }
             m_skillCheckWheel.Update(static_cast<float>(m_time.DeltaSeconds()));
             m_skillCheckWheel.Render();
-            m_skillCheckWheel.HandleInput();
             
             game::ui::GeneratorProgressState genState;
             genState.isActive = hudState.repairingGenerator || hudState.generatorsCompleted > 0;
@@ -739,7 +762,7 @@ bool App::Run()
         else if (m_appMode == AppMode::Lobby)
         {
             m_lobbyScene.Update(static_cast<float>(m_time.DeltaSeconds()));
-            m_lobbyScene.Render();
+            m_lobbyScene.RenderUI();
             m_lobbyScene.HandleInput();
         }
 
@@ -802,7 +825,8 @@ bool App::Run()
         m_ui.EndFrame();
 
         // Build HUD state before rendering toolbar (needed for game stats display)
-        const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        hudState.isInGame = (m_appMode == AppMode::InGame);
 
         // Render developer toolbar LAST to be on top of everything
         if (m_appMode == AppMode::InGame)
@@ -3522,11 +3546,76 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Spacer(8.0F * scale);
     if (m_ui.Button("host_btn", "HOST GAME"))
     {
-        StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
+        // Host goes to lobby
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 1;
+        localPlayer.name = "Host";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = true;
+        localPlayer.isConnected = true;
+        
+        // Set available perks based on role
+        const bool isSurvivor = (roleName == "survivor");
+        const auto& perkSystem = m_gameplay.GetPerkSystem();
+        const auto availablePerks = isSurvivor 
+            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
+            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+        std::vector<std::string> perkIds = availablePerks;
+        std::vector<std::string> perkNames;
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        
+        m_lobbyScene.SetPlayers({localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
+            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
+        m_lobbyScene.EnterLobby();
     }
     if (m_ui.Button("join_btn", "JOIN GAME"))
     {
-        StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
+        // Join goes to lobby (simulated for now)
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer hostPlayer;
+        hostPlayer.netId = 1;
+        hostPlayer.name = "Host";
+        hostPlayer.selectedRole = (roleName == "survivor") ? "killer" : "survivor";
+        hostPlayer.isHost = true;
+        hostPlayer.isConnected = true;
+        
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 2;
+        localPlayer.name = "Player";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = false;
+        localPlayer.isConnected = true;
+        
+        // Set available perks based on role
+        const bool isSurvivor = (roleName == "survivor");
+        const auto& perkSystem = m_gameplay.GetPerkSystem();
+        const auto availablePerks = isSurvivor 
+            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
+            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+        std::vector<std::string> perkIds = availablePerks;
+        std::vector<std::string> perkNames;
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        
+        m_lobbyScene.SetPlayers({hostPlayer, localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
+            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
+        m_lobbyScene.EnterLobby();
     }
 
     m_ui.Spacer(20.0F * scale);

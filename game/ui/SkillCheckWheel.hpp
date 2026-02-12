@@ -74,7 +74,9 @@ private:
     void (*m_onBonus)() = nullptr;
     void (*m_onFail)() = nullptr;
 
-    static constexpr float kFeedbackDuration = 0.4F;
+    static constexpr float kFeedbackDuration = 1.0F;
+    static constexpr float kMinReactionTime = 0.5F;
+    static constexpr float kSuccessZoneMargin = 0.08F;
     static constexpr int kCircleSegments = 64;
 };
 

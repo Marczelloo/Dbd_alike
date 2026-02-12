@@ -4752,15 +4752,36 @@ void GameplaySystems::UpdateGeneratorRepair(bool holdingRepair, bool skillCheckP
 
 void GameplaySystems::StopGeneratorRepair()
 {
-    m_activeRepairGenerator = 0;
-    if (m_skillCheckMode == SkillCheckMode::Generator)
+    if (m_skillCheckActive && m_skillCheckMode == SkillCheckMode::Generator)
     {
+        auto generatorIt = m_world.Generators().find(m_activeRepairGenerator);
+        if (generatorIt != m_world.Generators().end())
+        {
+            generatorIt->second.progress = glm::clamp(generatorIt->second.progress - 0.1F, 0.0F, 1.0F);
+        }
+        
+        glm::vec3 fxOrigin{0.0F, 1.0F, 0.0F};
+        glm::vec3 fxForward{0.0F, 1.0F, 0.0F};
+        const auto generatorTransformIt = m_world.Transforms().find(m_activeRepairGenerator);
+        if (generatorTransformIt != m_world.Transforms().end())
+        {
+            fxOrigin = generatorTransformIt->second.position + glm::vec3{0.0F, 0.7F, 0.0F};
+            fxForward = generatorTransformIt->second.forward;
+        }
+        
+        const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
+                                                                      : engine::fx::FxNetMode::Local;
+        SpawnGameplayFx("blood_spray", fxOrigin, -fxForward, netMode);
+        AddRuntimeMessage("Skill Check abandoned (penalty)", 1.3F);
+        
         m_skillCheckActive = false;
         m_skillCheckNeedle = 0.0F;
         m_skillCheckSuccessStart = 0.0F;
         m_skillCheckSuccessEnd = 0.0F;
         m_skillCheckMode = SkillCheckMode::None;
     }
+    
+    m_activeRepairGenerator = 0;
     ScheduleNextSkillCheck();
 }
 

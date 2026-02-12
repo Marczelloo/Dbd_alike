@@ -8,6 +8,7 @@
 
 #include <glm/vec3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace engine::ui
 {
@@ -64,6 +65,7 @@ public:
     using ReadyChangedCallback = std::function<void(bool ready)>;
     using RoleChangedCallback = std::function<void(const std::string& role)>;
     using CharacterChangedCallback = std::function<void(const std::string& characterId)>;
+    using PerksChangedCallback = std::function<void(const std::array<std::string, 4>& perks)>;
 
     LobbyScene();
     ~LobbyScene();
@@ -72,7 +74,8 @@ public:
     void Shutdown();
 
     void Update(float deltaSeconds);
-    void Render();
+    void Render3D();
+    void RenderUI();
     void HandleInput();
     
     void EnterLobby();
@@ -89,9 +92,18 @@ public:
     void SetReadyChangedCallback(ReadyChangedCallback callback) { m_onReadyChanged = std::move(callback); }
     void SetRoleChangedCallback(RoleChangedCallback callback) { m_onRoleChanged = std::move(callback); }
     void SetCharacterChangedCallback(CharacterChangedCallback callback) { m_onCharacterChanged = std::move(callback); }
+    void SetPerksChangedCallback(PerksChangedCallback callback) { m_onPerksChanged = std::move(callback); }
+    
+    void SetAvailablePerks(const std::vector<std::string>& perkIds, const std::vector<std::string>& perkNames) {
+        m_availablePerkIds = perkIds;
+        m_availablePerkNames = perkNames;
+    }
 
     [[nodiscard]] const LobbySceneState& GetState() const { return m_state; }
     [[nodiscard]] bool IsInLobby() const { return m_isInLobby; }
+    
+    [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
+    [[nodiscard]] glm::vec3 CameraPosition() const;
 
 private:
     void UpdateCamera(float deltaSeconds);
@@ -109,7 +121,12 @@ private:
     void DrawFireParticle(const glm::vec3& position, float size, float alpha);
     void DrawGroundPlane();
     void DrawCampfire();
+    void DrawEnvironment();
+    void DrawTrees();
+    void DrawRocks();
+    void DrawLogs();
     void DrawPlayerModels();
+    void DrawPlayerBody(const LobbyPlayer& player);
     
     void DrawUIPanel(float x, float y, float width, float height);
     void DrawPlayerSlot(float x, float y, float width, float height, int playerIndex);
@@ -127,8 +144,8 @@ private:
     float m_cameraDistance = 8.0F;
     float m_cameraTargetHeight = 1.0F;
     glm::vec3 m_cameraTarget{0.0F, 0.0F, 0.0F};
-    glm::mat4 m_viewMatrix{1.0F};
-    glm::mat4 m_projectionMatrix{1.0F};
+    mutable glm::mat4 m_viewMatrix{1.0F};
+    mutable glm::mat4 m_projectionMatrix{1.0F};
     
     float m_fireTime = 0.0F;
     struct FireParticle
@@ -145,6 +162,11 @@ private:
     ReadyChangedCallback m_onReadyChanged;
     RoleChangedCallback m_onRoleChanged;
     CharacterChangedCallback m_onCharacterChanged;
+    PerksChangedCallback m_onPerksChanged;
+    
+    std::vector<std::string> m_availablePerkIds;
+    std::vector<std::string> m_availablePerkNames;
+    int m_selectedPerkSlot = -1;
     
     static constexpr int kMaxPlayers = 4;
     static constexpr float kFireRadius = 3.0F;

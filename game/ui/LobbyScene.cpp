@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <random>
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include "engine/ui/UiSystem.hpp"
 #include "engine/render/Renderer.hpp"
 #include "engine/platform/Input.hpp"
@@ -80,17 +82,6 @@ void LobbyScene::Update(float deltaSeconds)
     }
 }
 
-void LobbyScene::Render()
-{
-    if (!m_isInLobby || !m_ui)
-    {
-        return;
-    }
-    
-    Render3DScene();
-    RenderLobbyUI();
-}
-
 void LobbyScene::HandleInput()
 {
     if (!m_ui || !m_input || !m_isInLobby) return;
@@ -109,12 +100,35 @@ void LobbyScene::HandleInput()
     const float buttonX = (screenWidth - buttonWidth) / 2.0F;
     const float buttonY = screenHeight - buttonHeight - 30.0F * scale;
     
-    if (isMouseOver(buttonX, buttonY, buttonWidth, buttonHeight) && m_input->IsMousePressed(0))
+    // Calculate button positions (same as render)
+    const float btnWidth = 180.0F * scale;
+    const float btnHeight = 50.0F * scale;
+    const float forceBtnWidth = 140.0F * scale;
+    const float totalBtnWidth = btnWidth + 10.0F * scale + forceBtnWidth;
+    const float btnStartX = (screenWidth - totalBtnWidth) / 2.0F;
+    
+    if (isMouseOver(btnStartX, buttonY, btnWidth, btnHeight) && m_input->IsMousePressed(0))
     {
         const bool isCurrentlyReady = (m_state.localPlayerIndex >= 0 && 
                                        m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
                                        m_state.players[m_state.localPlayerIndex].isReady);
         SetLocalPlayerReady(!isCurrentlyReady);
+    }
+    
+    // Force Start button (available to everyone)
+    if (!m_state.countdownActive)
+    {
+        const float forceBtnX = btnStartX + btnWidth + 10.0F * scale;
+        
+        if (isMouseOver(forceBtnX, buttonY, forceBtnWidth, btnHeight) && m_input->IsMousePressed(0))
+        {
+            // Force start match immediately
+            if (m_onStartMatch)
+            {
+                auto& localPlayer = m_state.players[m_state.localPlayerIndex];
+                m_onStartMatch(m_state.selectedMap, localPlayer.selectedRole, m_state.selectedPerks);
+            }
+        }
     }
     
     if (m_state.localPlayerIndex >= 0 && m_state.localPlayerIndex < static_cast<int>(m_state.players.size()))
@@ -136,6 +150,83 @@ void LobbyScene::HandleInput()
         if (isMouseOver(panelX + 20.0F * scale + roleButtonWidth + 10.0F * scale, roleY, roleButtonWidth, roleButtonHeight) && m_input->IsMousePressed(0))
         {
             SetLocalPlayerRole("killer");
+        }
+        
+        // Perk slot positions (same as DrawPerkSlots)
+        const float perkY = panelY + 150.0F * scale;
+        const float perkStartX = panelX + 20.0F * scale;
+        const float slotSize = 60.0F * scale;
+        const float spacing = 8.0F * scale;
+        const float dropdownWidth = 160.0F * scale;
+        const float optionHeight = 22.0F * scale;
+        
+        if (m_selectedPerkSlot >= 0 && m_selectedPerkSlot < 4 && !m_availablePerkIds.empty())
+        {
+            const float dropdownY = perkY + slotSize + 5.0F * scale;
+            const float slotXSelected = perkStartX + m_selectedPerkSlot * (slotSize + spacing);
+            const float dropdownX = std::min(slotXSelected, static_cast<float>(screenWidth) - dropdownWidth - 10.0F * scale);
+            const std::size_t numOptions = std::min(m_availablePerkIds.size() + 1, static_cast<std::size_t>(10));
+            const float dropdownHeight = static_cast<float>(numOptions) * optionHeight + 10.0F * scale;
+            
+            if (m_input->IsMousePressed(0))
+            {
+                // Check if clicked in dropdown area
+                if (isMouseOver(dropdownX, dropdownY, dropdownWidth, dropdownHeight))
+                {
+                    // "None" option
+                    if (isMouseOver(dropdownX + 3.0F * scale, dropdownY + 5.0F * scale, dropdownWidth - 6.0F * scale, optionHeight))
+                    {
+                        m_state.selectedPerks[m_selectedPerkSlot] = "";
+                        if (m_onPerksChanged) m_onPerksChanged(m_state.selectedPerks);
+                        m_selectedPerkSlot = -1;
+                    }
+                    else
+                    {
+                        // Perk options - check which one was clicked
+                        const float clickY = mousePos.y - (dropdownY + 5.0F * scale + optionHeight);
+                        const int clickedIndex = static_cast<int>(clickY / optionHeight);
+                        
+                        if (clickY >= 0.0F && clickedIndex >= 0 && static_cast<std::size_t>(clickedIndex) < m_availablePerkIds.size())
+                        {
+                            m_state.selectedPerks[m_selectedPerkSlot] = m_availablePerkIds[clickedIndex];
+                            if (m_onPerksChanged) m_onPerksChanged(m_state.selectedPerks);
+                            m_selectedPerkSlot = -1;
+                        }
+                    }
+                }
+                else
+                {
+                    // Click outside dropdown - check if clicked on another slot
+                    bool clickedSlot = false;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        const float sx = perkStartX + i * (slotSize + spacing);
+                        if (isMouseOver(sx, perkY, slotSize, slotSize))
+                        {
+                            m_selectedPerkSlot = i;
+                            clickedSlot = true;
+                            break;
+                        }
+                    }
+                    if (!clickedSlot)
+                    {
+                        m_selectedPerkSlot = -1;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // No dropdown - check for slot clicks
+            for (int i = 0; i < 4; ++i)
+            {
+                const float slotX = perkStartX + i * (slotSize + spacing);
+                if (isMouseOver(slotX, perkY, slotSize, slotSize) && m_input->IsMousePressed(0))
+                {
+                    m_selectedPerkSlot = i;
+                    break;
+                }
+            }
         }
     }
     
@@ -237,6 +328,27 @@ void LobbyScene::UpdateCamera(float deltaSeconds)
     m_cameraTarget = glm::vec3{0.0F, 0.5F, 0.0F};
 }
 
+glm::vec3 LobbyScene::CameraPosition() const
+{
+    const float angleRad = glm::radians(m_cameraAngle);
+    return glm::vec3{
+        std::cos(angleRad) * m_cameraDistance,
+        m_cameraHeight,
+        std::sin(angleRad) * m_cameraDistance
+    };
+}
+
+glm::mat4 LobbyScene::BuildViewProjection(float aspectRatio) const
+{
+    const glm::vec3 cameraPos = CameraPosition();
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    
+    m_viewMatrix = glm::lookAt(cameraPos, m_cameraTarget, up);
+    m_projectionMatrix = glm::perspective(glm::radians(45.0F), aspectRatio, 0.1F, 100.0F);
+    
+    return m_projectionMatrix * m_viewMatrix;
+}
+
 void LobbyScene::UpdateFireParticles(float deltaSeconds)
 {
     m_fireTime += deltaSeconds;
@@ -302,6 +414,7 @@ void LobbyScene::Render3DScene()
     if (!m_renderer) return;
     
     DrawGroundPlane();
+    DrawEnvironment();
     DrawCampfire();
     
     for (const auto& particle : m_fireParticles)
@@ -311,6 +424,12 @@ void LobbyScene::Render3DScene()
     }
     
     DrawPlayerModels();
+}
+
+void LobbyScene::Render3D()
+{
+    if (!m_isInLobby) return;
+    Render3DScene();
 }
 
 void LobbyScene::RenderLobbyUI()
@@ -336,6 +455,12 @@ void LobbyScene::RenderLobbyUI()
     {
         RenderCountdown();
     }
+}
+
+void LobbyScene::RenderUI()
+{
+    if (!m_isInLobby) return;
+    RenderLobbyUI();
 }
 
 void LobbyScene::RenderPlayerSlots()
@@ -386,23 +511,39 @@ void LobbyScene::RenderReadyButton()
     const int screenWidth = m_ui->ScreenWidth();
     const int screenHeight = m_ui->ScreenHeight();
     
-    const float buttonWidth = 200.0F * scale;
+    const float buttonWidth = 180.0F * scale;
     const float buttonHeight = 50.0F * scale;
-    const float buttonX = (screenWidth - buttonWidth) / 2.0F;
+    const float forceButtonWidth = 140.0F * scale;
+    const float totalButtonWidth = buttonWidth + 10.0F * scale + forceButtonWidth;
+    const float buttonStartX = (screenWidth - totalButtonWidth) / 2.0F;
     const float buttonY = screenHeight - buttonHeight - 30.0F * scale;
     
     const bool isLocalReady = (m_state.localPlayerIndex >= 0 && 
                                m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
                                m_state.players[m_state.localPlayerIndex].isReady);
     
-    engine::ui::UiRect buttonRect{buttonX, buttonY, buttonWidth, buttonHeight};
+    // READY button
+    engine::ui::UiRect buttonRect{buttonStartX, buttonY, buttonWidth, buttonHeight};
     glm::vec4 buttonColor = isLocalReady ? theme.colorSuccess : theme.colorAccent;
     buttonColor.a = 0.9F;
     m_ui->DrawRect(buttonRect, buttonColor);
     m_ui->DrawRectOutline(buttonRect, 2.0F, theme.colorPanelBorder);
     
     const std::string buttonText = isLocalReady ? "READY" : "READY UP";
-    m_ui->DrawTextLabel(buttonX + 20.0F * scale, buttonY + 15.0F * scale, buttonText, theme.colorText, 1.2F * scale);
+    m_ui->DrawTextLabel(buttonStartX + 15.0F * scale, buttonY + 15.0F * scale, buttonText, theme.colorText, 1.2F * scale);
+    
+    // Force Start button (available to everyone when countdown not active)
+    if (!m_state.countdownActive)
+    {
+        const float forceButtonX = buttonStartX + buttonWidth + 10.0F * scale;
+        
+        engine::ui::UiRect forceButtonRect{forceButtonX, buttonY, forceButtonWidth, buttonHeight};
+        glm::vec4 forceButtonColor = theme.colorDanger;
+        forceButtonColor.a = 0.9F;
+        m_ui->DrawRect(forceButtonRect, forceButtonColor);
+        m_ui->DrawRectOutline(forceButtonRect, 2.0F, theme.colorPanelBorder);
+        m_ui->DrawTextLabel(forceButtonX + 8.0F * scale, buttonY + 15.0F * scale, "FORCE START", theme.colorText, 1.0F * scale);
+    }
 }
 
 void LobbyScene::RenderCountdown()
@@ -451,49 +592,254 @@ void LobbyScene::RenderMatchSettings()
 
 void LobbyScene::DrawFireParticle(const glm::vec3& position, float size, float alpha)
 {
+    if (!m_renderer) return;
+    
+    engine::render::MaterialParams fireMat;
+    fireMat.emissive = 1.0F;
+    fireMat.unlit = true;
+    
+    float intensity = alpha * 0.8F;
+    m_renderer->DrawBox(
+        position,
+        glm::vec3{size, size, size},
+        glm::vec3{1.0F, 0.4F + intensity * 0.4F, 0.1F},
+        fireMat
+    );
 }
 
 void LobbyScene::DrawGroundPlane()
 {
     if (!m_renderer) return;
     
-    m_renderer->DrawGrid(10, 1.0F, glm::vec3{0.15F, 0.12F, 0.1F}, glm::vec3{0.08F, 0.06F, 0.05F}, glm::vec4{0.03F, 0.02F, 0.02F, 0.5F});
+    // Main ground
+    m_renderer->DrawGrid(20, 1.0F, glm::vec3{0.12F, 0.1F, 0.08F}, glm::vec3{0.06F, 0.05F, 0.04F}, glm::vec4{0.02F, 0.015F, 0.01F, 0.5F});
+    
+    // Dirt circle around campfire
+    engine::render::MaterialParams dirtMat;
+    dirtMat.roughness = 0.95F;
+    for (int i = 0; i < 12; ++i)
+    {
+        const float angle = i * 0.5236F;
+        const float radius = 1.5F + (i % 3) * 0.2F;
+        const float size = 0.35F + (i % 2) * 0.15F;
+        m_renderer->DrawBox(
+            glm::vec3{std::cos(angle) * radius, 0.02F, std::sin(angle) * radius},
+            glm::vec3{size, 0.02F, size},
+            glm::vec3{0.25F, 0.18F, 0.12F},
+            dirtMat
+        );
+    }
+    
+    // Small stones scattered around
+    engine::render::MaterialParams stoneMat;
+    stoneMat.roughness = 0.8F;
+    for (int i = 0; i < 8; ++i)
+    {
+        const float angle = i * 0.785F + 0.3F;
+        const float radius = 2.5F + static_cast<float>(i % 3) * 0.4F;
+        m_renderer->DrawBox(
+            glm::vec3{std::cos(angle) * radius, 0.04F, std::sin(angle) * radius},
+            glm::vec3{0.08F, 0.05F, 0.1F},
+            glm::vec3{0.35F, 0.32F, 0.3F},
+            stoneMat
+        );
+    }
 }
 
 void LobbyScene::DrawCampfire()
 {
     if (!m_renderer) return;
     
-    m_renderer->DrawBox(
-        glm::vec3{0.0F, 0.15F, 0.0F},
-        glm::vec3{0.4F, 0.15F, 0.4F},
-        glm::vec3{0.4F, 0.25F, 0.1F}
-    );
+    engine::render::MaterialParams woodMat;
+    woodMat.roughness = 0.9F;
     
-    for (int i = 0; i < 5; ++i)
+    // Fire pit base (stone ring)
+    engine::render::MaterialParams stoneMat;
+    stoneMat.roughness = 0.85F;
+    
+    for (int i = 0; i < 12; ++i)
     {
-        float angle = i * 1.2566F;
-        float x = std::cos(angle) * 0.25F;
-        float z = std::sin(angle) * 0.25F;
+        const float angle = i * 0.5236F;
+        const float x = std::cos(angle) * 0.5F;
+        const float z = std::sin(angle) * 0.5F;
         
         m_renderer->DrawOrientedBox(
-            glm::vec3{x, 0.35F, z},
-            glm::vec3{0.05F, 0.3F, 0.05F},
-            glm::vec3{0.0F, 45.0F + i * 20.0F, 0.0F},
-            glm::vec3{0.35F, 0.2F, 0.08F}
+            glm::vec3{x, 0.08F, z},
+            glm::vec3{0.12F, 0.12F, 0.08F},
+            glm::vec3{0.0F, glm::degrees(angle), 0.0F},
+            glm::vec3{0.4F, 0.38F, 0.35F},
+            stoneMat
         );
     }
     
+    // Inner ash/gravel
+    m_renderer->DrawBox(
+        glm::vec3{0.0F, 0.02F, 0.0F},
+        glm::vec3{0.35F, 0.02F, 0.35F},
+        glm::vec3{0.2F, 0.18F, 0.15F}
+    );
+    
+    // Logs in teepee formation
+    for (int i = 0; i < 5; ++i)
+    {
+        float angle = i * 1.2566F;
+        float x = std::cos(angle) * 0.22F;
+        float z = std::sin(angle) * 0.22F;
+        
+        m_renderer->DrawOrientedBox(
+            glm::vec3{x, 0.28F, z},
+            glm::vec3{0.06F, 0.4F, 0.06F},
+            glm::vec3{15.0F, 45.0F + i * 72.0F, i * 5.0F},
+            glm::vec3{0.35F, 0.22F, 0.1F},
+            woodMat
+        );
+    }
+    
+    // Cross logs at base
+    for (int i = 0; i < 3; ++i)
+    {
+        const float angle = i * 2.094F;
+        m_renderer->DrawOrientedBox(
+            glm::vec3{std::cos(angle) * 0.15F, 0.08F, std::sin(angle) * 0.15F},
+            glm::vec3{0.3F, 0.05F, 0.05F},
+            glm::vec3{0.0F, glm::degrees(angle), 0.0F},
+            glm::vec3{0.32F, 0.2F, 0.08F},
+            woodMat
+        );
+    }
+    
+    // Fire core (bright orange/yellow glow)
     engine::render::MaterialParams fireMat;
     fireMat.emissive = 1.0F;
     fireMat.unlit = true;
     
+    // Flickering effect based on time
+    const float flicker = 0.9F + std::sin(m_fireTime * 12.0F) * 0.1F + std::sin(m_fireTime * 7.3F) * 0.05F;
+    
     m_renderer->DrawBox(
-        glm::vec3{0.0F, 0.5F, 0.0F},
-        glm::vec3{0.2F, 0.2F, 0.2F},
-        glm::vec3{1.0F, 0.4F, 0.1F},
+        glm::vec3{0.0F, 0.3F, 0.0F},
+        glm::vec3{0.15F * flicker, 0.2F, 0.15F * flicker},
+        glm::vec3{1.0F, 0.5F, 0.1F},
         fireMat
     );
+    
+    // Brighter inner core
+    m_renderer->DrawBox(
+        glm::vec3{0.0F, 0.35F, 0.0F},
+        glm::vec3{0.08F * flicker, 0.15F, 0.08F * flicker},
+        glm::vec3{1.0F, 0.85F, 0.4F},
+        fireMat
+    );
+}
+
+void LobbyScene::DrawEnvironment()
+{
+    if (!m_renderer) return;
+    
+    DrawTrees();
+    DrawRocks();
+    DrawLogs();
+}
+
+void LobbyScene::DrawTrees()
+{
+    if (!m_renderer) return;
+    
+    engine::render::MaterialParams barkMat;
+    barkMat.roughness = 0.95F;
+    
+    engine::render::MaterialParams foliageMat;
+    foliageMat.roughness = 0.8F;
+    
+    // Dead/dark trees around the perimeter
+    const auto drawTree = [&](float x, float z, float height, float rotation) {
+        // Trunk
+        m_renderer->DrawOrientedBox(
+            glm::vec3{x, height * 0.5F, z},
+            glm::vec3{0.15F, height * 0.5F, 0.15F},
+            glm::vec3{0.0F, rotation, 3.0F},
+            glm::vec3{0.25F, 0.2F, 0.15F},
+            barkMat
+        );
+        
+        // Bare branches
+        for (int i = 0; i < 4; ++i)
+        {
+            const float branchAngle = rotation + i * 90.0F;
+            const float branchY = height * 0.7F + i * 0.3F;
+            m_renderer->DrawOrientedBox(
+                glm::vec3{x, branchY, z},
+                glm::vec3{0.6F, 0.03F, 0.03F},
+                glm::vec3{35.0F, branchAngle, 0.0F},
+                glm::vec3{0.2F, 0.18F, 0.12F},
+                barkMat
+            );
+        }
+    };
+    
+    // Trees around the perimeter
+    drawTree(-6.0F, -4.0F, 4.5F, 15.0F);
+    drawTree(6.0F, -3.5F, 5.0F, 85.0F);
+    drawTree(-5.5F, 5.0F, 4.0F, 200.0F);
+    drawTree(5.0F, 5.5F, 4.8F, 270.0F);
+    drawTree(-7.0F, 1.0F, 3.8F, 45.0F);
+    drawTree(7.5F, 0.5F, 4.2F, 160.0F);
+}
+
+void LobbyScene::DrawRocks()
+{
+    if (!m_renderer) return;
+    
+    engine::render::MaterialParams rockMat;
+    rockMat.roughness = 0.85F;
+    
+    const auto drawRock = [&](float x, float z, float scale, float rotation) {
+        // Main rock body
+        m_renderer->DrawOrientedBox(
+            glm::vec3{x, scale * 0.3F, z},
+            glm::vec3{scale * 0.5F, scale * 0.35F, scale * 0.4F},
+            glm::vec3{rotation, rotation * 0.5F, rotation * 0.3F},
+            glm::vec3{0.3F + scale * 0.02F, 0.28F, 0.25F},
+            rockMat
+        );
+        // Smaller protrusion
+        m_renderer->DrawOrientedBox(
+            glm::vec3{x + scale * 0.2F, z, scale * 0.4F},
+            glm::vec3{scale * 0.25F, scale * 0.2F, scale * 0.2F},
+            glm::vec3{rotation * 0.7F, -rotation * 0.3F, rotation * 0.5F},
+            glm::vec3{0.32F, 0.3F, 0.27F},
+            rockMat
+        );
+    };
+    
+    // Scattered rocks
+    drawRock(-4.0F, 3.0F, 1.0F, 25.0F);
+    drawRock(4.5F, -2.5F, 0.8F, 70.0F);
+    drawRock(-3.0F, -3.5F, 1.2F, 140.0F);
+    drawRock(3.5F, 4.0F, 0.7F, 210.0F);
+    drawRock(-5.0F, -1.0F, 0.9F, 300.0F);
+}
+
+void LobbyScene::DrawLogs()
+{
+    if (!m_renderer) return;
+    
+    engine::render::MaterialParams logMat;
+    logMat.roughness = 0.9F;
+    
+    // Fallen logs (seating for players concept)
+    const auto drawFallenLog = [&](float x, float z, float length, float rotation, float tilt) {
+        m_renderer->DrawOrientedBox(
+            glm::vec3{x, 0.18F, z},
+            glm::vec3{0.12F, length * 0.5F, 0.12F},
+            glm::vec3{tilt, rotation, 0.0F},
+            glm::vec3{0.32F, 0.22F, 0.1F},
+            logMat
+        );
+    };
+    
+    drawFallenLog(-2.8F, 2.0F, 1.5F, 35.0F, 5.0F);
+    drawFallenLog(3.0F, 1.8F, 1.8F, -30.0F, -3.0F);
 }
 
 void LobbyScene::DrawPlayerModels()
@@ -504,22 +850,94 @@ void LobbyScene::DrawPlayerModels()
     {
         if (!player.isConnected) continue;
         
-        glm::vec3 color = player.selectedRole == "killer" 
-            ? glm::vec3{0.8F, 0.1F, 0.1F} 
-            : glm::vec3{0.2F, 0.5F, 0.8F};
+        DrawPlayerBody(player);
+    }
+}
+
+void LobbyScene::DrawPlayerBody(const LobbyPlayer& player)
+{
+    if (!m_renderer) return;
+    
+    const bool isKiller = player.selectedRole == "killer";
+    const float bobOffset = std::sin(m_fireTime * 1.5F + player.worldPosition.x) * 0.02F;
+    
+    // Colors based on role
+    glm::vec3 bodyColor = isKiller 
+        ? glm::vec3{0.25F, 0.08F, 0.08F}   // Dark red for killer
+        : glm::vec3{0.15F, 0.25F, 0.4F};   // Blue-gray for survivor
+    
+    glm::vec3 clothColor = isKiller
+        ? glm::vec3{0.15F, 0.05F, 0.05F}
+        : glm::vec3{0.12F, 0.2F, 0.3F};
+    
+    glm::vec3 skinColor{0.7F, 0.55F, 0.45F};
+    
+    engine::render::MaterialParams clothMat;
+    clothMat.roughness = 0.85F;
+    
+    engine::render::MaterialParams skinMat;
+    skinMat.roughness = 0.6F;
+    
+    const glm::vec3 basePos = player.worldPosition + glm::vec3{0.0F, bobOffset, 0.0F};
+    const float rotation = player.rotation;
+    
+    // Legs
+    const float legOffsetX = 0.1F;
+    const glm::vec3 legPosL = basePos + glm::vec3{std::cos(rotation + 1.57F) * legOffsetX, 0.25F, std::sin(rotation + 1.57F) * legOffsetX};
+    const glm::vec3 legPosR = basePos + glm::vec3{std::cos(rotation - 1.57F) * legOffsetX, 0.25F, std::sin(rotation - 1.57F) * legOffsetX};
+    
+    m_renderer->DrawOrientedBox(legPosL, glm::vec3{0.08F, 0.25F, 0.1F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, clothColor, clothMat);
+    m_renderer->DrawOrientedBox(legPosR, glm::vec3{0.08F, 0.25F, 0.1F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, clothColor, clothMat);
+    
+    // Feet
+    m_renderer->DrawBox(legPosL + glm::vec3{0.0F, -0.25F, 0.05F}, glm::vec3{0.08F, 0.04F, 0.12F}, glm::vec3{0.15F, 0.1F, 0.08F});
+    m_renderer->DrawBox(legPosR + glm::vec3{0.0F, -0.25F, 0.05F}, glm::vec3{0.08F, 0.04F, 0.12F}, glm::vec3{0.15F, 0.1F, 0.08F});
+    
+    // Torso
+    const glm::vec3 torsoPos = basePos + glm::vec3{0.0F, 0.65F, 0.0F};
+    m_renderer->DrawOrientedBox(torsoPos, glm::vec3{0.18F, 0.25F, 0.12F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, bodyColor, clothMat);
+    
+    // Chest detail
+    m_renderer->DrawOrientedBox(torsoPos + glm::vec3{0.0F, 0.05F, 0.0F}, glm::vec3{0.14F, 0.15F, 0.13F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, clothColor, clothMat);
+    
+    // Arms
+    const float armOffsetX = 0.2F;
+    const glm::vec3 armPosL = torsoPos + glm::vec3{std::cos(rotation + 1.57F) * armOffsetX, 0.0F, std::sin(rotation + 1.57F) * armOffsetX};
+    const glm::vec3 armPosR = torsoPos + glm::vec3{std::cos(rotation - 1.57F) * armOffsetX, 0.0F, std::sin(rotation - 1.57F) * armOffsetX};
+    
+    m_renderer->DrawOrientedBox(armPosL, glm::vec3{0.06F, 0.22F, 0.06F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, clothColor, clothMat);
+    m_renderer->DrawOrientedBox(armPosR, glm::vec3{0.06F, 0.22F, 0.06F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, clothColor, clothMat);
+    
+    // Hands
+    m_renderer->DrawBox(armPosL + glm::vec3{0.0F, -0.15F, 0.0F}, glm::vec3{0.05F, 0.06F, 0.04F}, skinColor, skinMat);
+    m_renderer->DrawBox(armPosR + glm::vec3{0.0F, -0.15F, 0.0F}, glm::vec3{0.05F, 0.06F, 0.04F}, skinColor, skinMat);
+    
+    // Neck
+    const glm::vec3 neckPos = torsoPos + glm::vec3{0.0F, 0.3F, 0.0F};
+    m_renderer->DrawOrientedBox(neckPos, glm::vec3{0.06F, 0.08F, 0.05F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, skinColor, skinMat);
+    
+    // Head
+    const glm::vec3 headPos = neckPos + glm::vec3{0.0F, 0.15F, 0.0F};
+    m_renderer->DrawOrientedBox(headPos, glm::vec3{0.1F, 0.12F, 0.1F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, skinColor, skinMat);
+    
+    // Hair
+    const glm::vec3 hairColor = isKiller ? glm::vec3{0.05F, 0.02F, 0.02F} : glm::vec3{0.1F, 0.08F, 0.06F};
+    m_renderer->DrawOrientedBox(headPos + glm::vec3{0.0F, 0.08F, -0.02F}, glm::vec3{0.11F, 0.08F, 0.1F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, hairColor, clothMat);
+    
+    // Killer-specific: add menacing hood/mask detail
+    if (isKiller)
+    {
+        // Dark hood over shoulders
+        m_renderer->DrawOrientedBox(torsoPos + glm::vec3{0.0F, 0.15F, -0.05F}, glm::vec3{0.22F, 0.12F, 0.1F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, glm::vec3{0.1F, 0.05F, 0.05F}, clothMat);
         
-        m_renderer->DrawCapsule(
-            player.worldPosition + glm::vec3{0.0F, 0.9F, 0.0F},
-            1.4F,
-            0.3F,
-            color
-        );
-        
-        m_renderer->DrawBox(
-            player.worldPosition + glm::vec3{0.0F, 1.75F, 0.0F},
-            glm::vec3{0.2F, 0.2F, 0.2F},
-            color
-        );
+        // Mask covering face
+        m_renderer->DrawOrientedBox(headPos + glm::vec3{0.0F, -0.02F, 0.05F}, glm::vec3{0.08F, 0.08F, 0.03F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, glm::vec3{0.12F, 0.08F, 0.06F}, clothMat);
+    }
+    
+    // Survivor-specific: add backpack
+    if (!isKiller)
+    {
+        m_renderer->DrawOrientedBox(torsoPos + glm::vec3{0.0F, 0.0F, -0.14F}, glm::vec3{0.15F, 0.2F, 0.06F}, glm::vec3{0.0F, glm::degrees(rotation), 0.0F}, glm::vec3{0.2F, 0.18F, 0.12F}, clothMat);
     }
 }
 
@@ -636,19 +1054,92 @@ void LobbyScene::DrawPerkSlots(float x, float y)
     {
         const float slotX = x + i * (slotSize + spacing);
         
-        engine::ui::UiRect slotRect{slotX, y, slotSize, slotSize};
-        glm::vec4 slotColor = m_state.selectedPerks[i].empty() ? theme.colorBackground : theme.colorButton;
-        slotColor.a = 0.8F;
-        m_ui->DrawRect(slotRect, slotColor);
-        m_ui->DrawRectOutline(slotRect, 2.0F, theme.colorPanelBorder);
+        const bool isSelected = m_selectedPerkSlot == i;
+        const bool hasPerk = !m_state.selectedPerks[i].empty();
         
-        if (!m_state.selectedPerks[i].empty())
+        engine::ui::UiRect slotRect{slotX, y, slotSize, slotSize};
+        glm::vec4 slotColor = hasPerk ? theme.colorButton : theme.colorBackground;
+        slotColor.a = isSelected ? 1.0F : 0.8F;
+        m_ui->DrawRect(slotRect, slotColor);
+        
+        // Highlight selected slot
+        glm::vec4 borderColor = isSelected ? theme.colorAccent : theme.colorPanelBorder;
+        m_ui->DrawRectOutline(slotRect, isSelected ? 3.0F : 2.0F, borderColor);
+        
+        if (hasPerk)
         {
-            m_ui->DrawTextLabel(slotX + 5.0F * scale, y + slotSize / 2.0F, "P" + std::to_string(i + 1), theme.colorText, 0.7F * scale);
+            // Find perk name
+            std::string perkName = m_state.selectedPerks[i];
+            for (std::size_t j = 0; j < m_availablePerkIds.size(); ++j)
+            {
+                if (m_availablePerkIds[j] == m_state.selectedPerks[i] && j < m_availablePerkNames.size())
+                {
+                    perkName = m_availablePerkNames[j];
+                    break;
+                }
+            }
+            // Truncate name if too long
+            if (perkName.length() > 8)
+            {
+                perkName = perkName.substr(0, 7) + ".";
+            }
+            m_ui->DrawTextLabel(slotX + 5.0F * scale, y + slotSize / 2.0F - 5.0F * scale, perkName, theme.colorText, 0.6F * scale);
         }
         else
         {
-            m_ui->DrawTextLabel(slotX + 15.0F * scale, y + slotSize / 2.0F, "+", theme.colorTextMuted, 1.2F * scale);
+            m_ui->DrawTextLabel(slotX + slotSize / 2.0F - 8.0F * scale, y + slotSize / 2.0F - 5.0F * scale, "+", theme.colorTextMuted, 1.4F * scale);
+        }
+    }
+    
+    // If a slot is selected, show dropdown below
+    if (m_selectedPerkSlot >= 0 && m_selectedPerkSlot < 4 && !m_availablePerkIds.empty())
+    {
+        const float dropdownY = y + slotSize + 5.0F * scale;
+        const float dropdownWidth = 160.0F * scale;
+        const float slotXSelected = x + m_selectedPerkSlot * (slotSize + spacing);
+        const float dropdownX = std::min(slotXSelected, m_ui->ScreenWidth() - dropdownWidth - 10.0F * scale);
+        
+        const float optionHeight = 22.0F * scale;
+        const float numOptions = static_cast<float>(std::min(m_availablePerkIds.size() + 1, static_cast<std::size_t>(10)));
+        const float dropdownHeight = numOptions * optionHeight + 10.0F * scale;
+        
+        // Draw dropdown panel
+        engine::ui::UiRect dropdownRect{dropdownX, dropdownY, dropdownWidth, dropdownHeight};
+        glm::vec4 bgColor = theme.colorPanel;
+        bgColor.a = 0.98F;
+        m_ui->DrawRect(dropdownRect, bgColor);
+        m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorAccent);
+        
+        // Scrollable content area
+        const float contentHeight = numOptions * optionHeight;
+        const std::size_t startIndex = 0;
+        const std::size_t endIndex = std::min(m_availablePerkIds.size() + 1, static_cast<std::size_t>(10));
+        
+        // "None" option
+        {
+            const float optY = dropdownY + 5.0F * scale;
+            engine::ui::UiRect noneRect{dropdownX + 3.0F * scale, optY, dropdownWidth - 6.0F * scale, optionHeight};
+            glm::vec4 noneColor = m_state.selectedPerks[m_selectedPerkSlot].empty() ? theme.colorAccent : theme.colorBackground;
+            noneColor.a = 0.7F;
+            m_ui->DrawRect(noneRect, noneColor);
+            m_ui->DrawTextLabel(dropdownX + 10.0F * scale, optY + 4.0F * scale, "- None -", theme.colorText, 0.8F * scale);
+        }
+        
+        // Perk options
+        for (std::size_t j = startIndex; j < endIndex - 1 && j < m_availablePerkIds.size(); ++j)
+        {
+            const float optY = dropdownY + 5.0F * scale + static_cast<float>(j + 1) * optionHeight;
+            engine::ui::UiRect optRect{dropdownX + 3.0F * scale, optY, dropdownWidth - 6.0F * scale, optionHeight};
+            glm::vec4 optColor = m_state.selectedPerks[m_selectedPerkSlot] == m_availablePerkIds[j] ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            
+            std::string perkName = j < m_availablePerkNames.size() ? m_availablePerkNames[j] : m_availablePerkIds[j];
+            if (perkName.length() > 16)
+            {
+                perkName = perkName.substr(0, 15) + ".";
+            }
+            m_ui->DrawTextLabel(dropdownX + 10.0F * scale, optY + 4.0F * scale, perkName, theme.colorText, 0.8F * scale);
         }
     }
 }

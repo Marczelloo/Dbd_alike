@@ -68,6 +68,7 @@ struct HudState
 
     std::string mapName = "test";
     std::string roleName = "Survivor";
+    bool isInGame = false;
     std::string cameraModeName = "3rd Person";
     std::string renderModeName = "wireframe";
     std::string interactionPrompt;

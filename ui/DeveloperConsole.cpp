@@ -2599,7 +2599,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         ImGui::End();
     }
 
-    // Perks HUD - only visible when loadout has perks
+    // Perks HUD - only visible when in game and loadout has perks
     {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         const float screenHeight = viewport->Size.y;
@@ -2611,17 +2611,8 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         const bool hasAnyPerk = std::any_of(slots.begin(), slots.end(), 
             [](const game::gameplay::HudState::ActivePerkDebug& p) { return !p.id.empty(); });
 
-        // Debug logging only when perks are present (avoid spam)
-        // static float lastDebugTime = 0.0F;
-        // const float currentTime = ImGui::GetTime();
-        // if (hasAnyPerk && currentTime - lastDebugTime > 2.0F)
-        // {
-        //     std::cout << "[PERK HUD] role=" << hudState.roleName << " hasAnyPerk=" << hasAnyPerk << "\n";
-        //     lastDebugTime = currentTime;
-        // }
-
-        // Only render if at least one perk is equipped
-        if (hasAnyPerk)
+        // Only render if in game AND at least one perk is equipped
+        if (hudState.isInGame && hasAnyPerk)
         {
             if (isKiller)
             {
