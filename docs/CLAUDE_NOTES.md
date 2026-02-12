@@ -71,3 +71,48 @@ As of 2026-02-12, the following refactoring has been completed:
 ## Known Issues
 
 - None currently
+
+## Audit: Items/Add-ons/Killer Powers (2026-02-12)
+
+### Findings
+
+- There is an existing, modular `PerkSystem` in:
+  - `game/gameplay/PerkSystem.hpp`
+  - `game/gameplay/PerkSystem.cpp`
+- Existing perk architecture already provides:
+  - loadout struct (`PerkLoadout`)
+  - active runtime states (`ActivePerkState`)
+  - effect aggregation (`PerkEffect`)
+  - role separation (survivor/killer)
+- Gameplay integration already consumes modifier-like effects from perks (speed/terror/heal/repair etc.).
+- There is no dedicated data model yet for:
+  - survivor items with 0..2 add-ons
+  - killer power with 0..2 add-ons
+  - character roster assets (survivor/killer definitions)
+- Asset folders currently present do not include:
+  - `assets/items/`
+  - `assets/addons/`
+  - `assets/powers/`
+  - `assets/characters/survivors/`
+  - `assets/characters/killers/`
+
+### Gaps
+
+- Missing contracts/interfaces:
+  - `IItemBehaviour`
+  - `IPowerBehaviour`
+  - `IAddonModifier`
+- Missing loadout contracts:
+  - `LoadoutSurvivor {itemId, addonAId, addonBId}`
+  - `LoadoutKiller {powerId, addonAId, addonBId}`
+- Missing runtime systems:
+  - item use lifecycle (charges, active state, cooldown)
+  - killer power lifecycle (place/use/state machine)
+  - addon modifier pipeline (parameter + hooks) without id-switch logic spread in gameplay
+- Missing multiplayer replication for killer power state (trap entities/state + trapped survivor values).
+- Missing console surface for item/power setup and debugging.
+
+### Decision
+
+- Reuse the existing perk system style (registry + loadout + active state + aggregated modifiers),
+  but implement a separate data-driven framework for items/powers/add-ons to avoid mixing concerns.

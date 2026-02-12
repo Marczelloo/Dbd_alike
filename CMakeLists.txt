@@ -92,6 +92,7 @@ set(ENGINE_SOURCES
     game/gameplay/GameplaySystems.cpp
     game/gameplay/SpawnSystem.cpp
     game/gameplay/PerkSystem.cpp
+    game/gameplay/LoadoutSystem.cpp
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp
