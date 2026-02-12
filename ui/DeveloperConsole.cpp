@@ -148,6 +148,9 @@ struct DeveloperConsole::Impl
     std::unordered_map<std::string, CommandHandler> commandRegistry;
     std::vector<CommandInfo> commandInfos;
 
+    int completionCycleIndex = 0;
+    std::string lastCompletionInput;
+
     void AddLog(const std::string& text, const glm::vec4& color = ConsoleColors::Default, bool isCommand = false, int categoryDepth = 0)
     {
         items.push_back(LogEntry{text, color, isCommand, categoryDepth});
@@ -199,6 +202,37 @@ struct DeveloperConsole::Impl
         commandRegistry[tokens.front()] = std::move(handler);
     }
 
+    std::vector<std::string> GetParamOptions(const std::string& commandName, int paramIndex) const
+    {
+        std::vector<std::string> options;
+
+        for (const CommandInfo& info : commandInfos)
+        {
+            if (info.usage.starts_with(commandName + " "))
+            {
+                std::vector<std::string> tokens = Tokenize(info.usage);
+                if (tokens.size() > static_cast<std::size_t>(paramIndex + 1))
+                {
+                    const std::string& paramToken = tokens[static_cast<std::size_t>(paramIndex + 1)];
+                    if (paramToken.find('|') != std::string::npos)
+                    {
+                        size_t start = 0;
+                        size_t end = paramToken.find('|');
+                        while (end != std::string::npos)
+                        {
+                            options.push_back(paramToken.substr(start, end - start));
+                            start = end + 1;
+                            end = paramToken.find('|', start);
+                        }
+                        options.push_back(paramToken.substr(start));
+                    }
+                }
+                break;
+            }
+        }
+        return options;
+    }
+
     std::vector<CommandInfo> BuildHints(const std::string& inputText) const
     {
         std::vector<CommandInfo> hints;
@@ -224,6 +258,10 @@ struct DeveloperConsole::Impl
 
     void RegisterDefaultCommands()
     {
+RegisterCommand("clear", "Clear console output", [this](const std::vector<std::string>&, const ConsoleContext&) {
+            items.clear();
+        });
+
         RegisterCommand("help", "List all commands", [this](const std::vector<std::string>&, const ConsoleContext&) {
             PrintHelp();
         });
@@ -947,6 +985,22 @@ struct DeveloperConsole::Impl
             return;
         }
 
+        if (tokens.size() == 2 && tokens[1] == "help")
+        {
+            for (const CommandInfo& info : commandInfos)
+            {
+                std::vector<std::string> cmdTokens = Tokenize(info.usage);
+                if (!cmdTokens.empty() && cmdTokens[0] == tokens[0])
+                {
+                    AddLog("Usage: " + info.usage, ConsoleColors::Command);
+                    AddLog("Description: " + info.description, ConsoleColors::Info);
+                    return;
+                }
+            }
+            LogError("Command exists but no help found");
+            return;
+        }
+
         it->second(tokens, context);
     }
 
@@ -962,6 +1016,9 @@ struct DeveloperConsole::Impl
         {
             case ImGuiInputTextFlags_CallbackCompletion:
             {
+                const std::string currentInput(data->Buf, data->BufTextLen);
+                const std::vector<std::string> inputTokens = Tokenize(currentInput);
+
                 const char* wordEnd = data->Buf + data->CursorPos;
                 const char* wordStart = wordEnd;
                 while (wordStart > data->Buf && wordStart[-1] != ' ' && wordStart[-1] != '\t')
@@ -969,26 +1026,129 @@ struct DeveloperConsole::Impl
                     --wordStart;
                 }
 
-                std::vector<std::string> candidates;
-                for (const CommandInfo& info : commandInfos)
+                if (inputTokens.empty())
                 {
-                    if (info.usage.rfind(wordStart, 0) == 0)
-                    {
-                        candidates.push_back(info.usage);
-                    }
+                    break;
                 }
 
-                if (candidates.size() == 1)
+                const std::string currentWord(wordStart, wordEnd);
+                const bool isCompletingCommand = (inputTokens.size() == 1 && currentWord == inputTokens[0]) || (inputTokens.empty());
+
+                if (isCompletingCommand)
                 {
-                    data->DeleteChars(static_cast<int>(wordStart - data->Buf), static_cast<int>(wordEnd - wordStart));
-                    data->InsertChars(data->CursorPos, candidates[0].c_str());
-                }
-                else if (candidates.size() > 1)
-                {
-                    AddLog("Possible matches:", ConsoleColors::Info);
-                    for (const std::string& candidate : candidates)
+                    std::vector<std::string> candidates;
+                    for (const CommandInfo& info : commandInfos)
                     {
-                        AddLog("  • " + candidate, ConsoleColors::Value);
+                        std::string cmdName = Tokenize(info.usage)[0];
+                        if (cmdName.rfind(currentWord, 0) == 0)
+                        {
+                            candidates.push_back(cmdName);
+                        }
+                    }
+
+                    if (candidates.empty())
+                    {
+                        break;
+                    }
+
+                    if (candidates.size() == 1)
+                    {
+                        std::string completion = candidates[0];
+                        data->DeleteChars(static_cast<int>(wordStart - data->Buf), static_cast<int>(wordEnd - wordStart));
+                        data->InsertChars(data->CursorPos, (completion + " ").c_str());
+                    }
+                    else
+                    {
+                        int commonLen = static_cast<int>(candidates[0].length());
+                        for (std::size_t i = 1; i < candidates.size(); ++i)
+                        {
+                            int len = 0;
+                            const std::string& a = candidates[0];
+                            const std::string& b = candidates[i];
+                            while (len < static_cast<int>(std::min(a.length(), b.length())) && a[len] == b[len])
+                            {
+                                ++len;
+                            }
+                            commonLen = std::min(commonLen, len);
+                        }
+
+                        if (commonLen > static_cast<int>(wordEnd - wordStart))
+                        {
+                            std::string completion = candidates[0].substr(0, static_cast<std::size_t>(commonLen));
+                            data->DeleteChars(static_cast<int>(wordStart - data->Buf), static_cast<int>(wordEnd - wordStart));
+                            data->InsertChars(data->CursorPos, completion.c_str());
+                        }
+                        else
+                        {
+                            AddLog("Possible matches:", ConsoleColors::Info);
+                            for (const std::string& candidate : candidates)
+                            {
+                                AddLog("  • " + candidate, ConsoleColors::Value);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    const std::string& commandName = inputTokens[0];
+                    const int paramIndex = static_cast<int>(inputTokens.size()) - 2;
+
+                    std::vector<std::string> options = GetParamOptions(commandName, paramIndex);
+
+                    if (!options.empty())
+                    {
+                        std::string currentWord(wordStart, wordEnd);
+                        const bool isEmptyOrWhitespace = currentWord.empty() || currentWord.back() == ' ';
+
+                        std::string contextKey = commandName + ":" + std::to_string(paramIndex);
+                        if (lastCompletionInput != contextKey)
+                        {
+                            lastCompletionInput = contextKey;
+                            completionCycleIndex = -1;
+                            for (std::size_t i = 0; i < options.size(); ++i)
+                            {
+                                if (options[i] == currentWord)
+                                {
+                                    completionCycleIndex = static_cast<int>(i);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (isEmptyOrWhitespace)
+                        {
+                            AddLog("Valid options (TAB to cycle):", glm::vec4{0.45F, 0.85F, 0.45F, 1.0F});
+                            for (const std::string& opt : options)
+                            {
+                                AddLog("  • " + opt, glm::vec4{0.9F, 0.9F, 0.7F, 1.0F});
+                            }
+
+                            completionCycleIndex = 0;
+                            data->InsertChars(data->CursorPos, options[0].c_str());
+                        }
+                        else
+                        {
+                            completionCycleIndex = (completionCycleIndex + 1) % static_cast<int>(options.size());
+                            const std::string& nextOption = options[static_cast<std::size_t>(completionCycleIndex)];
+
+                            if (!currentWord.empty())
+                            {
+                                data->DeleteChars(static_cast<int>(wordStart - data->Buf), static_cast<int>(wordEnd - wordStart));
+                                data->InsertChars(data->CursorPos, nextOption.c_str());
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (const CommandInfo& info : commandInfos)
+                        {
+                            std::vector<std::string> tokens = Tokenize(info.usage);
+                            if (!tokens.empty() && tokens[0] == commandName && tokens.size() > static_cast<std::size_t>(paramIndex + 1))
+                            {
+                                AddLog("Expected: " + tokens[static_cast<std::size_t>(paramIndex + 1)], glm::vec4{0.6F, 0.7F, 0.9F, 1.0F});
+                                break;
+                            }
+                        }
                     }
                 }
                 break;
@@ -1362,12 +1522,17 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         }
 
         ImGui::SetNextWindowSize(ImVec2(840.0F, 390.0F), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Developer Console", &m_impl->open))
+        if (ImGui::Begin("Developer Console", &m_impl->open, ImGuiWindowFlags_NoNavFocus))
         {
             const ImVec2 buttonSize(60.0F, 0.0F);
             if (ImGui::Button("Clear", buttonSize))
             {
                 m_impl->items.clear();
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape) && ImGui::IsWindowFocused())
+            {
+                m_impl->open = false;
             }
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
@@ -1428,10 +1593,38 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             }
 
             const std::string currentInput = m_impl->inputBuffer.data();
-            if (currentInput.empty())
+            const std::vector<std::string> inputTokens = Tokenize(currentInput);
+
+            if (!inputTokens.empty())
+            {
+                const std::string& commandName = inputTokens[0];
+                int paramIndex = static_cast<int>(inputTokens.size()) - 1;
+
+                std::vector<std::string> options = m_impl->GetParamOptions(commandName, paramIndex);
+
+                if (!options.empty())
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45F, 0.85F, 0.45F, 1.0F));
+                    std::string hint = "Valid options (TAB to cycle): ";
+                    for (std::size_t i = 0; i < options.size(); ++i)
+                    {
+                        if (i > 0) hint += " | ";
+                        hint += options[i];
+                    }
+                    ImGui::TextUnformatted(hint.c_str());
+                    ImGui::PopStyleColor();
+                }
+                else
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
+                    ImGui::TextUnformatted("Hint: TAB autocomplete | ESC close | UP/DOWN history | clear to clean");
+                    ImGui::PopStyleColor();
+                }
+            }
+            else if (currentInput.empty())
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
-                ImGui::TextUnformatted("Hint: type a command, press TAB to autocomplete, ENTER to execute.");
+                ImGui::TextUnformatted("Hint: TAB autocomplete | ESC close | UP/DOWN history | clear to clean");
                 ImGui::PopStyleColor();
             }
             else
