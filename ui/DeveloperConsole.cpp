@@ -1524,22 +1524,10 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         ImGui::SetNextWindowSize(ImVec2(840.0F, 390.0F), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Developer Console", &m_impl->open, ImGuiWindowFlags_NoNavFocus))
         {
-            const ImVec2 buttonSize(60.0F, 0.0F);
-            if (ImGui::Button("Clear", buttonSize))
-            {
-                m_impl->items.clear();
-            }
-
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && ImGui::IsWindowFocused())
             {
                 m_impl->open = false;
             }
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
-            ImGui::Text("Examples: host 7777 | join 127.0.0.1 7777 | render_mode filled");
-            ImGui::PopStyleColor();
-
-            ImGui::Separator();
 
             // Console output with colors
             ImGui::BeginChild("ScrollingRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false, ImGuiWindowFlags_HorizontalScrollbar);

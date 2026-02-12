@@ -273,7 +273,7 @@ private:
     HudDragTarget m_hudResizeTarget = HudDragTarget::None;
 
     bool m_connectingLoadingActive = false;
-    bool m_showConnectingLoading = true;
+    bool m_showConnectingLoading = false;
     double m_connectingLoadingStart = 0.0;
 
     ControlsSettings m_controlsSettings{};
@@ -302,6 +302,7 @@ private:
     int m_menuSavedMapIndex = -1;
     int m_menuPort = 7777;
     std::string m_menuJoinIp = "127.0.0.1";
+    float m_menuLanScroll = 0.0F;
     std::string m_menuNetStatus;
     std::string m_lastNetworkError;
     std::string m_connectedEndpoint;

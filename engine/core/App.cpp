@@ -3337,42 +3337,67 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
 
     const float scale = m_ui.Scale();
-    const float panelW = std::min(700.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 20.0F);
-    const float panelH = std::min(900.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 20.0F);
-    const engine::ui::UiRect panel{
-        (static_cast<float>(m_ui.ScreenWidth()) - panelW) * 0.5F,
-        (static_cast<float>(m_ui.ScreenHeight()) - panelH) * 0.5F,
-        panelW,
-        panelH,
+    const float screenW = static_cast<float>(m_ui.ScreenWidth());
+    const float screenH = static_cast<float>(m_ui.ScreenHeight());
+    const float gap = 12.0F * scale;
+    const float marginX = 24.0F * scale;
+    const float marginTop = 60.0F * scale;
+    const float marginBottom = 60.0F * scale;
+
+    // Left panel: Game Menu (centered, fixed width)
+    const float leftPanelW = std::min(420.0F * scale, screenW - marginX * 2.0F - 280.0F * scale - gap);
+    const float leftPanelH = screenH - marginTop - marginBottom;
+    const float leftPanelX = (screenW - leftPanelW - 280.0F * scale - gap) * 0.5F;
+    const engine::ui::UiRect leftPanel{
+        leftPanelX,
+        marginTop,
+        leftPanelW,
+        leftPanelH,
     };
 
-    m_ui.BeginRootPanel("main_menu_custom", panel, true);
-    m_ui.Label("Asymmetric Horror Prototype", 1.2F);
-    m_ui.Label("Press ~ for Console | F6 UI test | F7 Loading test | F10 Legacy UI toggle", m_ui.Theme().colorTextMuted);
-    if (m_ui.Button("toggle_legacy_ui", std::string("Legacy ImGui menus: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
-    {
-        m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-    }
-    if (m_ui.Button("toggle_ui_test", std::string("UI test panel: ") + (m_showUiTestPanel ? "ON" : "OFF")))
-    {
-        m_showUiTestPanel = !m_showUiTestPanel;
-    }
-    if (m_ui.Button("toggle_loading_test", std::string("Loading screen test: ") + (m_showLoadingScreenTestPanel ? "ON" : "OFF")))
-    {
-        m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
-    }
+    // Right panel: Dev Tools (fixed compact width)
+    const float rightPanelW = 280.0F * scale;
+    const float rightPanelH = leftPanelH;
+    const engine::ui::UiRect rightPanel{
+        leftPanel.x + leftPanelW + gap,
+        marginTop,
+        rightPanelW,
+        rightPanelH,
+    };
 
-    if (m_ui.Button("menu_settings", "Settings"))
-    {
-        m_settingsMenuOpen = true;
-        m_settingsOpenedFromPause = false;
-    }
+    // ==================== LEFT PANEL: Game Menu (DBD Style) ====================
+    m_ui.BeginRootPanel("main_menu_game", leftPanel, true);
+    m_ui.Label("THE GAME", 1.6F);
+    m_ui.Spacer(4.0F * scale);
+    m_ui.Label("Asymmetric Horror Prototype", m_ui.Theme().colorTextMuted);
 
-    m_ui.Checkbox("loading_on_join", "Show loading screen on start/join", &m_showConnectingLoading);
+    m_ui.Spacer(24.0F * scale);
 
-    m_ui.Label("Session", m_ui.Theme().colorAccent);
+    // Session settings
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
+
+    const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
+    const std::string mapName = MapNameFromIndex(m_menuMapIndex);
+
+    m_ui.Spacer(12.0F * scale);
+    if (m_ui.Button("play_solo", "PLAY", true, &m_ui.Theme().colorAccent))
+    {
+        StartSoloSession(mapName, roleName);
+    }
+
+    if (!savedMaps.empty())
+    {
+        m_ui.Spacer(8.0F * scale);
+        m_ui.Dropdown("saved_maps", "Saved Map", &m_menuSavedMapIndex, savedMaps);
+        if (m_ui.Button("play_saved", "PLAY SAVED"))
+        {
+            StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
+        }
+    }
+
+    m_ui.Spacer(20.0F * scale);
+    m_ui.Label("MULTIPLAYER", m_ui.Theme().colorTextMuted);
 
     std::string portText = std::to_string(m_menuPort);
     if (m_ui.InputText("menu_port", "Port", &portText, 6))
@@ -3388,24 +3413,19 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     m_ui.InputText("menu_join_ip", "Join IP", &m_menuJoinIp, 63);
 
-    const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
-    const std::string mapName = MapNameFromIndex(m_menuMapIndex);
-    if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
+    m_ui.Spacer(8.0F * scale);
+    if (m_ui.Button("host_btn", "HOST GAME"))
     {
-        StartSoloSession(mapName, roleName);
+        StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
+    }
+    if (m_ui.Button("join_btn", "JOIN GAME"))
+    {
+        StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
     }
 
-    if (!savedMaps.empty())
-    {
-        m_ui.Dropdown("saved_maps", "Play Saved Map", &m_menuSavedMapIndex, savedMaps);
-        if (m_ui.Button("play_saved", "Play Map"))
-        {
-            StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
-        }
-    }
-
-    m_ui.Label("Editor", m_ui.Theme().colorAccent);
-    if (m_ui.Button("level_editor", "Level Editor"))
+    m_ui.Spacer(20.0F * scale);
+    m_ui.Label("EDITORS", m_ui.Theme().colorTextMuted);
+    if (m_ui.Button("level_editor", "LEVEL EDITOR"))
     {
         m_lanDiscovery.Stop();
         m_network.Disconnect();
@@ -3418,7 +3438,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_menuNetStatus = "Entered Level Editor";
         TransitionNetworkState(NetworkState::Offline, "Editor mode");
     }
-    if (m_ui.Button("loop_editor", "Loop Editor"))
+    if (m_ui.Button("loop_editor", "LOOP EDITOR"))
     {
         m_lanDiscovery.Stop();
         m_network.Disconnect();
@@ -3432,56 +3452,79 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         TransitionNetworkState(NetworkState::Offline, "Editor mode");
     }
 
-    m_ui.Label("Multiplayer", m_ui.Theme().colorAccent);
-    if (m_ui.Button("host_btn", "Host Multiplayer"))
+    m_ui.Spacer(20.0F * scale);
+    if (m_ui.Button("menu_settings", "SETTINGS"))
     {
-        StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
-    }
-    if (m_ui.Button("join_btn", "Join Multiplayer"))
-    {
-        StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
+        m_settingsMenuOpen = true;
+        m_settingsOpenedFromPause = false;
     }
 
-    if (m_ui.Button("refresh_lan", "Refresh LAN"))
+    m_ui.Spacer(20.0F * scale);
+    if (m_ui.Button("quit_game", "EXIT", true, &m_ui.Theme().colorDanger))
+    {
+        *shouldQuit = true;
+    }
+
+    m_ui.EndPanel();
+
+    // ==================== RIGHT PANEL: Dev Tools (Compact) ====================
+    m_ui.BeginRootPanel("main_menu_dev", rightPanel, true);
+    m_ui.Label("DEV", 1.1F);
+
+    m_ui.Spacer(8.0F * scale);
+    if (m_ui.Button("toggle_legacy_ui", std::string("ImGui: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
+    {
+        m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
+    }
+    if (m_ui.Button("toggle_ui_test", std::string("UI Test: ") + (m_showUiTestPanel ? "ON" : "OFF")))
+    {
+        m_showUiTestPanel = !m_showUiTestPanel;
+    }
+    if (m_ui.Button("toggle_loading_test", std::string("Loading: ") + (m_showLoadingScreenTestPanel ? "ON" : "OFF")))
+    {
+        m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
+    }
+    m_ui.Checkbox("loading_on_join", "Loading on join", &m_showConnectingLoading);
+
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label("LAN", m_ui.Theme().colorTextMuted, 0.9F);
+    if (m_ui.Button("refresh_lan", "REFRESH"))
     {
         m_lanDiscovery.ForceScan();
     }
+
     const auto& servers = m_lanDiscovery.Servers();
     if (servers.empty())
     {
-        m_ui.Label("No LAN games found.", m_ui.Theme().colorTextMuted);
+        m_ui.Label("No games found", m_ui.Theme().colorTextMuted, 0.85F);
     }
     else
     {
-        for (std::size_t i = 0; i < servers.size(); ++i)
+        for (std::size_t i = 0; i < servers.size() && i < 3; ++i)
         {
             const auto& entry = servers[i];
             const bool canJoin = entry.compatible && entry.players < entry.maxPlayers;
-            std::string line = "[" + entry.hostName + "] " + entry.ip + ":" + std::to_string(entry.port) + " | Map: " + entry.mapName + " | Players: " +
-                               std::to_string(entry.players) + "/" + std::to_string(entry.maxPlayers);
-            m_ui.Label(line, canJoin ? m_ui.Theme().colorText : m_ui.Theme().colorTextMuted);
+            m_ui.Label(entry.hostName, canJoin ? m_ui.Theme().colorText : m_ui.Theme().colorTextMuted, 0.9F);
             m_ui.PushIdScope("lan_" + std::to_string(i));
-            if (m_ui.Button("join_lan", "Join", canJoin))
+            if (m_ui.Button("join_lan", "JOIN", canJoin))
             {
                 StartJoinSession(entry.ip, entry.port, roleName);
             }
             m_ui.PopIdScope();
         }
+        if (servers.size() > 3)
+        {
+            m_ui.Label("+" + std::to_string(servers.size() - 3) + " more...", m_ui.Theme().colorTextMuted, 0.8F);
+        }
     }
 
-    m_ui.Label("Network State: " + NetworkStateToText(m_networkState), m_ui.Theme().colorTextMuted);
-    if (!m_menuNetStatus.empty())
-    {
-        m_ui.Label(m_menuNetStatus, m_ui.Theme().colorTextMuted);
-    }
-    if (!m_lastNetworkError.empty())
-    {
-        m_ui.Label("Last Error: " + m_lastNetworkError, m_ui.Theme().colorDanger);
-    }
-    if (m_ui.Button("quit_game", "Quit", true, &m_ui.Theme().colorDanger))
-    {
-        *shouldQuit = true;
-    }
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label(NetworkStateToText(m_networkState), m_ui.Theme().colorTextMuted, 0.85F);
+
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
+    m_ui.Label("F7 Load | F10 Legacy", m_ui.Theme().colorTextMuted, 0.8F);
+
     m_ui.EndPanel();
 }
 
