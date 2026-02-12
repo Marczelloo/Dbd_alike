@@ -360,6 +360,58 @@ bool App::Run()
         std::cerr << "Failed to initialize loading manager.\n";
     }
 
+    if (!m_skillCheckWheel.Initialize(&m_ui, &m_renderer))
+    {
+        std::cerr << "Failed to initialize skill check wheel.\n";
+    }
+
+    if (!m_generatorProgressBar.Initialize(&m_ui))
+    {
+        std::cerr << "Failed to initialize generator progress bar.\n";
+    }
+
+    if (!m_screenEffects.Initialize(&m_ui))
+    {
+        std::cerr << "Failed to initialize screen effects.\n";
+    }
+
+    if (!m_perkLoadoutEditor.Initialize(&m_ui, &m_gameplay.GetPerkSystem()))
+    {
+        std::cerr << "Failed to initialize perk loadout editor.\n";
+    }
+
+    if (!m_lobbyScene.Initialize(&m_ui, &m_renderer, &m_input))
+    {
+        std::cerr << "Failed to initialize lobby scene.\n";
+    }
+    m_lobbyScene.SetStartMatchCallback([this](const std::string& map, const std::string& role, const std::array<std::string, 4>& perks) {
+        m_sessionMapName = map;
+        m_sessionRoleName = role;
+        std::array<std::string, 4> perkArray = perks;
+        if (role == "survivor")
+        {
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                m_menuSurvivorPerks[i] = perkArray[i];
+            }
+        }
+        else
+        {
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                m_menuKillerPerks[i] = perkArray[i];
+            }
+        }
+        m_lobbyScene.ExitLobby();
+        StartSoloSession(map, role);
+    });
+    m_lobbyScene.SetReadyChangedCallback([this](bool ready) {
+        (void)ready;
+    });
+    m_lobbyScene.SetRoleChangedCallback([this](const std::string& role) {
+        m_sessionRoleName = role;
+    });
+
     if (!m_console.Initialize(m_window))
     {
         CloseNetworkLogFile();
@@ -394,11 +446,17 @@ bool App::Run()
 
         const bool inGame = m_appMode == AppMode::InGame;
         const bool inEditor = m_appMode == AppMode::Editor;
-        if ((inGame || inEditor) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        const bool inLobby = m_appMode == AppMode::Lobby;
+        if ((inGame || inEditor || inLobby) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
         {
             if (inGame)
             {
                 m_pauseMenuOpen = !m_pauseMenuOpen;
+            }
+            else if (inLobby)
+            {
+                m_lobbyScene.ExitLobby();
+                ResetToMainMenu();
             }
             else
             {
@@ -448,12 +506,6 @@ bool App::Run()
         {
             m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
             m_statusToastMessage = m_showLoadingScreenTestPanel ? "Loading screen test panel ON" : "Loading screen test panel OFF";
-            m_statusToastUntilSeconds = glfwGetTime() + 2.0;
-        }
-        if (m_input.IsKeyPressed(GLFW_KEY_F10))
-        {
-            m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-            m_statusToastMessage = m_useLegacyImGuiMenus ? "Legacy ImGui menus ON" : "Custom UI menus ON";
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         }
 
@@ -588,14 +640,7 @@ bool App::Run()
         }
         else if (m_appMode == AppMode::MainMenu && !m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
-            {
-                DrawMainMenuUi(&shouldQuit);
-            }
-            else
-            {
-                DrawMainMenuUiCustom(&shouldQuit);
-            }
+            DrawMainMenuUiCustom(&shouldQuit);
         }
         else if (m_appMode == AppMode::Loading)
         {
@@ -627,26 +672,12 @@ bool App::Run()
         }
         else if (m_pauseMenuOpen && !m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
-            {
-                DrawPauseMenuUi(&closePauseMenu, &backToMenu, &shouldQuit);
-            }
-            else
-            {
-                DrawPauseMenuUiCustom(&closePauseMenu, &backToMenu, &shouldQuit);
-            }
+            DrawPauseMenuUiCustom(&closePauseMenu, &backToMenu, &shouldQuit);
         }
 
         if (m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
-            {
-                DrawSettingsUi(&m_settingsMenuOpen);
-            }
-            else
-            {
-                DrawSettingsUiCustom(&m_settingsMenuOpen);
-            }
+            DrawSettingsUiCustom(&m_settingsMenuOpen);
         }
 
         if (m_graphicsAutoConfirmPending && glfwGetTime() >= m_graphicsAutoConfirmDeadline)
@@ -674,10 +705,42 @@ bool App::Run()
 
         if (m_appMode == AppMode::InGame)
         {
-            if (!m_useLegacyImGuiMenus)
+            const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+            DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
+            
+            m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
+            game::ui::ScreenEffectsState screenState;
+            screenState.terrorRadiusActive = hudState.terrorRadiusVisible;
+            screenState.terrorRadiusIntensity = hudState.chaseActive ? 0.8F : 0.4F;
+            screenState.chaseActive = hudState.chaseActive;
+            screenState.lowHealthActive = (hudState.survivorStateName == "Injured" || hudState.survivorStateName == "Downed");
+            screenState.lowHealthIntensity = hudState.survivorStateName == "Downed" ? 0.6F : 0.3F;
+            m_screenEffects.Render(screenState);
+            
+            if (hudState.skillCheckActive)
             {
-                DrawInGameHudCustom(m_gameplay.BuildHudState(), currentFps, glfwGetTime());
+                m_skillCheckWheel.GetState().active = true;
+                m_skillCheckWheel.GetState().successZoneStart = hudState.skillCheckSuccessStart;
+                m_skillCheckWheel.GetState().successZoneEnd = hudState.skillCheckSuccessEnd;
+                m_skillCheckWheel.GetState().needleAngle = hudState.skillCheckNeedle * 360.0F;
             }
+            m_skillCheckWheel.Update(static_cast<float>(m_time.DeltaSeconds()));
+            m_skillCheckWheel.Render();
+            m_skillCheckWheel.HandleInput();
+            
+            game::ui::GeneratorProgressState genState;
+            genState.isActive = hudState.repairingGenerator || hudState.generatorsCompleted > 0;
+            genState.isRepairing = hudState.repairingGenerator;
+            genState.progress = hudState.activeGeneratorProgress;
+            genState.generatorsCompleted = hudState.generatorsCompleted;
+            genState.generatorsTotal = hudState.generatorsTotal;
+            m_generatorProgressBar.Render(genState);
+        }
+        else if (m_appMode == AppMode::Lobby)
+        {
+            m_lobbyScene.Update(static_cast<float>(m_time.DeltaSeconds()));
+            m_lobbyScene.Render();
+            m_lobbyScene.HandleInput();
         }
 
         if (m_showUiTestPanel)
@@ -765,7 +828,7 @@ bool App::Run()
         context.window = &m_window;
         context.vsync = &m_vsyncEnabled;
         context.fpsLimit = &m_fpsLimit;
-        context.renderPlayerHud = m_useLegacyImGuiMenus;
+        context.renderPlayerHud = false;
 
         bool showOverlayThisFrame = m_showDebugOverlay && m_appMode == AppMode::InGame;
         context.showDebugOverlay = &showOverlayThisFrame;
@@ -927,6 +990,11 @@ bool App::Run()
     TransitionNetworkState(NetworkState::Disconnecting, "Application shutdown");
     m_lanDiscovery.Stop();
     m_network.Shutdown();
+    m_lobbyScene.Shutdown();
+    m_perkLoadoutEditor.Shutdown();
+    m_screenEffects.Shutdown();
+    m_generatorProgressBar.Shutdown();
+    m_skillCheckWheel.Shutdown();
     m_console.Shutdown();
     m_devToolbar.Shutdown();
     m_ui.Shutdown();
@@ -3409,6 +3477,20 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     {
         StartSoloSession(mapName, roleName);
     }
+    if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
+    {
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 1;
+        localPlayer.name = "Player";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = true;
+        localPlayer.isConnected = true;
+        m_lobbyScene.SetPlayers({localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks({m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]});
+        m_lobbyScene.EnterLobby();
+    }
 
     if (!savedMaps.empty())
     {
@@ -3496,10 +3578,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Label("DEV", 1.1F);
 
     m_ui.Spacer(8.0F * scale);
-    if (m_ui.Button("toggle_legacy_ui", std::string("ImGui: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
-    {
-        m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-    }
     if (m_ui.Button("toggle_ui_test", std::string("UI Test: ") + (m_showUiTestPanel ? "ON" : "OFF")))
     {
         m_showUiTestPanel = !m_showUiTestPanel;
@@ -3632,7 +3710,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.Spacer(10.0F * scale);
     m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
-    m_ui.Label("F7 Load | F10 Legacy", m_ui.Theme().colorTextMuted, 0.8F);
+    m_ui.Label("F7 Load", m_ui.Theme().colorTextMuted, 0.8F);
 
     m_ui.EndPanel();
 }
@@ -4353,16 +4431,6 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.Label("Self Heal", m_ui.Theme().colorAccent);
         m_ui.ProgressBar("hud_heal_progress", hudState.selfHealProgress, std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%");
     }
-    if (hudState.skillCheckActive)
-    {
-        m_ui.Label("Skill Check active: SPACE", m_ui.Theme().colorDanger);
-        m_ui.SkillCheckBar(
-            "hud_skillcheck_progress",
-            hudState.skillCheckNeedle,
-            hudState.skillCheckSuccessStart,
-            hudState.skillCheckSuccessEnd
-        );
-    }
     if (hudState.carryEscapeProgress > 0.0F)
     {
         m_ui.Label("Wiggle Escape: Alternate A/D", m_ui.Theme().colorAccent);
@@ -4626,668 +4694,6 @@ void App::DrawFullLoadingScreen(float progress01, const std::string& tip, const 
     m_ui.PopLayout(); // End horizontal layout
 
     m_ui.EndPanel();
-}
-
-void App::DrawMainMenuUi(bool* shouldQuit)
-{
-#if BUILD_WITH_IMGUI
-    constexpr const char* kRoleItems[] = {"Survivor", "Killer"};
-    constexpr const char* kMapItems[] = {"main_map", "collision_test", "test"};
-    const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
-    if (m_menuSavedMapIndex >= static_cast<int>(savedMaps.size()))
-    {
-        m_menuSavedMapIndex = savedMaps.empty() ? -1 : 0;
-    }
-    if (m_menuSavedMapIndex < 0 && !savedMaps.empty())
-    {
-        m_menuSavedMapIndex = 0;
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(620.0F, 720.0F), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5F, 0.5F));
-
-    if (ImGui::Begin("Main Menu", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
-    {
-        ImGui::TextUnformatted("Asymmetric Horror Prototype");
-        if (ImGui::Button(m_useLegacyImGuiMenus ? "Use Custom UI Menus (F10)" : "Use Legacy ImGui Menus (F10)", ImVec2(-1.0F, 0.0F)))
-        {
-            m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-        }
-        if (ImGui::Button(m_showUiTestPanel ? "Hide UI Test Panel (F6)" : "Show UI Test Panel (F6)", ImVec2(-1.0F, 0.0F)))
-        {
-            m_showUiTestPanel = !m_showUiTestPanel;
-        }
-        if (ImGui::Button("Settings", ImVec2(-1.0F, 0.0F)))
-        {
-            m_settingsMenuOpen = true;
-            m_settingsOpenedFromPause = false;
-        }
-        ImGui::Separator();
-
-        ImGui::Checkbox("Show loading screen on start/join", &m_showConnectingLoading);
-
-        ImGui::Combo("Role", &m_menuRoleIndex, kRoleItems, IM_ARRAYSIZE(kRoleItems));
-        ImGui::Combo("Map", &m_menuMapIndex, kMapItems, IM_ARRAYSIZE(kMapItems));
-
-        m_menuPort = std::clamp(m_menuPort, 1, 65535);
-        ImGui::InputInt("Port", &m_menuPort);
-
-        char ipBuffer[64]{};
-        std::snprintf(ipBuffer, sizeof(ipBuffer), "%s", m_menuJoinIp.c_str());
-        if (ImGui::InputText("Join IP", ipBuffer, sizeof(ipBuffer)))
-        {
-            m_menuJoinIp = ipBuffer;
-        }
-
-        const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
-        const std::string mapName = MapNameFromIndex(m_menuMapIndex);
-
-        if (ImGui::Button("Play Solo", ImVec2(-1.0F, 0.0F)))
-        {
-            StartSoloSession(mapName, roleName);
-        }
-
-        if (!savedMaps.empty())
-        {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Play Saved Map");
-            if (ImGui::BeginListBox("##saved_maps", ImVec2(-1.0F, 110.0F)))
-            {
-                for (int i = 0; i < static_cast<int>(savedMaps.size()); ++i)
-                {
-                    const bool selected = m_menuSavedMapIndex == i;
-                    if (ImGui::Selectable(savedMaps[static_cast<std::size_t>(i)].c_str(), selected))
-                    {
-                        m_menuSavedMapIndex = i;
-                    }
-                }
-                ImGui::EndListBox();
-            }
-            if (ImGui::Button("Play Map", ImVec2(-1.0F, 0.0F)))
-            {
-                if (m_menuSavedMapIndex >= 0 && m_menuSavedMapIndex < static_cast<int>(savedMaps.size()))
-                {
-                    StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
-                }
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Editor");
-        if (ImGui::Button("Level Editor", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.Stop();
-            m_network.Disconnect();
-            m_gameplay.SetNetworkAuthorityMode(false);
-            m_gameplay.ClearRemoteRoleCommands();
-            m_multiplayerMode = MultiplayerMode::Solo;
-            m_pauseMenuOpen = false;
-            m_appMode = AppMode::Editor;
-            m_levelEditor.Enter(game::editor::LevelEditor::Mode::MapEditor);
-            m_menuNetStatus = "Entered Level Editor";
-            TransitionNetworkState(NetworkState::Offline, "Editor mode");
-        }
-        if (ImGui::Button("Loop Editor", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.Stop();
-            m_network.Disconnect();
-            m_gameplay.SetNetworkAuthorityMode(false);
-            m_gameplay.ClearRemoteRoleCommands();
-            m_multiplayerMode = MultiplayerMode::Solo;
-            m_pauseMenuOpen = false;
-            m_appMode = AppMode::Editor;
-            m_levelEditor.Enter(game::editor::LevelEditor::Mode::LoopEditor);
-            m_menuNetStatus = "Entered Loop Editor";
-            TransitionNetworkState(NetworkState::Offline, "Editor mode");
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Multiplayer");
-        if (ImGui::Button("Host Multiplayer", ImVec2(-1.0F, 0.0F)))
-        {
-            StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
-        }
-
-        if (ImGui::Button("Join Multiplayer", ImVec2(-1.0F, 0.0F)))
-        {
-            StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("LAN Games (Local Network Only)");
-        if (ImGui::Button("Refresh LAN", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.ForceScan();
-        }
-
-        const auto& servers = m_lanDiscovery.Servers();
-        if (servers.empty())
-        {
-            ImGui::TextWrapped("No LAN games found. Make sure host is running and on same network.");
-        }
-        else
-        {
-            for (std::size_t i = 0; i < servers.size(); ++i)
-            {
-                const auto& entry = servers[i];
-                const bool full = entry.players >= entry.maxPlayers;
-                const bool canJoin = entry.compatible && !full;
-
-                ImGui::PushID(static_cast<int>(i));
-                ImGui::Text("[%s] %s:%u | Map: %s | Players: %d/%d",
-                            entry.hostName.c_str(),
-                            entry.ip.c_str(),
-                            entry.port,
-                            entry.mapName.c_str(),
-                            entry.players,
-                            entry.maxPlayers);
-                if (!entry.compatible)
-                {
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted("(Incompatible Version)");
-                }
-                else if (full)
-                {
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted("(Full)");
-                }
-
-                if (!canJoin)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Join", ImVec2(100.0F, 0.0F)))
-                {
-                    StartJoinSession(entry.ip, entry.port, roleName);
-                }
-                if (!canJoin)
-                {
-                    ImGui::EndDisabled();
-                }
-                ImGui::PopID();
-            }
-        }
-
-        if (ImGui::Button("Quit", ImVec2(-1.0F, 0.0F)))
-        {
-            *shouldQuit = true;
-        }
-
-        if (!m_menuNetStatus.empty())
-        {
-            ImGui::Separator();
-            ImGui::TextWrapped("%s", m_menuNetStatus.c_str());
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Network State: %s", NetworkStateToText(m_networkState).c_str());
-        if (m_networkState == NetworkState::ClientConnecting || m_networkState == NetworkState::ClientHandshaking)
-        {
-            const double elapsed = std::max(0.0, glfwGetTime() - m_joinStartSeconds);
-            ImGui::Text("Connecting to %s:%u (%.1fs)", m_joinTargetIp.c_str(), m_joinTargetPort, elapsed);
-        }
-        if (!m_lastNetworkError.empty())
-        {
-            ImGui::TextWrapped("Last Error: %s", m_lastNetworkError.c_str());
-        }
-        ImGui::TextUnformatted("Press F4 for network diagnostics");
-    }
-    ImGui::End();
-#else
-    (void)shouldQuit;
-#endif
-}
-
-void App::DrawPauseMenuUi(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit)
-{
-#if BUILD_WITH_IMGUI
-    ImGui::SetNextWindowSize(ImVec2(360.0F, 240.0F), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5F, 0.5F));
-
-    if (ImGui::Begin("Pause Menu", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
-    {
-        if (ImGui::Button("Resume", ImVec2(-1.0F, 0.0F)))
-        {
-            *closePauseMenu = true;
-        }
-
-        if (ImGui::Button("Return to Main Menu", ImVec2(-1.0F, 0.0F)))
-        {
-            *backToMenu = true;
-        }
-
-        if (ImGui::Button("Settings", ImVec2(-1.0F, 0.0F)))
-        {
-            m_settingsMenuOpen = true;
-            m_settingsOpenedFromPause = true;
-        }
-
-        if (ImGui::Button("Quit", ImVec2(-1.0F, 0.0F)))
-        {
-            *shouldQuit = true;
-        }
-    }
-    ImGui::End();
-#else
-    (void)closePauseMenu;
-    (void)backToMenu;
-    (void)shouldQuit;
-#endif
-}
-
-void App::DrawSettingsUi(bool* closeSettings)
-{
-#if BUILD_WITH_IMGUI
-    if (m_rebindWaiting)
-    {
-        if (m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
-        {
-            m_rebindWaiting = false;
-            m_controlsStatus = "Rebind cancelled.";
-        }
-        else if (const std::optional<int> captured = CapturePressedBindCode(); captured.has_value())
-        {
-            const auto conflict = m_actionBindings.FindConflict(*captured, m_rebindAction, m_rebindSlot);
-            if (conflict.has_value())
-            {
-                m_rebindConflictAction = conflict->first;
-                m_rebindConflictSlot = conflict->second;
-                m_rebindCapturedCode = *captured;
-                m_rebindConflictPopup = true;
-            }
-            else
-            {
-                m_actionBindings.SetCode(m_rebindAction, m_rebindSlot, *captured);
-                m_rebindWaiting = false;
-                m_controlsStatus =
-                    std::string{"Bound "} + platform::ActionBindings::ActionLabel(m_rebindAction) + " to " +
-                    platform::ActionBindings::CodeToLabel(*captured);
-                (void)SaveControlsConfig();
-            }
-        }
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(920.0F, 680.0F), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
-    if (ImGui::Begin("Settings", closeSettings, ImGuiWindowFlags_NoCollapse))
-    {
-        ImGui::TextUnformatted("Persistent settings (config/*.json)");
-        if (m_multiplayerMode == MultiplayerMode::Client)
-        {
-            ImGui::SameLine();
-            ImGui::TextUnformatted("| Server Values active");
-        }
-        ImGui::Separator();
-
-        if (ImGui::BeginTabBar("settings_tabs"))
-        {
-            if (ImGui::BeginTabItem("Controls"))
-            {
-                ImGui::TextWrapped("Action bindings with primary/secondary slots. Click Rebind and press a key or mouse button.");
-                if (m_rebindWaiting)
-                {
-                    ImGui::Text("Waiting input for: %s (%s)",
-                                platform::ActionBindings::ActionLabel(m_rebindAction),
-                                m_rebindSlot == 0 ? "Primary" : "Secondary");
-                    ImGui::TextUnformatted("Press ESC to cancel.");
-                }
-
-                ImGui::Separator();
-                ImGui::BeginChild("controls_bindings", ImVec2(0.0F, 350.0F), true);
-                for (platform::InputAction action : platform::ActionBindings::AllActions())
-                {
-                    const platform::ActionBinding binding = m_actionBindings.Get(action);
-                    ImGui::PushID(static_cast<int>(action));
-                    ImGui::TextUnformatted(platform::ActionBindings::ActionLabel(action));
-                    ImGui::SameLine(240.0F);
-
-                    const bool rebindable = platform::ActionBindings::IsRebindable(action);
-                    if (!rebindable)
-                    {
-                        ImGui::Text("%s", platform::ActionBindings::CodeToLabel(binding.primary).c_str());
-                    }
-                    else
-                    {
-                        if (ImGui::Button((platform::ActionBindings::CodeToLabel(binding.primary) + "##p").c_str(), ImVec2(120.0F, 0.0F)))
-                        {
-                            m_rebindWaiting = true;
-                            m_rebindAction = action;
-                            m_rebindSlot = 0;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button((platform::ActionBindings::CodeToLabel(binding.secondary) + "##s").c_str(), ImVec2(120.0F, 0.0F)))
-                        {
-                            m_rebindWaiting = true;
-                            m_rebindAction = action;
-                            m_rebindSlot = 1;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("Unbind"))
-                        {
-                            m_actionBindings.SetCode(action, 0, platform::ActionBindings::kUnbound);
-                            m_actionBindings.SetCode(action, 1, platform::ActionBindings::kUnbound);
-                            (void)SaveControlsConfig();
-                        }
-                    }
-                    ImGui::PopID();
-                }
-                ImGui::EndChild();
-
-                if (m_rebindConflictPopup)
-                {
-                    ImGui::OpenPopup("Rebind Conflict");
-                    m_rebindConflictPopup = false;
-                }
-                if (ImGui::BeginPopupModal("Rebind Conflict", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-                {
-                    ImGui::Text("Key already used by %s (%s).",
-                                platform::ActionBindings::ActionLabel(m_rebindConflictAction),
-                                m_rebindConflictSlot == 0 ? "Primary" : "Secondary");
-                    ImGui::Text("Override with %s?",
-                                platform::ActionBindings::CodeToLabel(m_rebindCapturedCode).c_str());
-                    if (ImGui::Button("Override"))
-                    {
-                        m_actionBindings.SetCode(m_rebindConflictAction, m_rebindConflictSlot, platform::ActionBindings::kUnbound);
-                        m_actionBindings.SetCode(m_rebindAction, m_rebindSlot, m_rebindCapturedCode);
-                        m_rebindWaiting = false;
-                        (void)SaveControlsConfig();
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel"))
-                    {
-                        m_rebindWaiting = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
-                }
-
-                bool sensitivityChanged = false;
-                sensitivityChanged |= ImGui::SliderFloat("Survivor Look Sensitivity", &m_controlsSettings.survivorSensitivity, 0.0002F, 0.01F, "%.4f");
-                sensitivityChanged |= ImGui::SliderFloat("Killer Look Sensitivity", &m_controlsSettings.killerSensitivity, 0.0002F, 0.01F, "%.4f");
-                sensitivityChanged |= ImGui::Checkbox("Invert Y", &m_controlsSettings.invertY);
-                if (sensitivityChanged)
-                {
-                    ApplyControlsSettings();
-                }
-
-                if (ImGui::Button("Save Controls"))
-                {
-                    ApplyControlsSettings();
-                    if (SaveControlsConfig())
-                    {
-                        m_controlsStatus = "Controls saved to config/controls.json";
-                    }
-                    else
-                    {
-                        m_controlsStatus = "Failed to save controls config.";
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Reset Defaults"))
-                {
-                    m_actionBindings.ResetDefaults();
-                    m_controlsSettings = ControlsSettings{};
-                    ApplyControlsSettings();
-                    (void)SaveControlsConfig();
-                    m_controlsStatus = "Controls reset to defaults.";
-                }
-                if (!m_controlsStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_controlsStatus.c_str());
-                }
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Graphics"))
-            {
-                const char* displayModes[] = {"Windowed", "Fullscreen", "Borderless"};
-                int displayModeIndex = static_cast<int>(m_graphicsEditing.displayMode);
-                if (ImGui::Combo("Display Mode", &displayModeIndex, displayModes, IM_ARRAYSIZE(displayModes)))
-                {
-                    m_graphicsEditing.displayMode = static_cast<DisplayModeSetting>(glm::clamp(displayModeIndex, 0, 2));
-                }
-
-                const std::vector<std::pair<int, int>> resolutions = AvailableResolutions();
-                int resolutionIndex = -1;
-                std::vector<std::string> labels;
-                labels.reserve(resolutions.size());
-                for (std::size_t i = 0; i < resolutions.size(); ++i)
-                {
-                    const auto [w, h] = resolutions[i];
-                    labels.push_back(std::to_string(w) + "x" + std::to_string(h));
-                    if (w == m_graphicsEditing.width && h == m_graphicsEditing.height)
-                    {
-                        resolutionIndex = static_cast<int>(i);
-                    }
-                }
-                if (resolutionIndex < 0 && !resolutions.empty())
-                {
-                    resolutionIndex = 0;
-                }
-
-                if (!labels.empty())
-                {
-                    const char* preview = labels[static_cast<std::size_t>(resolutionIndex)].c_str();
-                    if (ImGui::BeginCombo("Resolution", preview))
-                    {
-                        for (int i = 0; i < static_cast<int>(labels.size()); ++i)
-                        {
-                            const bool selected = i == resolutionIndex;
-                            if (ImGui::Selectable(labels[static_cast<std::size_t>(i)].c_str(), selected))
-                            {
-                                resolutionIndex = i;
-                                m_graphicsEditing.width = resolutions[static_cast<std::size_t>(i)].first;
-                                m_graphicsEditing.height = resolutions[static_cast<std::size_t>(i)].second;
-                            }
-                            if (selected)
-                            {
-                                ImGui::SetItemDefaultFocus();
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                }
-
-                ImGui::Checkbox("VSync", &m_graphicsEditing.vsync);
-                ImGui::SliderInt("FPS Limit (0 = Unlimited)", &m_graphicsEditing.fpsLimit, 0, 240);
-
-                int renderMode = m_graphicsEditing.renderMode == render::RenderMode::Wireframe ? 0 : 1;
-                const char* renderItems[] = {"Wireframe", "Filled"};
-                if (ImGui::Combo("Render Mode", &renderMode, renderItems, IM_ARRAYSIZE(renderItems)))
-                {
-                    m_graphicsEditing.renderMode = renderMode == 0 ? render::RenderMode::Wireframe : render::RenderMode::Filled;
-                }
-
-                const char* shadowItems[] = {"Off", "Low", "Med", "High"};
-                ImGui::Combo("Shadow Quality", &m_graphicsEditing.shadowQuality, shadowItems, IM_ARRAYSIZE(shadowItems));
-                ImGui::SliderFloat("Shadow Distance", &m_graphicsEditing.shadowDistance, 8.0F, 200.0F, "%.0f");
-                const char* aaItems[] = {"None", "FXAA"};
-                ImGui::Combo("Anti-Aliasing", &m_graphicsEditing.antiAliasing, aaItems, IM_ARRAYSIZE(aaItems));
-                const char* texItems[] = {"Low", "Medium", "High"};
-                ImGui::Combo("Texture Quality", &m_graphicsEditing.textureQuality, texItems, IM_ARRAYSIZE(texItems));
-                ImGui::Checkbox("Fog", &m_graphicsEditing.fogEnabled);
-
-                if (ImGui::Button("Apply Graphics"))
-                {
-                    m_graphicsRollback = m_graphicsApplied;
-                    ApplyGraphicsSettings(m_graphicsEditing, true);
-                    if (SaveGraphicsConfig())
-                    {
-                        m_graphicsStatus = "Graphics applied and saved.";
-                    }
-                    else
-                    {
-                        m_graphicsStatus = "Graphics applied, but failed to save config.";
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel"))
-                {
-                    m_graphicsEditing = m_graphicsApplied;
-                    m_graphicsStatus = "Pending graphics changes reverted.";
-                }
-
-                if (m_graphicsAutoConfirmPending)
-                {
-                    const double secondsLeft = std::max(0.0, m_graphicsAutoConfirmDeadline - glfwGetTime());
-                    ImGui::Separator();
-                    ImGui::Text("Confirm display settings: %.1fs left", secondsLeft);
-                    if (ImGui::Button("Keep"))
-                    {
-                        m_graphicsAutoConfirmPending = false;
-                        m_graphicsRollback = m_graphicsApplied;
-                        (void)SaveGraphicsConfig();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Revert"))
-                    {
-                        ApplyGraphicsSettings(m_graphicsRollback, false);
-                        m_graphicsEditing = m_graphicsRollback;
-                        m_graphicsApplied = m_graphicsRollback;
-                        m_graphicsAutoConfirmPending = false;
-                        (void)SaveGraphicsConfig();
-                    }
-                }
-
-                if (!m_graphicsStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_graphicsStatus.c_str());
-                }
-
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Gameplay"))
-            {
-                const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
-                if (!allowEdit)
-                {
-                    ImGui::TextColored(ImVec4(1.0F, 0.8F, 0.2F, 1.0F), "Server Values are authoritative in multiplayer client mode.");
-                    ImGui::BeginDisabled();
-                }
-
-                auto& t = m_gameplayEditing;
-                ImGui::TextUnformatted("Movement");
-                ImGui::SliderFloat("Survivor Walk", &t.survivorWalkSpeed, 0.5F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Sprint", &t.survivorSprintSpeed, 0.5F, 10.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Crouch", &t.survivorCrouchSpeed, 0.1F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Crawl", &t.survivorCrawlSpeed, 0.1F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Killer Speed", &t.killerMoveSpeed, 0.5F, 12.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Capsules");
-                ImGui::SliderFloat("Survivor Radius", &t.survivorCapsuleRadius, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Survivor Height", &t.survivorCapsuleHeight, 0.9F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Killer Radius", &t.killerCapsuleRadius, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Killer Height", &t.killerCapsuleHeight, 0.9F, 3.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Vault / Combat / Heal");
-                ImGui::SliderFloat("Terror Radius", &t.terrorRadiusMeters, 4.0F, 80.0F, "%.1f");
-                ImGui::SliderFloat("Slow Vault Time", &t.vaultSlowTime, 0.2F, 1.6F, "%.2f");
-                ImGui::SliderFloat("Medium Vault Time", &t.vaultMediumTime, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Time", &t.vaultFastTime, 0.15F, 1.0F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Dot", &t.fastVaultDotThreshold, 0.3F, 0.99F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Speed Mult", &t.fastVaultSpeedMultiplier, 0.3F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Short Attack Range", &t.shortAttackRange, 0.5F, 6.0F, "%.2f");
-                ImGui::SliderFloat("Short Attack Angle", &t.shortAttackAngleDegrees, 15.0F, 170.0F, "%.0f");
-                ImGui::SliderFloat("Lunge Hold Min", &t.lungeHoldMinSeconds, 0.02F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Lunge Duration", &t.lungeDurationSeconds, 0.08F, 2.0F, "%.2f");
-                ImGui::SliderFloat("Lunge Boost End Speed", &t.lungeSpeedEnd, 1.0F, 20.0F, "%.2f");
-                ImGui::SliderFloat("Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
-                ImGui::SliderFloat("Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
-                ImGui::SliderFloat("Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Map Generation Weights");
-                ImGui::TextUnformatted("  Classic Loops:");
-                ImGui::SliderFloat("Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Jungle Long", &t.weightJungleGymLong, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Jungle Short", &t.weightJungleGymShort, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Shack", &t.weightShack, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Four Lane", &t.weightFourLane, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Filler A", &t.weightFillerA, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Filler B", &t.weightFillerB, 0.0F, 5.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("  v2 Loop Types:");
-                ImGui::SliderFloat("Weight Long Wall", &t.weightLongWall, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Short Wall", &t.weightShortWall, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight L-Wall Window", &t.weightLWallWindow, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight L-Wall Pallet", &t.weightLWallPallet, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight T-Walls", &t.weightTWalls, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Gym Box", &t.weightGymBox, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Debris Pile", &t.weightDebrisPile, 0.0F, 5.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("  Constraints:");
-                ImGui::SliderInt("Max Loops", &t.maxLoopsPerMap, 0, 64);
-                ImGui::SliderFloat("Min Loop Distance Tiles", &t.minLoopDistanceTiles, 0.0F, 6.0F, "%.1f");
-                ImGui::SliderInt("Max Safe Pallets", &t.maxSafePallets, 0, 64);
-                ImGui::SliderInt("Max Deadzone Tiles", &t.maxDeadzoneTiles, 1, 8);
-                ImGui::Checkbox("Edge Bias Loops", &t.edgeBiasLoops);
-                ImGui::Separator();
-                ImGui::TextUnformatted("Networking");
-                ImGui::SliderInt("Server Tick Rate", &t.serverTickRate, 30, 60);
-                ImGui::SliderInt("Interpolation Buffer (ms)", &t.interpolationBufferMs, 50, 1000);
-
-                if (!allowEdit)
-                {
-                    ImGui::EndDisabled();
-                }
-
-                if (allowEdit && ImGui::Button("Apply Gameplay Tuning"))
-                {
-                    ApplyGameplaySettings(m_gameplayEditing, false);
-                    if (m_multiplayerMode == MultiplayerMode::Host)
-                    {
-                        SendGameplayTuningToClient();
-                    }
-                    if (SaveGameplayConfig())
-                    {
-                        m_gameplayStatus = "Gameplay tuning applied and saved.";
-                    }
-                    else
-                    {
-                        m_gameplayStatus = "Gameplay tuning applied, but config save failed.";
-                    }
-                }
-                if (allowEdit)
-                {
-                    ImGui::SameLine();
-                }
-                if (ImGui::Button("Reset Gameplay Defaults"))
-                {
-                    m_gameplayEditing = game::gameplay::GameplaySystems::GameplayTuning{};
-                    if (allowEdit)
-                    {
-                        ApplyGameplaySettings(m_gameplayEditing, false);
-                        (void)SaveGameplayConfig();
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel Gameplay Changes"))
-                {
-                    m_gameplayEditing = m_gameplayApplied;
-                }
-
-                ImGui::TextWrapped("Map generation weights and some collider values are safest to verify after reloading map.");
-                if (!m_gameplayStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_gameplayStatus.c_str());
-                }
-                ImGui::EndTabItem();
-            }
-
-            ImGui::EndTabBar();
-        }
-
-        ImGui::Separator();
-        if (ImGui::Button("Back"))
-        {
-            *closeSettings = false;
-        }
-    }
-    ImGui::End();
-#else
-    (void)closeSettings;
-#endif
 }
 
 std::string App::RoleNameFromIndex(int index)

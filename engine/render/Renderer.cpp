@@ -1072,9 +1072,22 @@ void Renderer::DrawTexturedMesh(
     }
 }
 
-void Renderer::DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor)
+void Renderer::DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor, const glm::vec4& filledColor)
 {
     const float range = static_cast<float>(halfSize) * step;
+    
+    if (m_renderMode == RenderMode::Filled && filledColor.a > 0.0F)
+    {
+        // In filled mode, draw a solid floor plane
+        AddSolidBox(
+            glm::vec3{0.0F, -0.005F, 0.0F},
+            glm::vec3{range, 0.005F, range},
+            glm::vec3{filledColor.r, filledColor.g, filledColor.b},
+            MaterialParams{}
+        );
+    }
+    
+    // Always draw grid lines
     for (int i = -halfSize; i <= halfSize; ++i)
     {
         const float value = static_cast<float>(i) * step;

@@ -7839,7 +7839,7 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
     {
         applyMaterialLabPointLights();
 
-        renderer.DrawGrid(18, 1.0F, glm::vec3{0.26F, 0.26F, 0.29F}, glm::vec3{0.12F, 0.12F, 0.14F});
+        renderer.DrawGrid(18, 1.0F, glm::vec3{0.26F, 0.26F, 0.29F}, glm::vec3{0.12F, 0.12F, 0.14F}, glm::vec4{0.1F, 0.12F, 0.15F, 1.0F});
         if (m_materialLabBackdropEnabled)
         {
             renderer.DrawOrientedBox(
@@ -7968,7 +7968,7 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
     const float step = loopMode ? 1.0F : m_map.tileSize;
     const glm::vec3 majorColor = m_debugView ? glm::vec3{0.35F, 0.35F, 0.35F} : glm::vec3{0.18F, 0.18F, 0.18F};
     const glm::vec3 minorColor = m_debugView ? glm::vec3{0.18F, 0.18F, 0.18F} : glm::vec3{0.1F, 0.1F, 0.1F};
-    renderer.DrawGrid(gridHalf, step, majorColor, minorColor);
+    renderer.DrawGrid(gridHalf, step, majorColor, minorColor, glm::vec4{0.1F, 0.12F, 0.15F, 1.0F});
 
     if (!loopMode)
     {

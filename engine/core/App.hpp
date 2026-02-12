@@ -21,6 +21,11 @@
 #include "game/editor/LevelEditor.hpp"
 #include "game/gameplay/GameplaySystems.hpp"
 #include "game/ui/LoadingManager.hpp"
+#include "game/ui/SkillCheckWheel.hpp"
+#include "game/ui/GeneratorProgressBar.hpp"
+#include "game/ui/ScreenEffects.hpp"
+#include "game/ui/PerkLoadoutEditor.hpp"
+#include "game/ui/LobbyScene.hpp"
 #include "ui/DeveloperConsole.hpp"
 #include "ui/DeveloperToolbar.hpp"
 
@@ -67,6 +72,7 @@ private:
     enum class AppMode
     {
         MainMenu,
+        Lobby,
         Editor,
         InGame,
         Loading
@@ -194,9 +200,6 @@ private:
     void SendAssignRoleToClient(const std::string& remoteRole);
     bool SendRoleChangeRequestToHost(const std::string& requestedRole);
 
-    void DrawMainMenuUi(bool* shouldQuit);
-    void DrawPauseMenuUi(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit);
-    void DrawSettingsUi(bool* closeSettings);
     void DrawMainMenuUiCustom(bool* shouldQuit);
     void DrawPauseMenuUiCustom(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit);
     void DrawSettingsUiCustom(bool* closeSettings);
@@ -238,6 +241,11 @@ private:
     game::gameplay::GameplaySystems m_gameplay;
     game::editor::LevelEditor m_levelEditor;
     game::ui::LoadingManager m_loadingManager;
+    game::ui::SkillCheckWheel m_skillCheckWheel;
+    game::ui::GeneratorProgressBar m_generatorProgressBar;
+    game::ui::ScreenEffects m_screenEffects;
+    game::ui::PerkLoadoutEditor m_perkLoadoutEditor;
+    game::ui::LobbyScene m_lobbyScene;
     ::ui::DeveloperConsole m_console;
     ::ui::DeveloperToolbar m_devToolbar;
     net::NetworkSession m_network;
@@ -265,7 +273,6 @@ private:
     bool m_settingsOpenedFromPause = false;
     int m_settingsTabIndex = 0;
     std::array<float, 3> m_settingsTabScroll{0.0F, 0.0F, 0.0F};
-    bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
     bool m_showLoadingScreenTestPanel = false;
 

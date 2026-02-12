@@ -89,6 +89,11 @@ set(ENGINE_SOURCES
     engine/ui/UiSystem.cpp
     game/ui/LoadingScreen.cpp
     game/ui/LoadingManager.cpp
+    game/ui/SkillCheckWheel.cpp
+    game/ui/GeneratorProgressBar.cpp
+    game/ui/ScreenEffects.cpp
+    game/ui/PerkLoadoutEditor.cpp
+    game/ui/LobbyScene.cpp
     game/maps/TileGenerator.cpp
     game/gameplay/GameplaySystems.cpp
     game/gameplay/SpawnSystem.cpp

@@ -141,7 +141,7 @@ public:
         const MaterialParams& material,
         unsigned int textureId
     );
-    void DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor);
+    void DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor, const glm::vec4& filledColor = glm::vec4{0.0F});
     void DrawCircle(
         const glm::vec3& center,
         float radius,

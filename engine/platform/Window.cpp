@@ -179,7 +179,12 @@ void Window::ToggleFullscreen()
 
     if (m_displayMode == DisplayMode::Windowed)
     {
-        SetDisplayMode(DisplayMode::Fullscreen, m_windowWidth, m_windowHeight);
+        // Get primary monitor's max resolution for fullscreen
+        GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = primaryMonitor != nullptr ? glfwGetVideoMode(primaryMonitor) : nullptr;
+        const int fullWidth = mode != nullptr ? mode->width : m_windowWidth;
+        const int fullHeight = mode != nullptr ? mode->height : m_windowHeight;
+        SetDisplayMode(DisplayMode::Fullscreen, fullWidth, fullHeight);
     }
     else
     {

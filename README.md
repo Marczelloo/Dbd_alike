@@ -379,7 +379,6 @@ ImGui is kept for developer/debug windows only (console/debug overlays/editor in
 
 Quick UI debug toggles:
 - `F6` -> custom UI Test Panel (buttons, dropdown, sliders, input, progress, keybind capture)
-- `F10` -> toggle legacy ImGui menus/HUD fallback
 
 Settings are now available directly from:
 - `Main Menu -> Settings`
