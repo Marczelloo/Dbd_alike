@@ -103,6 +103,8 @@ std::string CommandCategoryForUsage(const std::string& usage)
     if (command == "toggle_collision" || command == "toggle_debug_draw" || command == "physics_debug" ||
         command == "noclip" || command == "tr_vis" || command == "tr_set" || command == "set_chase" ||
         command == "cam_mode" || command == "control_role" || command == "set_role" ||
+        command == "trap_spawn" || command == "trap_clear" || command == "trap_debug" ||
+        command == "item_dump" || command == "power_dump" || command == "set_survivor" || command == "set_killer" ||
         command == "fx_spawn" || command == "fx_stop_all" || command == "fx_list" ||
         command == "player_dump" || command == "scene_dump")
     {
@@ -450,10 +452,10 @@ struct DeveloperConsole::Impl
             AddLog("Heal requested for survivor.");
         });
 
-        RegisterCommand("survivor_state healthy|injured|downed|carried|hooked|dead", "Force survivor FSM state (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("survivor_state healthy|injured|downed|trapped|carried|hooked|dead", "Force survivor FSM state (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: survivor_state healthy|injured|downed|carried|hooked|dead");
+                AddLog("Usage: survivor_state healthy|injured|downed|trapped|carried|hooked|dead");
                 return;
             }
 
@@ -1269,6 +1271,216 @@ struct DeveloperConsole::Impl
             {
                 AddLog(context.sceneDump());
             }
+        });
+
+        RegisterCommand("item_set <id|none>", "Set survivor item loadout item id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_set <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string itemId = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(itemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB))
+            {
+                AddLog("item_set failed (invalid id/addon mismatch).");
+                return;
+            }
+            AddLog("item_set OK: " + (itemId.empty() ? "none" : itemId));
+        });
+
+        RegisterCommand("power_set <id|none>", "Set killer power id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_set <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string powerId = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(powerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB))
+            {
+                AddLog("power_set failed (invalid id/addon mismatch).");
+                return;
+            }
+            AddLog("power_set OK: " + (powerId.empty() ? "none" : powerId));
+        });
+
+        RegisterCommand("item_addon_a <id|none>", "Set survivor item addon A", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_addon_a <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonA = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, addonA, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB))
+            {
+                AddLog("item_addon_a failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("item_addon_a OK: " + (addonA.empty() ? "none" : addonA));
+        });
+
+        RegisterCommand("item_addon_b <id|none>", "Set survivor item addon B", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_addon_b <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonB = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, addonB))
+            {
+                AddLog("item_addon_b failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("item_addon_b OK: " + (addonB.empty() ? "none" : addonB));
+        });
+
+        RegisterCommand("power_addon_a <id|none>", "Set killer power addon A", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_addon_a <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonA = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, addonA, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB))
+            {
+                AddLog("power_addon_a failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("power_addon_a OK: " + (addonA.empty() ? "none" : addonA));
+        });
+
+        RegisterCommand("power_addon_b <id|none>", "Set killer power addon B", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_addon_b <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonB = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, addonB))
+            {
+                AddLog("power_addon_b failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("power_addon_b OK: " + (addonB.empty() ? "none" : addonB));
+        });
+
+        RegisterCommand("addon_set_a <id|none>", "Alias: set addon A for current role (survivor item / killer power)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: addon_set_a <id|none>");
+                return;
+            }
+            const auto hud = context.gameplay->BuildHudState();
+            const std::string addonId = tokens[1] == "none" ? "" : tokens[1];
+            bool ok = false;
+            if (hud.roleName == "Killer")
+            {
+                ok = context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, addonId, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB);
+            }
+            else
+            {
+                ok = context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, addonId, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB);
+            }
+            AddLog(ok ? "addon_set_a OK" : "addon_set_a failed");
+        });
+
+        RegisterCommand("addon_set_b <id|none>", "Alias: set addon B for current role (survivor item / killer power)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: addon_set_b <id|none>");
+                return;
+            }
+            const auto hud = context.gameplay->BuildHudState();
+            const std::string addonId = tokens[1] == "none" ? "" : tokens[1];
+            bool ok = false;
+            if (hud.roleName == "Killer")
+            {
+                ok = context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, addonId);
+            }
+            else
+            {
+                ok = context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, addonId);
+            }
+            AddLog(ok ? "addon_set_b OK" : "addon_set_b failed");
+        });
+
+        RegisterCommand("item_dump", "Print survivor item loadout and runtime state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay)
+            {
+                AddLog(context.gameplay->ItemDump());
+            }
+        });
+
+        RegisterCommand("power_dump", "Print killer power loadout and trap summary", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay)
+            {
+                AddLog(context.gameplay->PowerDump());
+            }
+        });
+
+        RegisterCommand("set_survivor <id>", "Select survivor character id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: set_survivor <id>");
+                return;
+            }
+            if (!context.gameplay->SetSelectedSurvivorCharacter(tokens[1]))
+            {
+                AddLog("set_survivor failed: unknown id");
+                return;
+            }
+            AddLog("set_survivor OK: " + tokens[1]);
+        });
+
+        RegisterCommand("set_killer <id>", "Select killer character id (updates power_id)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: set_killer <id>");
+                return;
+            }
+            if (!context.gameplay->SetSelectedKillerCharacter(tokens[1]))
+            {
+                AddLog("set_killer failed: unknown id");
+                return;
+            }
+            AddLog("set_killer OK: " + tokens[1]);
+        });
+
+        RegisterCommand("trap_spawn", "Spawn bear trap at killer forward", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay != nullptr)
+            {
+                context.gameplay->TrapSpawnDebug();
+                AddLog("trap_spawn requested.");
+            }
+        });
+
+        RegisterCommand("trap_clear", "Clear all bear traps", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay != nullptr)
+            {
+                context.gameplay->TrapClearDebug();
+                AddLog("trap_clear requested.");
+            }
+        });
+
+        RegisterCommand("trap_debug on|off", "Toggle trap debug draw helpers", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: trap_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+            context.gameplay->SetTrapDebug(enabled);
+            AddLog(std::string("trap_debug ") + (enabled ? "ON" : "OFF"));
         });
 
         RegisterCommand("render_mode wireframe|filled", "Set render mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {

@@ -12,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 
 #include <GLFW/glfw3.h>
 #include <glm/common.hpp>
@@ -163,6 +164,7 @@ void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
 
     // Initialize perk system active states
     m_perkSystem.InitializeActiveStates();
+    InitializeLoadoutCatalog();
 
     BuildSceneFromMap(MapType::Test, m_generationSeed);
     AddRuntimeMessage("Press ~ for Console", 4.0F);
@@ -189,6 +191,7 @@ void GameplaySystems::CaptureInputFrame(
         }
         if (role == engine::scene::Role::Survivor &&
             (m_survivorState == SurvivorHealthState::Hooked ||
+             m_survivorState == SurvivorHealthState::Trapped ||
              m_survivorState == SurvivorHealthState::Dead))
         {
             inputLocked = true;
@@ -202,7 +205,9 @@ void GameplaySystems::CaptureInputFrame(
             command.interactHeld = false;
             command.attackHeld = false;
             command.lungeHeld = false;
-            if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Hooked && controlsEnabled)
+            if (role == engine::scene::Role::Survivor &&
+                (m_survivorState == SurvivorHealthState::Hooked || m_survivorState == SurvivorHealthState::Trapped) &&
+                controlsEnabled)
             {
                 const glm::vec2 mouseDelta = input.MouseDelta();
                 command.lookDelta += glm::vec2{mouseDelta.x, m_invertLookY ? -mouseDelta.y : mouseDelta.y};
@@ -212,6 +217,11 @@ void GameplaySystems::CaptureInputFrame(
                 command.interactPressed =
                     command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
                 command.jumpPressed = command.jumpPressed || input.IsKeyPressed(GLFW_KEY_SPACE);
+            }
+            if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Trapped && controlsEnabled)
+            {
+                command.interactPressed =
+                    command.interactPressed || bindings.IsPressed(input, engine::platform::InputAction::Interact);
             }
             if (role == engine::scene::Role::Survivor && m_survivorState == SurvivorHealthState::Carried && controlsEnabled)
             {
@@ -331,13 +341,16 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
         bool inputLocked = IsActorInputLocked(actor);
         if (entity == m_survivor &&
             (m_survivorState == SurvivorHealthState::Hooked ||
+             m_survivorState == SurvivorHealthState::Trapped ||
              m_survivorState == SurvivorHealthState::Dead))
         {
             inputLocked = true;
         }
 
-        const bool allowHookLook = entity == m_survivor && m_survivorState == SurvivorHealthState::Hooked;
-        if ((!inputLocked || allowHookLook) && glm::length(command.lookDelta) > 1.0e-5F)
+        const bool allowLookWhileLocked =
+            entity == m_survivor &&
+            (m_survivorState == SurvivorHealthState::Hooked || m_survivorState == SurvivorHealthState::Trapped);
+        if ((!inputLocked || allowLookWhileLocked) && glm::length(command.lookDelta) > 1.0e-5F)
         {
             const float sensitivity = role == engine::scene::Role::Survivor ? m_survivorLookSensitivity : m_killerLookSensitivity;
             UpdateActorLook(entity, command.lookDelta, sensitivity);
@@ -369,6 +382,9 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     UpdateHookStages(fixedDt, survivorCommand.interactPressed, survivorCommand.jumpPressed);
     UpdateGeneratorRepair(survivorCommand.interactHeld, survivorCommand.jumpPressed, fixedDt);
     UpdateSelfHeal(survivorCommand.interactHeld, survivorCommand.jumpPressed, fixedDt);
+    UpdateSurvivorItemSystem(survivorCommand, fixedDt);
+    UpdateKillerPowerSystem(killerCommand, fixedDt);
+    UpdateBearTrapSystem(survivorCommand, killerCommand, fixedDt);
 
     const InteractionCandidate survivorCandidate = ResolveInteractionCandidateFromView(m_survivor);
     if (survivorCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Survivor))
@@ -640,6 +656,38 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
         renderer.DrawBox(transformIt->second.position, hook.halfExtents, hookColor);
     }
 
+    for (const auto& [entity, trap] : m_world.BearTraps())
+    {
+        const auto transformIt = transforms.find(entity);
+        if (transformIt == transforms.end())
+        {
+            continue;
+        }
+
+        glm::vec3 color{0.72F, 0.72F, 0.75F};
+        if (trap.state == engine::scene::TrapState::Triggered)
+        {
+            color = glm::vec3{0.95F, 0.32F, 0.25F};
+        }
+        else if (trap.state == engine::scene::TrapState::Disarmed)
+        {
+            color = glm::vec3{0.26F, 0.26F, 0.28F};
+        }
+        if (m_survivorItemState.mapPulseTtl > 0.0F && trap.state != engine::scene::TrapState::Disarmed)
+        {
+            color = glm::mix(color, glm::vec3{0.25F, 0.95F, 1.0F}, 0.65F);
+        }
+        renderer.DrawBox(transformIt->second.position, trap.halfExtents, color);
+        if (m_trapDebugEnabled)
+        {
+            renderer.DrawLine(
+                transformIt->second.position,
+                transformIt->second.position + glm::vec3{0.0F, 0.75F, 0.0F},
+                color
+            );
+        }
+    }
+
     for (const auto& [entity, generator] : m_world.Generators())
     {
         const auto transformIt = transforms.find(entity);
@@ -687,6 +735,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
                 case SurvivorHealthState::Healthy: color = glm::vec3{0.2F, 0.95F, 0.2F}; break;
                 case SurvivorHealthState::Injured: color = glm::vec3{1.0F, 0.58F, 0.15F}; break;
                 case SurvivorHealthState::Downed: color = glm::vec3{0.95F, 0.15F, 0.15F}; break;
+                case SurvivorHealthState::Trapped: color = glm::vec3{0.93F, 0.85F, 0.2F}; break;
                 case SurvivorHealthState::Carried: color = glm::vec3{0.72F, 0.24F, 0.95F}; break;
                 case SurvivorHealthState::Hooked: color = glm::vec3{0.85F, 0.1F, 0.1F}; break;
                 case SurvivorHealthState::Dead: color = glm::vec3{0.2F, 0.2F, 0.2F}; break;
@@ -1034,6 +1083,35 @@ HudState GameplaySystems::BuildHudState() const
     hud.fxActiveInstances = fxStats.activeInstances;
     hud.fxActiveParticles = fxStats.activeParticles;
     hud.fxCpuMs = fxStats.cpuMs;
+    hud.survivorCharacterId = m_selectedSurvivorCharacterId;
+    hud.killerCharacterId = m_selectedKillerCharacterId;
+    hud.survivorItemId = m_survivorLoadout.itemId.empty() ? "none" : m_survivorLoadout.itemId;
+    hud.survivorItemAddonA = m_survivorLoadout.addonAId.empty() ? "none" : m_survivorLoadout.addonAId;
+    hud.survivorItemAddonB = m_survivorLoadout.addonBId.empty() ? "none" : m_survivorLoadout.addonBId;
+    hud.survivorItemCharges = m_survivorItemState.charges;
+    hud.survivorItemActive = m_survivorItemState.active;
+    hud.killerPowerId = m_killerLoadout.powerId.empty() ? "none" : m_killerLoadout.powerId;
+    hud.killerPowerAddonA = m_killerLoadout.addonAId.empty() ? "none" : m_killerLoadout.addonAId;
+    hud.killerPowerAddonB = m_killerLoadout.addonBId.empty() ? "none" : m_killerLoadout.addonBId;
+    hud.activeTrapCount = static_cast<int>(m_world.BearTraps().size());
+    hud.trapDebugEnabled = m_trapDebugEnabled;
+    if (m_survivorState == SurvivorHealthState::Trapped)
+    {
+        for (const auto& [entity, trap] : m_world.BearTraps())
+        {
+            (void)entity;
+            if (trap.trappedEntity != m_survivor)
+            {
+                continue;
+            }
+            hud.trappedEscapeAttempts = trap.escapeAttempts;
+            hud.trappedEscapeChance = trap.escapeChance;
+            hud.interactionPrompt = "TRAPPED: Press E to attempt escape";
+            hud.interactionTypeName = "TrapEscape";
+            hud.interactionTargetName = "BearTrap";
+            break;
+        }
+    }
     if (m_controlledRole == ControlledRole::Survivor && m_survivorState == SurvivorHealthState::Carried)
     {
         hud.interactionPrompt = "Wiggle: Alternate A/D to escape";
@@ -1890,6 +1968,14 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
     snapshot.seed = m_generationSeed;
     snapshot.survivorPerkIds = m_survivorPerks.perkIds;
     snapshot.killerPerkIds = m_killerPerks.perkIds;
+    snapshot.survivorCharacterId = m_selectedSurvivorCharacterId;
+    snapshot.killerCharacterId = m_selectedKillerCharacterId;
+    snapshot.survivorItemId = m_survivorLoadout.itemId;
+    snapshot.survivorItemAddonA = m_survivorLoadout.addonAId;
+    snapshot.survivorItemAddonB = m_survivorLoadout.addonBId;
+    snapshot.killerPowerId = m_killerLoadout.powerId;
+    snapshot.killerPowerAddonA = m_killerLoadout.addonAId;
+    snapshot.killerPowerAddonB = m_killerLoadout.addonBId;
     snapshot.survivorState = static_cast<std::uint8_t>(m_survivorState);
     snapshot.killerAttackState = static_cast<std::uint8_t>(m_killerAttackState);
     snapshot.killerAttackStateTimer = m_killerAttackStateTimer;
@@ -1902,6 +1988,8 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
     snapshot.chaseTimeSinceCenterFOV = m_chase.timeSinceCenterFOV;
     snapshot.chaseTimeInChase = m_chase.timeInChase;
     snapshot.bloodlustTier = static_cast<std::uint8_t>(m_bloodlust.tier);
+    snapshot.survivorItemCharges = m_survivorItemState.charges;
+    snapshot.survivorItemActive = m_survivorItemState.active ? 1U : 0U;
 
     auto fillActor = [&](engine::scene::Entity entity, ActorSnapshot& outActor) {
         const auto transformIt = m_world.Transforms().find(entity);
@@ -1939,6 +2027,26 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
         snapshot.pallets.push_back(palletSnapshot);
     }
 
+    snapshot.traps.reserve(m_world.BearTraps().size());
+    for (const auto& [entity, trap] : m_world.BearTraps())
+    {
+        const auto transformIt = m_world.Transforms().find(entity);
+        if (transformIt == m_world.Transforms().end())
+        {
+            continue;
+        }
+        TrapSnapshot trapSnapshot;
+        trapSnapshot.entity = entity;
+        trapSnapshot.state = static_cast<std::uint8_t>(trap.state);
+        trapSnapshot.trappedEntity = trap.trappedEntity;
+        trapSnapshot.position = transformIt->second.position;
+        trapSnapshot.halfExtents = trap.halfExtents;
+        trapSnapshot.escapeChance = trap.escapeChance;
+        trapSnapshot.escapeAttempts = static_cast<std::uint8_t>(glm::clamp(trap.escapeAttempts, 0, 255));
+        trapSnapshot.maxEscapeAttempts = static_cast<std::uint8_t>(glm::clamp(trap.maxEscapeAttempts, 0, 255));
+        snapshot.traps.push_back(trapSnapshot);
+    }
+
     return snapshot;
 }
 
@@ -1963,6 +2071,25 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
     {
         BuildSceneFromMap(snapshot.mapType, snapshot.seed);
     }
+
+    if (!snapshot.survivorCharacterId.empty())
+    {
+        m_selectedSurvivorCharacterId = snapshot.survivorCharacterId;
+    }
+    if (!snapshot.killerCharacterId.empty())
+    {
+        m_selectedKillerCharacterId = snapshot.killerCharacterId;
+    }
+
+    m_survivorLoadout.itemId = snapshot.survivorItemId;
+    m_survivorLoadout.addonAId = snapshot.survivorItemAddonA;
+    m_survivorLoadout.addonBId = snapshot.survivorItemAddonB;
+    m_killerLoadout.powerId = snapshot.killerPowerId;
+    m_killerLoadout.addonAId = snapshot.killerPowerAddonA;
+    m_killerLoadout.addonBId = snapshot.killerPowerAddonB;
+    RefreshLoadoutModifiers();
+    m_survivorItemState.charges = snapshot.survivorItemCharges;
+    m_survivorItemState.active = snapshot.survivorItemActive != 0U;
 
     m_chase.isChasing = snapshot.chaseActive;
     m_chase.distance = snapshot.chaseDistance;
@@ -2020,6 +2147,57 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
         palletIt->second.halfExtents = palletSnapshot.halfExtents;
         transformIt->second.position = glm::mix(transformIt->second.position, palletSnapshot.position, blendAlpha);
     }
+
+    std::unordered_set<engine::scene::Entity> seenTraps;
+    for (const TrapSnapshot& trapSnapshot : snapshot.traps)
+    {
+        seenTraps.insert(trapSnapshot.entity);
+
+        auto transformIt = m_world.Transforms().find(trapSnapshot.entity);
+        if (transformIt == m_world.Transforms().end())
+        {
+            m_world.Transforms()[trapSnapshot.entity] = engine::scene::Transform{
+                trapSnapshot.position,
+                glm::vec3{0.0F},
+                glm::vec3{1.0F},
+                glm::vec3{0.0F, 0.0F, 1.0F},
+            };
+            transformIt = m_world.Transforms().find(trapSnapshot.entity);
+        }
+        auto trapIt = m_world.BearTraps().find(trapSnapshot.entity);
+        if (trapIt == m_world.BearTraps().end())
+        {
+            m_world.BearTraps()[trapSnapshot.entity] = engine::scene::BearTrapComponent{};
+            trapIt = m_world.BearTraps().find(trapSnapshot.entity);
+            m_world.Names()[trapSnapshot.entity] = engine::scene::NameComponent{"bear_trap"};
+        }
+
+        transformIt->second.position = glm::mix(transformIt->second.position, trapSnapshot.position, blendAlpha);
+        trapIt->second.state = static_cast<engine::scene::TrapState>(
+            glm::clamp(static_cast<int>(trapSnapshot.state), 0, static_cast<int>(engine::scene::TrapState::Disarmed))
+        );
+        trapIt->second.trappedEntity = trapSnapshot.trappedEntity;
+        trapIt->second.halfExtents = trapSnapshot.halfExtents;
+        trapIt->second.escapeChance = trapSnapshot.escapeChance;
+        trapIt->second.escapeAttempts = static_cast<int>(trapSnapshot.escapeAttempts);
+        trapIt->second.maxEscapeAttempts = static_cast<int>(trapSnapshot.maxEscapeAttempts);
+    }
+
+    std::vector<engine::scene::Entity> removeTraps;
+    removeTraps.reserve(m_world.BearTraps().size());
+    for (const auto& [entity, _] : m_world.BearTraps())
+    {
+        if (!seenTraps.contains(entity))
+        {
+            removeTraps.push_back(entity);
+        }
+    }
+    for (engine::scene::Entity entity : removeTraps)
+    {
+        DestroyEntity(entity);
+    }
+
+    RebuildPhysicsWorld();
 }
 
 void GameplaySystems::StartSkillCheckDebug()
@@ -2075,6 +2253,10 @@ void GameplaySystems::SetSurvivorStateDebug(const std::string& stateName)
     else if (stateName == "downed")
     {
         next = SurvivorHealthState::Downed;
+    }
+    else if (stateName == "trapped")
+    {
+        next = SurvivorHealthState::Trapped;
     }
     else if (stateName == "carried")
     {
@@ -2418,6 +2600,7 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     SetRoleCapsuleSize("survivor", m_tuning.survivorCapsuleRadius, m_tuning.survivorCapsuleHeight);
     SetRoleCapsuleSize("killer", m_tuning.killerCapsuleRadius, m_tuning.killerCapsuleHeight);
     SetSurvivorState(SurvivorHealthState::Healthy, "Map spawn", true);
+    ResetItemAndPowerRuntimeState();
     m_generatorsTotal = static_cast<int>(m_world.Generators().size());
     RefreshGeneratorsCompleted();
 
@@ -2531,6 +2714,22 @@ void GameplaySystems::RebuildPhysicsWorld()
         });
     }
 
+    for (const auto& [entity, trap] : m_world.BearTraps())
+    {
+        const auto transformIt = m_world.Transforms().find(entity);
+        if (transformIt == m_world.Transforms().end())
+        {
+            continue;
+        }
+
+        m_physics.AddTrigger(engine::physics::TriggerVolume{
+            .entity = entity,
+            .center = transformIt->second.position,
+            .halfExtents = trap.halfExtents + glm::vec3{0.35F, 0.25F, 0.35F},
+            .kind = engine::physics::TriggerKind::Interaction,
+        });
+    }
+
     if (m_killer != 0)
     {
         const auto killerTransformIt = m_world.Transforms().find(m_killer);
@@ -2560,6 +2759,7 @@ void GameplaySystems::DestroyEntity(engine::scene::Entity entity)
     m_world.Pallets().erase(entity);
     m_world.Hooks().erase(entity);
     m_world.Generators().erase(entity);
+    m_world.BearTraps().erase(entity);
     m_world.DebugColors().erase(entity);
     m_world.Names().erase(entity);
 }
@@ -2791,6 +2991,7 @@ void GameplaySystems::UpdateActorMovement(
 
     if (entity == m_survivor &&
         (m_survivorState == SurvivorHealthState::Hooked ||
+         m_survivorState == SurvivorHealthState::Trapped ||
          m_survivorState == SurvivorHealthState::Dead))
     {
         actor.sprinting = false;
@@ -2966,6 +3167,7 @@ void GameplaySystems::UpdateInteractionCandidate()
     }
     if (controlled == m_survivor &&
         (m_survivorState == SurvivorHealthState::Downed ||
+         m_survivorState == SurvivorHealthState::Trapped ||
          m_survivorState == SurvivorHealthState::Hooked ||
          m_survivorState == SurvivorHealthState::Dead))
     {
@@ -4077,7 +4279,8 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildPickupSurvivorCandid
 {
     InteractionCandidate candidate;
 
-    if (actorEntity != m_killer || m_survivor == 0 || m_survivorState != SurvivorHealthState::Downed)
+    if (actorEntity != m_killer || m_survivor == 0 ||
+        (m_survivorState != SurvivorHealthState::Downed && m_survivorState != SurvivorHealthState::Trapped))
     {
         return candidate;
     }
@@ -4112,7 +4315,9 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildPickupSurvivorCandid
     candidate.entity = m_survivor;
     candidate.priority = 95;
     candidate.castT = glm::clamp(distance / 3.0F, 0.0F, 1.0F);
-    candidate.prompt = "Press E to Pick Up Survivor";
+    candidate.prompt = m_survivorState == SurvivorHealthState::Trapped
+                           ? "Press E to Pick Up Trapped Survivor"
+                           : "Press E to Pick Up Survivor";
     candidate.typeName = "PickupSurvivor";
     candidate.targetName = "Survivor";
     return candidate;
@@ -4546,7 +4751,8 @@ void GameplaySystems::TryStunKillerFromPallet(engine::scene::Entity palletEntity
 
 void GameplaySystems::TryPickupDownedSurvivor()
 {
-    if (m_survivor == 0 || m_killer == 0 || m_survivorState != SurvivorHealthState::Downed)
+    if (m_survivor == 0 || m_killer == 0 ||
+        (m_survivorState != SurvivorHealthState::Downed && m_survivorState != SurvivorHealthState::Trapped))
     {
         return;
     }
@@ -5213,6 +5419,12 @@ void GameplaySystems::ApplySurvivorHit()
     if (m_survivorState == SurvivorHealthState::Injured)
     {
         SetSurvivorState(SurvivorHealthState::Downed, "Killer hit");
+        return;
+    }
+
+    if (m_survivorState == SurvivorHealthState::Trapped)
+    {
+        SetSurvivorState(SurvivorHealthState::Downed, "Killer hit trapped survivor");
     }
 }
 
@@ -5295,7 +5507,8 @@ bool GameplaySystems::SetSurvivorState(SurvivorHealthState nextState, const std:
         actor.velocity = glm::vec3{0.0F};
         actor.collisionEnabled = (nextState == SurvivorHealthState::Healthy ||
                                   nextState == SurvivorHealthState::Injured ||
-                                  nextState == SurvivorHealthState::Downed)
+                                  nextState == SurvivorHealthState::Downed ||
+                                  nextState == SurvivorHealthState::Trapped)
                                      ? m_collisionEnabled
                                      : false;
     }
@@ -5324,11 +5537,15 @@ bool GameplaySystems::CanTransitionSurvivorState(SurvivorHealthState from, Survi
     switch (from)
     {
         case SurvivorHealthState::Healthy:
-            return to == SurvivorHealthState::Injured;
+            return to == SurvivorHealthState::Injured || to == SurvivorHealthState::Trapped;
         case SurvivorHealthState::Injured:
-            return to == SurvivorHealthState::Healthy || to == SurvivorHealthState::Downed;
+            return to == SurvivorHealthState::Healthy || to == SurvivorHealthState::Downed || to == SurvivorHealthState::Trapped;
         case SurvivorHealthState::Downed:
             return to == SurvivorHealthState::Carried;
+        case SurvivorHealthState::Trapped:
+            return to == SurvivorHealthState::Injured ||
+                   to == SurvivorHealthState::Downed ||
+                   to == SurvivorHealthState::Carried;
         case SurvivorHealthState::Carried:
             return to == SurvivorHealthState::Hooked ||
                    to == SurvivorHealthState::Downed ||
@@ -5349,6 +5566,7 @@ const char* GameplaySystems::SurvivorStateToText(SurvivorHealthState state)
         case SurvivorHealthState::Healthy: return "Healthy";
         case SurvivorHealthState::Injured: return "Injured";
         case SurvivorHealthState::Downed: return "Downed";
+        case SurvivorHealthState::Trapped: return "Trapped";
         case SurvivorHealthState::Carried: return "Carried";
         case SurvivorHealthState::Hooked: return "Hooked";
         case SurvivorHealthState::Dead: return "Dead";
@@ -5375,6 +5593,10 @@ std::string GameplaySystems::BuildMovementStateText(engine::scene::Entity entity
         if (m_survivorState == SurvivorHealthState::Carried)
         {
             return "Carried";
+        }
+        if (m_survivorState == SurvivorHealthState::Trapped)
+        {
+            return "Trapped";
         }
         if (m_survivorState == SurvivorHealthState::Downed)
         {
@@ -5905,6 +6127,697 @@ void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool 
             color * alpha
         );
     }
+}
+
+void GameplaySystems::InitializeLoadoutCatalog()
+{
+    if (!m_loadoutCatalog.Initialize("assets"))
+    {
+        AddRuntimeMessage("Loadout catalog init failed", 2.0F);
+        return;
+    }
+
+    const std::vector<std::string> survivorIds = m_loadoutCatalog.ListSurvivorIds();
+    if (!survivorIds.empty() && !m_loadoutCatalog.FindSurvivor(m_selectedSurvivorCharacterId))
+    {
+        m_selectedSurvivorCharacterId = survivorIds.front();
+    }
+
+    const std::vector<std::string> killerIds = m_loadoutCatalog.ListKillerIds();
+    if (!killerIds.empty() && !m_loadoutCatalog.FindKiller(m_selectedKillerCharacterId))
+    {
+        m_selectedKillerCharacterId = killerIds.front();
+    }
+
+    if (m_survivorLoadout.itemId.empty())
+    {
+        const std::vector<std::string> itemIds = m_loadoutCatalog.ListItemIds();
+        if (!itemIds.empty())
+        {
+            m_survivorLoadout.itemId = itemIds.front();
+        }
+    }
+
+    if (m_killerLoadout.powerId.empty())
+    {
+        if (const auto* killerDef = m_loadoutCatalog.FindKiller(m_selectedKillerCharacterId))
+        {
+            m_killerLoadout.powerId = killerDef->powerId;
+        }
+        if (m_killerLoadout.powerId.empty())
+        {
+            const std::vector<std::string> powerIds = m_loadoutCatalog.ListPowerIds();
+            if (!powerIds.empty())
+            {
+                m_killerLoadout.powerId = powerIds.front();
+            }
+        }
+    }
+
+    RefreshLoadoutModifiers();
+    ResetItemAndPowerRuntimeState();
+}
+
+void GameplaySystems::RefreshLoadoutModifiers()
+{
+    m_survivorItemModifiers.Build(
+        loadout::TargetKind::Item,
+        m_survivorLoadout.itemId,
+        {m_survivorLoadout.addonAId, m_survivorLoadout.addonBId},
+        m_loadoutCatalog.Addons()
+    );
+    m_killerPowerModifiers.Build(
+        loadout::TargetKind::Power,
+        m_killerLoadout.powerId,
+        {m_killerLoadout.addonAId, m_killerLoadout.addonBId},
+        m_loadoutCatalog.Addons()
+    );
+}
+
+void GameplaySystems::ResetItemAndPowerRuntimeState()
+{
+    m_survivorItemState = SurvivorItemRuntimeState{};
+    const loadout::ItemDefinition* itemDef = m_loadoutCatalog.FindItem(m_survivorLoadout.itemId);
+    if (itemDef != nullptr)
+    {
+        const float maxCharges = std::max(0.0F, m_survivorItemModifiers.ApplyStat("max_charges", itemDef->maxCharges));
+        m_survivorItemState.charges = maxCharges;
+    }
+}
+
+bool GameplaySystems::SetSurvivorItemLoadout(const std::string& itemId, const std::string& addonAId, const std::string& addonBId)
+{
+    if (!itemId.empty() && m_loadoutCatalog.FindItem(itemId) == nullptr)
+    {
+        return false;
+    }
+
+    auto validateAddon = [&](const std::string& addonId) {
+        if (addonId.empty())
+        {
+            return true;
+        }
+        const loadout::AddonDefinition* addon = m_loadoutCatalog.FindAddon(addonId);
+        return addon != nullptr && addon->AppliesTo(loadout::TargetKind::Item, itemId);
+    };
+    if (!validateAddon(addonAId) || !validateAddon(addonBId))
+    {
+        return false;
+    }
+
+    m_survivorLoadout.itemId = itemId;
+    m_survivorLoadout.addonAId = addonAId;
+    m_survivorLoadout.addonBId = addonBId;
+    RefreshLoadoutModifiers();
+    ResetItemAndPowerRuntimeState();
+    return true;
+}
+
+bool GameplaySystems::SetKillerPowerLoadout(const std::string& powerId, const std::string& addonAId, const std::string& addonBId)
+{
+    if (!powerId.empty() && m_loadoutCatalog.FindPower(powerId) == nullptr)
+    {
+        return false;
+    }
+
+    auto validateAddon = [&](const std::string& addonId) {
+        if (addonId.empty())
+        {
+            return true;
+        }
+        const loadout::AddonDefinition* addon = m_loadoutCatalog.FindAddon(addonId);
+        return addon != nullptr && addon->AppliesTo(loadout::TargetKind::Power, powerId);
+    };
+    if (!validateAddon(addonAId) || !validateAddon(addonBId))
+    {
+        return false;
+    }
+
+    m_killerLoadout.powerId = powerId;
+    m_killerLoadout.addonAId = addonAId;
+    m_killerLoadout.addonBId = addonBId;
+    RefreshLoadoutModifiers();
+    return true;
+}
+
+std::string GameplaySystems::ItemDump() const
+{
+    std::ostringstream oss;
+    oss << "SurvivorItem\n";
+    oss << "  character=" << m_selectedSurvivorCharacterId << "\n";
+    oss << "  item=" << (m_survivorLoadout.itemId.empty() ? "none" : m_survivorLoadout.itemId) << "\n";
+    oss << "  addon_a=" << (m_survivorLoadout.addonAId.empty() ? "none" : m_survivorLoadout.addonAId) << "\n";
+    oss << "  addon_b=" << (m_survivorLoadout.addonBId.empty() ? "none" : m_survivorLoadout.addonBId) << "\n";
+    oss << "  charges=" << m_survivorItemState.charges << "\n";
+    oss << "  active=" << (m_survivorItemState.active ? "true" : "false") << "\n";
+    const auto activeAddons = m_survivorItemModifiers.ActiveAddonIds();
+    oss << "  active_modifiers=";
+    if (activeAddons.empty())
+    {
+        oss << "none";
+    }
+    else
+    {
+        for (std::size_t i = 0; i < activeAddons.size(); ++i)
+        {
+            if (i > 0)
+            {
+                oss << ",";
+            }
+            oss << activeAddons[i];
+        }
+    }
+    oss << "\n";
+    return oss.str();
+}
+
+std::string GameplaySystems::PowerDump() const
+{
+    std::ostringstream oss;
+    oss << "KillerPower\n";
+    oss << "  character=" << m_selectedKillerCharacterId << "\n";
+    oss << "  power=" << (m_killerLoadout.powerId.empty() ? "none" : m_killerLoadout.powerId) << "\n";
+    oss << "  addon_a=" << (m_killerLoadout.addonAId.empty() ? "none" : m_killerLoadout.addonAId) << "\n";
+    oss << "  addon_b=" << (m_killerLoadout.addonBId.empty() ? "none" : m_killerLoadout.addonBId) << "\n";
+    oss << "  active_traps=" << m_world.BearTraps().size() << "\n";
+    const auto activeAddons = m_killerPowerModifiers.ActiveAddonIds();
+    oss << "  active_modifiers=";
+    if (activeAddons.empty())
+    {
+        oss << "none";
+    }
+    else
+    {
+        for (std::size_t i = 0; i < activeAddons.size(); ++i)
+        {
+            if (i > 0)
+            {
+                oss << ",";
+            }
+            oss << activeAddons[i];
+        }
+    }
+    oss << "\n";
+    return oss.str();
+}
+
+bool GameplaySystems::SetSelectedSurvivorCharacter(const std::string& characterId)
+{
+    if (m_loadoutCatalog.FindSurvivor(characterId) == nullptr)
+    {
+        return false;
+    }
+    m_selectedSurvivorCharacterId = characterId;
+    return true;
+}
+
+bool GameplaySystems::SetSelectedKillerCharacter(const std::string& characterId)
+{
+    const loadout::KillerCharacterDefinition* def = m_loadoutCatalog.FindKiller(characterId);
+    if (def == nullptr)
+    {
+        return false;
+    }
+    m_selectedKillerCharacterId = characterId;
+    if (!def->powerId.empty())
+    {
+        m_killerLoadout.powerId = def->powerId;
+        RefreshLoadoutModifiers();
+    }
+    return true;
+}
+
+std::vector<std::string> GameplaySystems::ListSurvivorCharacters() const
+{
+    return m_loadoutCatalog.ListSurvivorIds();
+}
+
+std::vector<std::string> GameplaySystems::ListKillerCharacters() const
+{
+    return m_loadoutCatalog.ListKillerIds();
+}
+
+void GameplaySystems::UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt)
+{
+    if (fixedDt <= 0.0F)
+    {
+        return;
+    }
+
+    if (m_survivorItemState.cooldown > 0.0F)
+    {
+        m_survivorItemState.cooldown = std::max(0.0F, m_survivorItemState.cooldown - fixedDt);
+    }
+    if (m_survivorItemState.mapPulseTtl > 0.0F)
+    {
+        m_survivorItemState.mapPulseTtl = std::max(0.0F, m_survivorItemState.mapPulseTtl - fixedDt);
+    }
+    if (m_survivorItemState.cooldown <= 0.0F && !m_survivorItemState.active)
+    {
+        m_killerLookLight.enabled = true;
+    }
+
+    const loadout::ItemDefinition* itemDef = m_loadoutCatalog.FindItem(m_survivorLoadout.itemId);
+    if (itemDef == nullptr)
+    {
+        m_survivorItemState.active = false;
+        return;
+    }
+
+    const float maxCharges = std::max(0.0F, m_survivorItemModifiers.ApplyStat("max_charges", itemDef->maxCharges));
+    m_survivorItemState.charges = glm::clamp(m_survivorItemState.charges, 0.0F, maxCharges);
+
+    const bool canUseInput = (m_interactionCandidate.type == InteractionType::None);
+    const bool useHeld = canUseInput && survivorCommand.interactHeld;
+    const bool usePressed = canUseInput && survivorCommand.interactPressed;
+    const auto readParam = [&](const std::string& key, float fallback) {
+        const auto it = itemDef->params.find(key);
+        return it != itemDef->params.end() ? it->second : fallback;
+    };
+
+    if (itemDef->id == "medkit")
+    {
+        m_survivorItemState.active = false;
+        if (m_survivorState != SurvivorHealthState::Injured || !useHeld || m_survivorItemState.charges <= 0.0F)
+        {
+            return;
+        }
+
+        const float healRate = std::max(0.0F, m_survivorItemModifiers.ApplyStat("heal_per_second", readParam("heal_per_second", 0.12F)));
+        const float chargeRate = std::max(0.05F, m_survivorItemModifiers.ApplyStat("charge_per_second", readParam("charge_per_second", 1.0F)));
+        m_survivorItemState.active = true;
+        m_survivorItemState.charges = std::max(0.0F, m_survivorItemState.charges - chargeRate * fixedDt);
+        m_selfHealProgress = glm::clamp(m_selfHealProgress + healRate * fixedDt, 0.0F, 1.0F);
+        if (m_selfHealProgress >= 1.0F)
+        {
+            m_selfHealProgress = 0.0F;
+            SetSurvivorState(SurvivorHealthState::Healthy, "Medkit heal");
+            AddRuntimeMessage("Medkit heal completed", 1.1F);
+        }
+        return;
+    }
+
+    if (itemDef->id == "toolbox")
+    {
+        m_survivorItemState.active = false;
+        if (m_activeRepairGenerator == 0 || !survivorCommand.interactHeld || m_survivorItemState.charges <= 0.0F)
+        {
+            return;
+        }
+
+        auto generatorIt = m_world.Generators().find(m_activeRepairGenerator);
+        if (generatorIt == m_world.Generators().end() || generatorIt->second.completed)
+        {
+            return;
+        }
+
+        const float repairBonus = std::max(0.0F, m_survivorItemModifiers.ApplyStat("repair_speed_bonus", readParam("repair_speed_bonus", 0.12F)));
+        const float chargeRate = std::max(0.05F, m_survivorItemModifiers.ApplyStat("charge_per_second", readParam("charge_per_second", 1.15F)));
+        m_survivorItemState.active = true;
+        m_survivorItemState.charges = std::max(0.0F, m_survivorItemState.charges - chargeRate * fixedDt);
+        generatorIt->second.progress = glm::clamp(generatorIt->second.progress + repairBonus * fixedDt, 0.0F, 1.0F);
+        if (generatorIt->second.progress >= 1.0F)
+        {
+            generatorIt->second.progress = 1.0F;
+            generatorIt->second.completed = true;
+            RefreshGeneratorsCompleted();
+            AddRuntimeMessage("Generator completed with toolbox bonus", 1.2F);
+            StopGeneratorRepair();
+        }
+        return;
+    }
+
+    if (itemDef->id == "flashlight")
+    {
+        m_survivorItemState.active = false;
+        if (!useHeld || m_survivorItemState.charges <= 0.0F || m_survivorItemState.cooldown > 0.0F)
+        {
+            m_survivorItemState.flashBlindAccum = std::max(0.0F, m_survivorItemState.flashBlindAccum - fixedDt * 0.45F);
+            return;
+        }
+
+        const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        const auto killerTransformIt = m_world.Transforms().find(m_killer);
+        const auto killerActorIt = m_world.Actors().find(m_killer);
+        if (survivorTransformIt == m_world.Transforms().end() ||
+            killerTransformIt == m_world.Transforms().end() ||
+            killerActorIt == m_world.Actors().end())
+        {
+            return;
+        }
+
+        const float beamRange = std::max(2.0F, m_survivorItemModifiers.ApplyStat("beam_range", readParam("beam_range", 9.5F)));
+        const float beamAngleDeg = std::max(5.0F, m_survivorItemModifiers.ApplyStat("beam_angle_deg", readParam("beam_angle_deg", 22.0F)));
+        const float blindNeed = std::max(0.25F, m_survivorItemModifiers.ApplyStat("blind_time_required", readParam("blind_time_required", 1.2F)));
+        const float chargeRate = std::max(0.05F, m_survivorItemModifiers.ApplyStat("charge_per_second", readParam("charge_per_second", 1.0F)));
+
+        const glm::vec3 toKiller = killerTransformIt->second.position - survivorTransformIt->second.position;
+        const float dist = glm::length(glm::vec2{toKiller.x, toKiller.z});
+        bool inCone = false;
+        if (dist <= beamRange && dist > 1.0e-4F)
+        {
+            glm::vec3 dirToKiller{toKiller.x, 0.0F, toKiller.z};
+            dirToKiller = glm::normalize(dirToKiller);
+            glm::vec3 forward{survivorTransformIt->second.forward.x, 0.0F, survivorTransformIt->second.forward.z};
+            if (glm::length(forward) > 1.0e-4F)
+            {
+                forward = glm::normalize(forward);
+                const float dot = glm::dot(forward, dirToKiller);
+                inCone = dot >= std::cos(glm::radians(beamAngleDeg * 0.5F));
+            }
+        }
+
+        m_survivorItemState.active = true;
+        m_survivorItemState.charges = std::max(0.0F, m_survivorItemState.charges - chargeRate * fixedDt);
+        if (inCone)
+        {
+            m_survivorItemState.flashBlindAccum += fixedDt;
+        }
+        else
+        {
+            m_survivorItemState.flashBlindAccum = std::max(0.0F, m_survivorItemState.flashBlindAccum - fixedDt * 0.6F);
+        }
+
+        if (m_survivorItemState.flashBlindAccum >= blindNeed)
+        {
+            killerActorIt->second.stunTimer = std::max(killerActorIt->second.stunTimer, 1.2F);
+            m_killerLookLight.enabled = false;
+            m_survivorItemState.cooldown = 3.0F;
+            m_survivorItemState.flashBlindAccum = 0.0F;
+            AddRuntimeMessage("Flashlight blind", 1.0F);
+        }
+        return;
+    }
+
+    if (itemDef->id == "map")
+    {
+        m_survivorItemState.active = false;
+        if (!usePressed || m_survivorItemState.charges <= 0.0F)
+        {
+            return;
+        }
+
+        const float chargePerUse = std::max(0.1F, m_survivorItemModifiers.ApplyStat("charge_per_use", readParam("charge_per_use", 1.0F)));
+        const float revealRadius = std::max(4.0F, m_survivorItemModifiers.ApplyStat("reveal_radius", readParam("reveal_radius", 16.0F)));
+        if (m_survivorItemState.charges < chargePerUse)
+        {
+            AddRuntimeMessage("Map: not enough charges", 1.0F);
+            return;
+        }
+        m_survivorItemState.charges -= chargePerUse;
+        m_survivorItemState.mapPulseTtl = 4.0F;
+
+        int nearbyTraps = 0;
+        const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        if (survivorTransformIt != m_world.Transforms().end())
+        {
+            for (const auto& [entity, trap] : m_world.BearTraps())
+            {
+                (void)entity;
+                if (trap.state == engine::scene::TrapState::Disarmed)
+                {
+                    continue;
+                }
+                const auto trapTransformIt = m_world.Transforms().find(entity);
+                if (trapTransformIt == m_world.Transforms().end())
+                {
+                    continue;
+                }
+                if (DistanceXZ(survivorTransformIt->second.position, trapTransformIt->second.position) <= revealRadius)
+                {
+                    ++nearbyTraps;
+                }
+            }
+        }
+
+        AddRuntimeMessage("Map pulse: nearby traps " + std::to_string(nearbyTraps), 1.2F);
+        return;
+    }
+}
+
+void GameplaySystems::UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt)
+{
+    (void)fixedDt;
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || m_killer == 0 || powerDef->id != "bear_trap")
+    {
+        return;
+    }
+
+    if (!killerCommand.interactPressed || m_interactionCandidate.type != InteractionType::None)
+    {
+        return;
+    }
+
+    if (m_killerAttackState != KillerAttackState::Idle || m_survivorState == SurvivorHealthState::Carried)
+    {
+        return;
+    }
+
+    const float maxTraps = std::max(1.0F, m_killerPowerModifiers.ApplyStat(
+        "max_active_traps",
+        powerDef->params.contains("max_active_traps") ? powerDef->params.at("max_active_traps") : 8.0F
+    ));
+    if (m_world.BearTraps().size() >= static_cast<std::size_t>(std::max(1, static_cast<int>(std::round(maxTraps)))))
+    {
+        AddRuntimeMessage("Max active traps reached", 1.0F);
+        return;
+    }
+
+    const auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+    SpawnBearTrap(killerTransformIt->second.position, killerTransformIt->second.forward);
+    RebuildPhysicsWorld();
+}
+
+void GameplaySystems::UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt)
+{
+    (void)killerCommand;
+    (void)fixedDt;
+    if (m_survivor == 0)
+    {
+        return;
+    }
+
+    auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+    if (survivorTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+
+    if (m_survivorState != SurvivorHealthState::Trapped &&
+        m_survivorState != SurvivorHealthState::Dead &&
+        m_survivorState != SurvivorHealthState::Hooked &&
+        m_survivorState != SurvivorHealthState::Carried)
+    {
+        TryTriggerBearTraps(m_survivor, survivorTransformIt->second.position);
+    }
+
+    if (m_survivorState != SurvivorHealthState::Trapped)
+    {
+        return;
+    }
+
+    auto trappedTrapIt = m_world.BearTraps().end();
+    for (auto it = m_world.BearTraps().begin(); it != m_world.BearTraps().end(); ++it)
+    {
+        if (it->second.trappedEntity == m_survivor && it->second.state == engine::scene::TrapState::Triggered)
+        {
+            trappedTrapIt = it;
+            break;
+        }
+    }
+    if (trappedTrapIt == m_world.BearTraps().end())
+    {
+        SetSurvivorState(SurvivorHealthState::Injured, "Trap released");
+        return;
+    }
+
+    engine::scene::BearTrapComponent& trap = trappedTrapIt->second;
+    auto survivorActorIt = m_world.Actors().find(m_survivor);
+    if (survivorActorIt != m_world.Actors().end())
+    {
+        survivorActorIt->second.velocity = glm::vec3{0.0F};
+    }
+
+    if (!survivorCommand.interactPressed)
+    {
+        return;
+    }
+
+    trap.escapeAttempts += 1;
+    const float chanceStep = std::max(0.01F, m_killerPowerModifiers.ApplyStat("escape_chance_step", trap.escapeChanceStep));
+    const int maxAttempts = std::max(1, static_cast<int>(std::round(m_killerPowerModifiers.ApplyStat("max_escape_attempts", static_cast<float>(trap.maxEscapeAttempts)))));
+    trap.maxEscapeAttempts = maxAttempts;
+    trap.escapeChance = glm::clamp(trap.escapeChance + chanceStep, 0.03F, 0.96F);
+
+    std::uniform_real_distribution<float> chanceRoll(0.0F, 1.0F);
+    const bool success = chanceRoll(m_rng) <= trap.escapeChance || trap.escapeAttempts >= trap.maxEscapeAttempts;
+    if (success)
+    {
+        trap.state = engine::scene::TrapState::Disarmed;
+        trap.trappedEntity = 0;
+        const float bleedMult = m_killerPowerModifiers.ApplyHook("trap_escape", "bleed_multiplier", 1.0F);
+        SetSurvivorState(SurvivorHealthState::Injured, "Escaped trap");
+        if (bleedMult > 1.01F)
+        {
+            AddRuntimeMessage("Escaped trap (Serrated Jaws bleed)", 1.2F);
+            m_bloodSpawnAccumulator = std::max(m_bloodSpawnAccumulator, m_bloodProfile.spawnInterval * 0.65F);
+        }
+        else
+        {
+            AddRuntimeMessage("Escaped trap", 1.0F);
+        }
+        RebuildPhysicsWorld();
+    }
+    else
+    {
+        AddRuntimeMessage(
+            "Trap escape failed (" + std::to_string(trap.escapeAttempts) + "/" + std::to_string(trap.maxEscapeAttempts) + ")",
+            1.0F
+        );
+    }
+}
+
+engine::scene::Entity GameplaySystems::SpawnBearTrap(const glm::vec3& basePosition, const glm::vec3& forward)
+{
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    const auto readParam = [&](const std::string& key, float fallback) {
+        if (powerDef == nullptr)
+        {
+            return fallback;
+        }
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+
+    const glm::vec3 normalizedForward = glm::length(forward) > 1.0e-5F ? glm::normalize(forward) : glm::vec3{0.0F, 0.0F, -1.0F};
+    glm::vec3 position = basePosition + glm::vec3{normalizedForward.x, 0.0F, normalizedForward.z} * 1.55F;
+
+    const glm::vec3 rayStart = position + glm::vec3{0.0F, 2.2F, 0.0F};
+    const glm::vec3 rayEnd = rayStart + glm::vec3{0.0F, -8.0F, 0.0F};
+    if (const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd))
+    {
+        position.y = hit->position.y + 0.05F;
+    }
+    else
+    {
+        position.y = 0.05F;
+    }
+
+    const engine::scene::Entity trapEntity = m_world.CreateEntity();
+    m_world.Transforms()[trapEntity] = engine::scene::Transform{
+        position,
+        glm::vec3{0.0F},
+        glm::vec3{1.0F},
+        glm::vec3{0.0F, 0.0F, 1.0F},
+    };
+
+    engine::scene::BearTrapComponent trap;
+    trap.state = engine::scene::TrapState::Armed;
+    trap.halfExtents.x = std::max(0.12F, m_killerPowerModifiers.ApplyStat("trap_half_x", readParam("trap_half_x", 0.36F)));
+    trap.halfExtents.y = std::max(0.03F, m_killerPowerModifiers.ApplyStat("trap_half_y", readParam("trap_half_y", 0.08F)));
+    trap.halfExtents.z = std::max(0.12F, m_killerPowerModifiers.ApplyStat("trap_half_z", readParam("trap_half_z", 0.36F)));
+    trap.escapeChance = glm::clamp(m_killerPowerModifiers.ApplyStat("base_escape_chance", readParam("base_escape_chance", 0.22F)), 0.02F, 0.95F);
+    trap.escapeChanceStep = glm::clamp(m_killerPowerModifiers.ApplyStat("escape_chance_step", readParam("escape_chance_step", 0.14F)), 0.01F, 0.6F);
+    trap.escapeAttempts = 0;
+    trap.maxEscapeAttempts = std::max(
+        1,
+        static_cast<int>(std::round(m_killerPowerModifiers.ApplyStat("max_escape_attempts", readParam("max_escape_attempts", 6.0F))))
+    );
+    m_world.BearTraps()[trapEntity] = trap;
+    m_world.Names()[trapEntity] = engine::scene::NameComponent{"bear_trap"};
+    m_world.DebugColors()[trapEntity] = engine::scene::DebugColorComponent{glm::vec3{0.72F, 0.72F, 0.75F}};
+    AddRuntimeMessage("Bear trap placed", 1.0F);
+    return trapEntity;
+}
+
+void GameplaySystems::ClearAllBearTraps()
+{
+    std::vector<engine::scene::Entity> trapEntities;
+    trapEntities.reserve(m_world.BearTraps().size());
+    for (const auto& [entity, _] : m_world.BearTraps())
+    {
+        trapEntities.push_back(entity);
+    }
+    for (engine::scene::Entity entity : trapEntities)
+    {
+        DestroyEntity(entity);
+    }
+    if (m_survivorState == SurvivorHealthState::Trapped)
+    {
+        SetSurvivorState(SurvivorHealthState::Injured, "Traps cleared");
+    }
+}
+
+void GameplaySystems::TryTriggerBearTraps(engine::scene::Entity survivorEntity, const glm::vec3& survivorPos)
+{
+    if (survivorEntity == 0)
+    {
+        return;
+    }
+
+    const auto survivorActorIt = m_world.Actors().find(survivorEntity);
+    if (survivorActorIt == m_world.Actors().end())
+    {
+        return;
+    }
+    const float survivorRadius = survivorActorIt->second.capsuleRadius;
+
+    for (auto& [entity, trap] : m_world.BearTraps())
+    {
+        if (trap.state != engine::scene::TrapState::Armed)
+        {
+            continue;
+        }
+        const auto trapTransformIt = m_world.Transforms().find(entity);
+        if (trapTransformIt == m_world.Transforms().end())
+        {
+            continue;
+        }
+
+        const glm::vec3 delta = survivorPos - trapTransformIt->second.position;
+        const bool overlap =
+            std::abs(delta.x) <= (trap.halfExtents.x + survivorRadius) &&
+            std::abs(delta.z) <= (trap.halfExtents.z + survivorRadius) &&
+            std::abs(delta.y) <= (trap.halfExtents.y + 1.0F);
+        if (!overlap)
+        {
+            continue;
+        }
+
+        trap.state = engine::scene::TrapState::Triggered;
+        trap.trappedEntity = survivorEntity;
+        trap.escapeAttempts = 0;
+        SetSurvivorState(SurvivorHealthState::Trapped, "Bear trap triggered");
+        AddRuntimeMessage("Survivor trapped", 1.2F);
+        RebuildPhysicsWorld();
+        break;
+    }
+}
+
+void GameplaySystems::TrapSpawnDebug()
+{
+    if (m_killer == 0)
+    {
+        return;
+    }
+    const auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+    SpawnBearTrap(killerTransformIt->second.position, killerTransformIt->second.forward);
+    RebuildPhysicsWorld();
+}
+
+void GameplaySystems::TrapClearDebug()
+{
+    ClearAllBearTraps();
+    RebuildPhysicsWorld();
 }
 
 void GameplaySystems::SetScratchDebug(bool enabled)
