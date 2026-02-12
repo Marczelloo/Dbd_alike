@@ -93,3 +93,94 @@ Use exactly 8.0s for both lost LOS and lost center FOV timeouts.
 | Bloodlust tier 1 | 15s -> 120% | CLAUDE.md spec |
 | Bloodlust tier 2 | 25s -> 125% | CLAUDE.md spec |
 | Bloodlust tier 3 | 35s -> 130% | CLAUDE.md spec |
+
+## Scratch Marks & Blood Pools: Deterministic RNG (2026-02-12)
+
+### Decision
+Use position-based deterministic hash function instead of std::mt19937 for VFX spawning.
+
+### Rationale
+1. **Multiplayer Consistency**: Same input (position) produces same output across all peers
+2. **No Per-Frame RNG**: Eliminates visual flicker in rendering
+3. **Ring Buffer**: Fixed-size array eliminates heap allocations
+4. **FixedUpdate Integration**: Timing is frame-rate independent
+
+### Implementation
+```cpp
+float DeterministicRandom(const glm::vec3& position, int seed) {
+    // Hash-based deterministic random [0, 1)
+    unsigned int hash = seed + position.x*1000 + position.y*1000*8 + position.z*1000*16;
+    hash = (hash ^ (hash >> 16)) * 0x85ebca6b;
+    return (hash % 10000) / 10000.0f;
+}
+```
+
+### Trade-offs
+- Pro: Fully deterministic, no desync between peers
+- Pro: Zero heap allocations (ring buffer)
+- Con: Less "random" than true RNG (but sufficient for VFX)
+
+## Scratch Marks: Distance Threshold (2026-02-12)
+
+### Decision
+Require minimum distance between scratch mark spawns.
+
+### Rationale
+1. **DBD Accuracy**: Scratch marks shouldn't stack in same location
+2. **Performance**: Fewer marks to update/render
+3. **Visual Quality**: Better spacing, more readable trail
+
+### Constants
+- `minDistanceFromLast = 0.3m` - minimum horizontal distance before next spawn
+
+## Blood Pools: Distance Threshold (2026-02-12)
+
+### Decision
+Require minimum distance between blood pool spawns.
+
+### Rationale
+1. **DBD Accuracy**: Blood pools shouldn't stack excessively
+2. **Performance**: Fewer pools to update/render
+3. **Visual Quality**: More natural bleeding trail
+
+### Constants
+- `minDistanceFromLast = 0.5m` - minimum horizontal distance before next spawn
+
+## Chase: Full State Replication (2026-02-12)
+
+### Decision
+Replicate complete `ChaseState` in `Snapshot` for multiplayer.
+
+### Rationale
+1. **Server Authority**: Only server computes chase state
+2. **Consistency**: All clients see identical chase behavior
+3. **Audio/UI Sync**: Terror radius audio and HUD elements use replicated state
+
+### Replicated Fields
+- `chaseActive` (was already replicated)
+- `chaseDistance` (was already replicated)
+- `chaseLos` (was already replicated)
+- `chaseInCenterFOV` (NEW)
+- `chaseTimeSinceLOS` (NEW)
+- `chaseTimeSinceCenterFOV` (NEW)
+- `chaseTimeInChase` (NEW)
+- `bloodlustTier` (NEW)
+
+### Trade-offs
+- Pro: Full determinism, no client-side desync
+- Pro: Simplifies client logic (just read replicated state)
+- Con: Slightly larger network packets (negligible)
+
+## VFX: Ring Buffer Pooling (2026-02-12)
+
+### Decision
+Use fixed-size `std::array` with head pointer instead of `std::vector`.
+
+### Rationale
+1. **Zero Heap Allocations**: No push_back/erase during gameplay
+2. **Cache Friendly**: Contiguous memory layout
+3. **Predictable Memory**: Fixed upper bound on VFX count
+
+### Constants
+- `kScratchMarkPoolSize = 64` - max simultaneous scratch marks
+- `kBloodPoolPoolSize = 32` - max simultaneous blood pools

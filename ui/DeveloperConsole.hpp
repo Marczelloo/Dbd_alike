@@ -66,12 +66,6 @@ struct ConsoleContext
     std::function<void(float)> setKillerLookLightAngle;
     std::function<void(float)> setKillerLookLightPitch;
     std::function<void(bool)> setKillerLookLightDebug;
-    std::function<void()> audioStopAll;
-    std::function<std::string()> playerDump;
-    std::function<std::string()> sceneDump;
-    std::function<void(const std::string&)> spawnRoleHere;
-    std::function<void(const std::string&, int)> spawnRoleAt;
-    std::function<std::string()> listSpawns;
 };
 
 class DeveloperConsole

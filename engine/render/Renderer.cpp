@@ -1390,7 +1390,7 @@ void Renderer::AddSolidTriangle(
     }
     else
     {
-        normal = glm::normalize(normal);
+        normal = -glm::normalize(normal);
     }
 
     const glm::vec4 packedMaterial{

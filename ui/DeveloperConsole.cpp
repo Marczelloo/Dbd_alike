@@ -1166,16 +1166,32 @@ struct DeveloperConsole::Impl
             AddLog("Killer light angle set to " + std::to_string(angle) + " degrees");
         });
 
-        RegisterCommand("killer_light_pitch <deg>", "Set killer light pitch (downward angle)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("killer_light_outer <deg>", "Set killer light outer cone angle", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_outer <degrees>");
+                return;
+            }
+            const float angle = ParseFloatOr(28.0F, tokens[1]);
+            if (angle < 2.0F || angle > 90.0F)
+            {
+                AddLog("Outer angle must be between 2 and 90");
+                return;
+            }
+            context.gameplay->SetKillerLookLightOuterAngle(angle);
+            AddLog("Killer light outer angle set to " + std::to_string(angle) + " degrees");
+        });
+
+        RegisterCommand("killer_light_pitch <deg>", "Set killer light pitch (downward angle, 0=horizontal, 90=down)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
                 AddLog("Usage: killer_light_pitch <degrees>");
                 return;
             }
-            const float pitch = ParseFloatOr(10.0F, tokens[1]);
-            if (pitch < -45.0F || pitch > 45.0F)
+            const float pitch = ParseFloatOr(35.0F, tokens[1]);
+            if (pitch < 0.0F || pitch > 90.0F)
             {
-                AddLog("Pitch must be between -45 and 45");
+                AddLog("Pitch must be between 0 and 90 degrees");
                 return;
             }
             context.gameplay->SetKillerLookLightPitch(pitch);

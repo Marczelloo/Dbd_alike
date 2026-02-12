@@ -2,9 +2,37 @@
 
 ## Current Status
 
-As of 2025-02-11, the following systems have been implemented/rebuilt:
+As of 2026-02-12, the following refactoring has been completed:
 
-### Completed
+### Completed (2026-02-12)
+- **Scratch Marks (Phase 2 Refactor)**
+  - Ring buffer pooling (64 max, no heap allocations)
+  - Deterministic position-based RNG (no more std::mt19937)
+  - Moved to FixedUpdate() for frame-rate independence
+  - Distance threshold (0.3m) to prevent stacking
+  - Removed RNG from render loop (no more visual flicker)
+
+- **Blood Pools (Phase 3 Refactor)**
+  - Ring buffer pooling (32 max, no heap allocations)
+  - Deterministic position-based RNG
+  - Moved to FixedUpdate()
+  - Distance threshold (0.5m) to prevent stacking
+
+- **Chase System (Phase 4 Refactor)**
+  - Full state replication in Snapshot:
+    - `chaseInCenterFOV`
+    - `chaseTimeSinceLOS`
+    - `chaseTimeSinceCenterFOV`
+    - `chaseTimeInChase`
+    - `bloodlustTier`
+  - Server-authoritative for multiplayer
+  - Assertions for negative timer values
+
+- **Bug Fixes**
+  - Fixed duplicate field declarations in DeveloperConsole.hpp
+  - Fixed duplicate function definitions in GameplaySystems.cpp
+
+### Previous (2025-02-11)
 - **Chase State Machine (DBD-like)**
   - FOV: 87deg total (half 43.5deg), center FOV +-35deg
   - Start distance <= 12m, end distance >= 18m
@@ -29,17 +57,16 @@ As of 2025-02-11, the following systems have been implemented/rebuilt:
 
 | File | Purpose | Key Areas |
 |------|---------|-----------|
-| game/gameplay/GameplaySystems.hpp | Chase/Bloodlust state structures | ChaseState, BloodlustState |
-| game/gameplay/GameplaySystems.cpp | Chase/Bloodlust logic | UpdateChaseState, UpdateBloodlust |
-| engine/core/App.hpp | TR band enum & profile | TerrorRadiusBand, TerrorRadiusProfileAudio |
-| engine/core/App.cpp | TR stepped bands | UpdateTerrorRadiusAudio, DumpTerrorRadiusState |
+| game/gameplay/GameplaySystems.hpp | Chase/Bloodlust/Scratch/Blood state structures | ChaseState, BloodlustState, ScratchMark, BloodPool |
+| game/gameplay/GameplaySystems.cpp | Core gameplay logic | UpdateChaseState, UpdateBloodlust, UpdateScratchMarks, UpdateBloodPools |
+| engine/core/App.cpp | Network serialization | SerializeSnapshot, DeserializeSnapshot |
 | ui/DeveloperConsole.cpp | Console commands | chase_dump, tr_dump, bloodlust_dump |
 
 ## TODO List
 
-- Network replication of bloodlust tier
-- Test with actual audio assets
-- Add visual indicator for bloodlust tier
+- Test multiplayer with new chase state replication
+- Verify scratch marks and blood pools look correct at different frame rates
+- Add visual indicator for bloodlust tier (optional)
 
 ## Known Issues
 

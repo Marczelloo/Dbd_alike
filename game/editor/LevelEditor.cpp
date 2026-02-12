@@ -11128,7 +11128,7 @@ void LevelEditor::DrawUi(
 
     const bool showLoopPanels = (m_mode == Mode::LoopEditor) && (workspaceAll || workspaceMesh);
     const bool showMapPanels = (m_mode == Mode::MapEditor) && (workspaceAll || workspaceMap);
-    const bool showContentWindow = workspaceAll || workspaceMap;
+    const bool showContentWindow = workspaceAll || workspaceMap || workspaceLighting || workspaceFxEnv;
     const bool showMaterialWindow = workspaceAll || workspaceLighting || workspaceFxEnv;
     const bool showFxWindow = workspaceAll || workspaceFxEnv || workspaceMesh;
 

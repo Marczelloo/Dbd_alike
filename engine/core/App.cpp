@@ -555,40 +555,7 @@ bool App::Run()
             m_renderer.SetLightingEnabled(true);
             m_gameplay.Render(m_renderer);
 
-            std::vector<render::PointLight> runtimePoints = m_runtimeMapPointLights;
-            std::vector<render::SpotLight> runtimeSpots = m_runtimeMapSpotLights;
-            if (m_killerLookLightEnabled && m_gameplay.RoleEntity("killer") != 0)
-            {
-                const glm::vec3 killerPos = m_gameplay.RolePosition("killer");
-                const glm::vec3 killerForward = m_gameplay.RoleForward("killer");
-
-                // Flatten forward to XZ plane and tilt downward by ~20 degrees to project on ground
-                const glm::vec3 killerFlatForward = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
-                const float tiltDownRad = glm::radians(20.0F);
-                const float cosTilt = std::cos(tiltDownRad);
-                const float sinTilt = std::sin(tiltDownRad);
-                // Rotate forward vector around X-axis to tilt down
-                glm::vec3 lightDir = glm::vec3(
-                    killerFlatForward.x,
-                    killerFlatForward.y * cosTilt - killerFlatForward.z * sinTilt,
-                    killerFlatForward.y * sinTilt + killerFlatForward.z * cosTilt
-                );
-                lightDir = glm::normalize(lightDir);
-
-                const float innerRad = glm::radians(glm::clamp(m_killerLookLightInnerDeg, 2.0F, 75.0F));
-                const float outerRad = glm::radians(glm::clamp(m_killerLookLightOuterDeg, m_killerLookLightInnerDeg + 0.5F, 88.0F));
-                runtimeSpots.push_back(render::SpotLight{
-                    killerPos + glm::vec3{0.0F, 0.8F, 0.0F},  // Lowered from 1.45 to 0.8
-                    lightDir,  // Tilted direction
-                    glm::vec3{m_audioSettings.killerLightRed, m_audioSettings.killerLightGreen, m_audioSettings.killerLightBlue},  // Normalized red color (RGB 0-1 range)
-                    std::max(0.0F, m_killerLookLightIntensity),
-                    std::max(1.0F, m_killerLookLightRange),
-                    std::cos(innerRad),
-                    std::cos(outerRad),
-                });
-            }
-            m_renderer.SetPointLights(runtimePoints);
-            m_renderer.SetSpotLights(runtimeSpots);
+            m_renderer.SetPointLights(m_runtimeMapPointLights);
 
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
@@ -998,6 +965,7 @@ void App::ResetToMainMenu()
     m_renderer.SetSpotLights({});
     m_runtimeMapPointLights.clear();
     m_runtimeMapSpotLights.clear();
+    m_gameplay.SetMapSpotLightCount(0);
 
     m_sessionRoleName = "survivor";
     m_remoteRoleName = "killer";
@@ -1624,6 +1592,11 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseActive ? 1 : 0));
     AppendValue(outBuffer, snapshot.chaseDistance);
     AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseLos ? 1 : 0));
+    AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseInCenterFOV ? 1 : 0));
+    AppendValue(outBuffer, snapshot.chaseTimeSinceLOS);
+    AppendValue(outBuffer, snapshot.chaseTimeSinceCenterFOV);
+    AppendValue(outBuffer, snapshot.chaseTimeInChase);
+    AppendValue(outBuffer, snapshot.bloodlustTier);
 
     const std::uint16_t palletCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.pallets.size(), 1024));
     AppendValue(outBuffer, palletCount);
@@ -1710,19 +1683,26 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
 
     std::uint8_t chaseActiveByte = 0;
     std::uint8_t chaseLosByte = 0;
+    std::uint8_t chaseInCenterFOVByte = 0;
     if (!ReadValue(buffer, offset, outSnapshot.survivorState) ||
         !ReadValue(buffer, offset, outSnapshot.killerAttackState) ||
         !ReadValue(buffer, offset, outSnapshot.killerAttackStateTimer) ||
         !ReadValue(buffer, offset, outSnapshot.killerLungeCharge) ||
         !ReadValue(buffer, offset, chaseActiveByte) ||
         !ReadValue(buffer, offset, outSnapshot.chaseDistance) ||
-        !ReadValue(buffer, offset, chaseLosByte))
+        !ReadValue(buffer, offset, chaseLosByte) ||
+        !ReadValue(buffer, offset, chaseInCenterFOVByte) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceLOS) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceCenterFOV) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeInChase) ||
+        !ReadValue(buffer, offset, outSnapshot.bloodlustTier))
     {
         return false;
     }
 
     outSnapshot.chaseActive = chaseActiveByte != 0;
     outSnapshot.chaseLos = chaseLosByte != 0;
+    outSnapshot.chaseInCenterFOV = chaseInCenterFOVByte != 0;
 
     std::uint16_t palletCount = 0;
     if (!ReadValue(buffer, offset, palletCount))
@@ -3519,6 +3499,7 @@ void App::ApplyMapEnvironment(const std::string& mapName)
         m_renderer.SetEnvironmentSettings(settings);
         m_renderer.SetPointLights({});
         m_renderer.SetSpotLights({});
+        m_gameplay.SetMapSpotLightCount(0);
         return;
     }
 
@@ -3561,6 +3542,7 @@ void App::ApplyMapEnvironment(const std::string& mapName)
     m_runtimeMapSpotLights = spotLights;
     m_renderer.SetPointLights(m_runtimeMapPointLights);
     m_renderer.SetSpotLights(m_runtimeMapSpotLights);
+    m_gameplay.SetMapSpotLightCount(m_runtimeMapSpotLights.size());
 
     game::editor::EnvironmentAsset envAsset;
     if (!game::editor::LevelAssetIO::LoadEnvironment(mapAsset.environmentAssetId, &envAsset, &error))
@@ -4434,6 +4416,57 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         m_ui.SliderFloat("gp_miss_recover", "Miss Recover", &t.missRecoverSeconds, 0.05F, 2.0F, "%.2f");
         m_ui.SliderFloat("gp_lunge_speed_start", "Lunge Speed Start", &t.lungeSpeedStart, 1.0F, 20.0F, "%.2f");
         m_ui.SliderFloat("gp_lunge_speed_end", "Lunge Speed End", &t.lungeSpeedEnd, 1.0F, 20.0F, "%.2f");
+
+        m_ui.Label("Killer Light", m_ui.Theme().colorAccent);
+        {
+            bool killerLightEnabled = m_gameplay.KillerLookLightEnabled();
+            if (m_ui.Checkbox("gp_killer_light_enabled", "Enabled", &killerLightEnabled))
+            {
+                m_gameplay.SetKillerLookLightEnabled(killerLightEnabled);
+            }
+        }
+        {
+            float intensity = m_gameplay.KillerLightIntensity();
+            if (m_ui.SliderFloat("gp_killer_light_intensity", "Intensity", &intensity, 0.0F, 5.0F, "%.2f"))
+            {
+                m_gameplay.SetKillerLookLightIntensity(intensity);
+            }
+        }
+        {
+            float range = m_gameplay.KillerLightRange();
+            if (m_ui.SliderFloat("gp_killer_light_range", "Range (m)", &range, 1.0F, 50.0F, "%.1f"))
+            {
+                m_gameplay.SetKillerLookLightRange(range);
+            }
+        }
+        {
+            float innerAngle = m_gameplay.KillerLightInnerAngle();
+            if (m_ui.SliderFloat("gp_killer_light_inner", "Inner Angle (deg)", &innerAngle, 2.0F, 60.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightAngle(innerAngle);
+            }
+        }
+        {
+            float outerAngle = m_gameplay.KillerLightOuterAngle();
+            if (m_ui.SliderFloat("gp_killer_light_outer", "Outer Angle (deg)", &outerAngle, 5.0F, 90.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightOuterAngle(outerAngle);
+            }
+        }
+        {
+            float pitch = m_gameplay.KillerLightPitch();
+            if (m_ui.SliderFloat("gp_killer_light_pitch", "Pitch (deg, 0=horiz, 90=down)", &pitch, 0.0F, 90.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightPitch(pitch);
+            }
+        }
+        {
+            bool debug = m_gameplay.KillerLookLightDebug();
+            if (m_ui.Checkbox("gp_killer_light_debug", "Debug Overlay", &debug))
+            {
+                m_gameplay.SetKillerLookLightDebug(debug);
+            }
+        }
 
         m_ui.Label("Healing + Skill Checks", m_ui.Theme().colorAccent);
         m_ui.SliderFloat("gp_heal_duration", "Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");

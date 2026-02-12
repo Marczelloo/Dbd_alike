@@ -10,7 +10,7 @@
       "alpha_over_life": [
         {
           "t": 0.0,
-          "v": 1.0
+          "v": 0.6
         },
         {
           "t": 1.0,
@@ -23,17 +23,17 @@
         {
           "color": [
             1.0,
-            0.2199999988079071,
-            0.15000000596046448,
-            0.75
+            0.2,
+            0.1,
+            0.5
           ],
           "t": 0.0
         },
         {
           "color": [
-            0.949999988079071,
-            0.05000000074505806,
-            0.019999999552965164,
+            0.8,
+            0.1,
+            0.05,
             0.0
           ],
           "t": 1.0
@@ -42,19 +42,19 @@
       "color_param": "",
       "depth_test": true,
       "duration": 2.0,
-      "gravity": -2.200000047683716,
-      "lifetime_max": 0.44999998807907104,
-      "lifetime_min": 0.25,
+      "gravity": -0.5,
+      "lifetime_max": 0.3,
+      "lifetime_min": 0.15,
       "local_space": false,
       "lod_far_distance": 68.0,
       "lod_near_distance": 24.0,
       "looping": true,
       "max_distance": 120.0,
-      "max_particles": 256,
+      "max_particles": 64,
       "name": "emitter",
       "rate_param": "",
-      "size_max": 0.23999999463558197,
-      "size_min": 0.07999999821186066,
+      "size_max": 0.12,
+      "size_min": 0.04,
       "size_over_life": [
         {
           "t": 0.0,
@@ -67,21 +67,21 @@
       ],
       "size_param": "",
       "spawn_rate": 0.0,
-      "speed_max": 0.75,
-      "speed_min": 0.44999998807907104,
-      "trail_point_lifetime": 0.44999998807907104,
-      "trail_point_step": 0.03999999910593033,
-      "trail_width": 0.1599999964237213,
+      "speed_max": 0.3,
+      "speed_min": 0.15,
+      "trail_point_lifetime": 0.25,
+      "trail_point_step": 0.05,
+      "trail_width": 0.08,
       "type": "trail",
       "velocity_base": [
         0.0,
-        1.5,
+        0.8,
         0.0
       ],
       "velocity_random": [
-        0.6000000238418579,
-        0.8999999761581421,
-        0.6000000238418579
+        0.3,
+        0.4,
+        0.3
       ]
     }
   ],
@@ -93,9 +93,9 @@
   "postfx_color": [
     1.0,
     0.25,
-    0.18000000715255737
+    0.18
   ],
-  "postfx_duration": 0.2199999988079071,
+  "postfx_duration": 0.22,
   "postfx_intensity": 0.0,
   "postfx_pulse_enabled": false
 }

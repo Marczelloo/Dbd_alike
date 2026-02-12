@@ -56,7 +56,7 @@ struct KillerLookLight
     float range = 14.0F;
     float innerAngleDegrees = 16.0F;
     float outerAngleDegrees = 28.0F;
-    float pitchDegrees = 10.0F;
+    float pitchDegrees = 35.0F;
     glm::vec3 color{1.0F, 0.15F, 0.1F};
 };
 
@@ -323,6 +323,11 @@ public:
         bool chaseActive = false;
         float chaseDistance = 0.0F;
         bool chaseLos = false;
+        bool chaseInCenterFOV = false;
+        float chaseTimeSinceLOS = 0.0F;
+        float chaseTimeSinceCenterFOV = 0.0F;
+        float chaseTimeInChase = 0.0F;
+        std::uint8_t bloodlustTier = 0;
         std::vector<PalletSnapshot> pallets;
     };
 
@@ -424,8 +429,24 @@ public:
     void SetBloodDebug(bool enabled);
     void SetScratchProfile(const std::string& profileName);
     void SetBloodProfile(const std::string& profileName);
-    [[nodiscard]] int GetActiveScratchCount() const { return static_cast<int>(m_scratchMarks.size()); }
-    [[nodiscard]] int GetActiveBloodPoolCount() const { return static_cast<int>(m_bloodPools.size()); }
+    [[nodiscard]] int GetActiveScratchCount() const
+    {
+        int count = 0;
+        for (const auto& mark : m_scratchMarks)
+        {
+            if (mark.active) ++count;
+        }
+        return count;
+    }
+    [[nodiscard]] int GetActiveBloodPoolCount() const
+    {
+        int count = 0;
+        for (const auto& pool : m_bloodPools)
+        {
+            if (pool.active) ++count;
+        }
+        return count;
+    }
     [[nodiscard]] bool ScratchDebugEnabled() const { return m_scratchDebugEnabled; }
     [[nodiscard]] bool BloodDebugEnabled() const { return m_bloodDebugEnabled; }
 
@@ -434,10 +455,18 @@ public:
     void SetKillerLookLightRange(float range) { m_killerLookLight.range = range; }
     void SetKillerLookLightIntensity(float intensity) { m_killerLookLight.intensity = intensity; }
     void SetKillerLookLightAngle(float angleDegrees) { m_killerLookLight.innerAngleDegrees = angleDegrees; }
+    void SetKillerLookLightOuterAngle(float angleDegrees) { m_killerLookLight.outerAngleDegrees = angleDegrees; }
     void SetKillerLookLightPitch(float pitchDegrees) { m_killerLookLight.pitchDegrees = pitchDegrees; }
     void SetKillerLookLightDebug(bool enabled) { m_killerLookLightDebug = enabled; }
     [[nodiscard]] bool KillerLookLightEnabled() const { return m_killerLookLight.enabled; }
     [[nodiscard]] bool KillerLookLightDebug() const { return m_killerLookLightDebug; }
+    [[nodiscard]] float KillerLightIntensity() const { return m_killerLookLight.intensity; }
+    [[nodiscard]] float KillerLightRange() const { return m_killerLookLight.range; }
+    [[nodiscard]] float KillerLightInnerAngle() const { return m_killerLookLight.innerAngleDegrees; }
+    [[nodiscard]] float KillerLightOuterAngle() const { return m_killerLookLight.outerAngleDegrees; }
+    [[nodiscard]] float KillerLightPitch() const { return m_killerLookLight.pitchDegrees; }
+
+    void SetMapSpotLightCount(std::size_t count) { m_mapSpotLightCount = count; }
 
 private:
     enum class InteractionType
@@ -821,14 +850,19 @@ private:
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
 
-    // Phase B2/B3: Scratch Marks and Blood Pools
+    // Phase B2/B3: Scratch Marks and Blood Pools (Refactored for determinism)
+    static constexpr int kScratchMarkPoolSize = 64;
+    static constexpr int kBloodPoolPoolSize = 32;
+
     struct ScratchMark
     {
         glm::vec3 position{0.0F};
         glm::vec3 direction{0.0F, 0.0F, -1.0F};
+        glm::vec3 perpOffset{0.0F};
         float age = 0.0F;
         float lifetime = 30.0F;
         float size = 0.35F;
+        bool active = false;
     };
 
     struct BloodPool
@@ -837,6 +871,7 @@ private:
         float age = 0.0F;
         float lifetime = 120.0F;
         float size = 0.5F;
+        bool active = false;
     };
 
     struct ScratchProfile
@@ -846,8 +881,8 @@ private:
         float lifetime = 30.0F;
         float sizeMin = 0.3F;
         float sizeMax = 0.5F;
-        float jitterRadius = 0.8F;
-        int maxActive = 64;
+        float jitterRadius = 0.5F;
+        float minDistanceFromLast = 0.3F;
         bool allowSurvivorSeeOwn = false;
     };
 
@@ -857,23 +892,30 @@ private:
         float lifetime = 120.0F;
         float sizeMin = 0.4F;
         float sizeMax = 0.7F;
-        int maxActive = 32;
+        float minDistanceFromLast = 0.5F;
         bool onlyWhenMoving = true;
         bool allowSurvivorSeeOwn = false;
     };
 
-    void UpdateScratchMarks(float deltaSeconds, const glm::vec3& survivorPos, bool survivorSprinting);
-    void UpdateBloodPools(float deltaSeconds, const glm::vec3& survivorPos, bool survivorMoving);
+    void UpdateScratchMarks(float fixedDt, const glm::vec3& survivorPos, const glm::vec3& survivorForward, bool survivorSprinting);
+    void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
     void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
     void RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const;
     [[nodiscard]] bool CanSeeScratchMarks(bool localIsKiller) const;
     [[nodiscard]] bool CanSeeBloodPools(bool localIsKiller) const;
 
-    std::vector<ScratchMark> m_scratchMarks;
-    std::vector<BloodPool> m_bloodPools;
+    [[nodiscard]] static float DeterministicRandom(const glm::vec3& position, int seed);
+    [[nodiscard]] static glm::vec3 ComputePerpendicular(const glm::vec3& forward);
+
+    std::array<ScratchMark, kScratchMarkPoolSize> m_scratchMarks{};
+    std::array<BloodPool, kBloodPoolPoolSize> m_bloodPools{};
+    int m_scratchMarkHead = 0;
+    int m_bloodPoolHead = 0;
     float m_scratchSpawnAccumulator = 0.0F;
     float m_scratchNextInterval = 0.2F;
     float m_bloodSpawnAccumulator = 0.0F;
+    glm::vec3 m_lastScratchSpawnPos{-10000.0F, 0.0F, -10000.0F};
+    glm::vec3 m_lastBloodSpawnPos{-10000.0F, 0.0F, -10000.0F};
     ScratchProfile m_scratchProfile{};
     BloodProfile m_bloodProfile{};
     bool m_scratchDebugEnabled = false;
@@ -881,6 +923,7 @@ private:
 
     KillerLookLight m_killerLookLight{};
     bool m_killerLookLightDebug = false;
+    std::size_t m_mapSpotLightCount = 0;
 };
 
 } // namespace game::gameplay

@@ -262,11 +262,6 @@ private:
     bool m_showDebugOverlay = true;
     bool m_showNetworkOverlay = false;
     bool m_showLanDebug = false;
-    bool m_killerLookLightEnabled = true;
-    float m_killerLookLightIntensity = 1.1F;
-    float m_killerLookLightRange = 14.0F;
-    float m_killerLookLightInnerDeg = 16.0F;
-    float m_killerLookLightOuterDeg = 28.0F;
     std::uint16_t m_defaultGamePort = 7777;
     std::uint16_t m_lanDiscoveryPort = 7778;
     int m_clientInterpolationBufferMs = 350;

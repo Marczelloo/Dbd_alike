@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -389,6 +390,42 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     UpdateBloodlust(fixedDt);
     UpdateInteractionCandidate();
 
+    const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+    if (survivorTransformIt != m_world.Transforms().end())
+    {
+        const glm::vec3 survivorPos = survivorTransformIt->second.position;
+        const glm::vec3 survivorForward = survivorTransformIt->second.forward;
+        const auto survivorActorIt = m_world.Actors().find(m_survivor);
+
+        bool survivorSprinting = false;
+        bool survivorMoving = false;
+
+        if (survivorActorIt != m_world.Actors().end())
+        {
+            const RoleCommand* command = nullptr;
+            if (m_controlledRole == ControlledRole::Survivor)
+            {
+                command = &m_localSurvivorCommand;
+            }
+            else if (m_remoteSurvivorCommand.has_value())
+            {
+                command = &m_remoteSurvivorCommand.value();
+            }
+
+            if (command != nullptr)
+            {
+                survivorSprinting = command->sprinting;
+                survivorMoving = glm::length(command->moveAxis) > 0.1F;
+            }
+        }
+
+        const bool survivorInjuredOrDowned = (m_survivorState == SurvivorHealthState::Injured ||
+                                               m_survivorState == SurvivorHealthState::Downed);
+
+        UpdateScratchMarks(fixedDt, survivorPos, survivorForward, survivorSprinting);
+        UpdateBloodPools(fixedDt, survivorPos, survivorInjuredOrDowned, survivorMoving);
+    }
+
     m_localSurvivorCommand.lookDelta = glm::vec2{0.0F};
     m_localSurvivorCommand.interactPressed = false;
     m_localSurvivorCommand.jumpPressed = false;
@@ -494,36 +531,49 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
     renderer.SetPostFxPulse(m_fxSystem.PostFxPulseColor(), m_fxSystem.PostFxPulseIntensity());
 
     // Phase B4: Killer Look Light (spot cone)
-    // Only show when killer exists and light is enabled
+    // Add killer light to existing spotlights from map
+    // Only show for non-killer players (survivors) - killer should not see own light
     const auto killerTransIt = m_world.Transforms().find(m_killer);
-    if (m_killer != 0 && killerTransIt != m_world.Transforms().end() && m_killerLookLight.enabled)
+    const bool isLocalKiller = m_controlledRole == ControlledRole::Killer;
+    if (m_killer != 0 && killerTransIt != m_world.Transforms().end() && m_killerLookLight.enabled && !isLocalKiller)
     {
         const glm::vec3 killerPos = killerTransIt->second.position;
         const glm::vec3 killerForward = killerTransIt->second.forward;
 
-        // Calculate position slightly above killer and in front direction
-        const glm::vec3 lightPos = killerPos + glm::vec3{0.0F, 0.3F, 0.0F} + killerForward * 0.5F;
-        const glm::vec3 lightDir = killerForward;
+        // Flatten forward to XZ plane (ignore camera pitch - light follows yaw only)
+        const glm::vec3 flatForward = glm::length(glm::vec3{killerForward.x, 0.0F, killerForward.z}) > 0.001F
+                                        ? glm::normalize(glm::vec3{killerForward.x, 0.0F, killerForward.z})
+                                        : glm::vec3{0.0F, 0.0F, -1.0F};
 
-        std::vector<engine::render::SpotLight> spotLights;
+        const glm::vec3 lightPos = killerPos + glm::vec3{0.0F, 0.8F, 0.0F} + flatForward * 0.3F;
+
+        // Calculate light direction: pitch degrees downward from flat forward
+        const float pitchRad = glm::radians(m_killerLookLight.pitchDegrees);
+        const glm::vec3 lightDir = glm::normalize(flatForward * glm::cos(pitchRad) - glm::vec3{0.0F, 1.0F, 0.0F} * glm::sin(pitchRad));
+
+        // Get existing spotlights, but only keep map spotlights (not accumulated killer lights)
+        std::vector<engine::render::SpotLight> spotLights = renderer.GetSpotLights();
+        if (spotLights.size() > m_mapSpotLightCount)
+        {
+            spotLights.resize(m_mapSpotLightCount);
+        }
+
         spotLights.push_back({
             lightPos,
             lightDir,
             m_killerLookLight.color,
             m_killerLookLight.intensity,
             m_killerLookLight.range,
-            glm::cos(glm::radians(m_killerLookLight.innerAngleDegrees * 0.5F)),  // innerCos
-            glm::cos(glm::radians(m_killerLookLight.outerAngleDegrees * 0.5F))   // outerCos
+            glm::cos(glm::radians(m_killerLookLight.innerAngleDegrees * 0.5F)),
+            glm::cos(glm::radians(m_killerLookLight.outerAngleDegrees * 0.5F))
         });
         renderer.SetSpotLights(spotLights);
 
-        // Phase B fix: Debug visualization for killer light (when lighting may not affect it)
         if (m_killerLookLightDebug)
         {
             const float coneLength = m_killerLookLight.range;
             const float coneRadius = coneLength * glm::tan(glm::radians(m_killerLookLight.outerAngleDegrees * 0.5F));
 
-            // Draw cone sides (approximated as 4 boxes)
             const int segments = 8;
             const float angleStep = glm::two_pi<float>() / static_cast<float>(segments);
 
@@ -532,14 +582,12 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
                 const float theta1 = static_cast<float>(i) * angleStep;
                 const float theta2 = static_cast<float>(i + 1) * angleStep;
 
-                // Calculate cone edge points
                 const glm::vec3 offset = glm::vec3{
                     glm::sin(theta1) * coneRadius * 0.5F,
                     0.0F,
                     glm::cos(theta1) * coneRadius * 0.5F
                 } + lightPos;
 
-                // Draw a line segment along the cone
                 const glm::vec3 offset2 = glm::vec3{
                     glm::sin(theta2) * coneRadius * 0.5F,
                     0.0F,
@@ -549,15 +597,9 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
                 renderer.DrawLine(offset, offset2, m_killerLookLight.color);
             }
 
-            // Draw center line to show direction
-            const glm::vec3 tipPos = lightPos + killerForward * coneLength;
-            renderer.DrawLine(lightPos, tipPos, m_killerLookLight.color * 0.5F);  // Dimmer center line
+            const glm::vec3 tipPos = lightPos + lightDir * coneLength;
+            renderer.DrawLine(lightPos, tipPos, m_killerLookLight.color * 0.5F);
         }
-    }
-    else
-    {
-        // No killer light
-        renderer.SetSpotLights({});
     }
 
     renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F});
@@ -1888,6 +1930,11 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
     snapshot.chaseActive = m_chase.isChasing;
     snapshot.chaseDistance = m_chase.distance;
     snapshot.chaseLos = m_chase.hasLineOfSight;
+    snapshot.chaseInCenterFOV = m_chase.inCenterFOV;
+    snapshot.chaseTimeSinceLOS = m_chase.timeSinceSeenLOS;
+    snapshot.chaseTimeSinceCenterFOV = m_chase.timeSinceCenterFOV;
+    snapshot.chaseTimeInChase = m_chase.timeInChase;
+    snapshot.bloodlustTier = static_cast<std::uint8_t>(m_bloodlust.tier);
 
     auto fillActor = [&](engine::scene::Entity entity, ActorSnapshot& outActor) {
         const auto transformIt = m_world.Transforms().find(entity);
@@ -1953,6 +2000,11 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
     m_chase.isChasing = snapshot.chaseActive;
     m_chase.distance = snapshot.chaseDistance;
     m_chase.hasLineOfSight = snapshot.chaseLos;
+    m_chase.inCenterFOV = snapshot.chaseInCenterFOV;
+    m_chase.timeSinceSeenLOS = snapshot.chaseTimeSinceLOS;
+    m_chase.timeSinceCenterFOV = snapshot.chaseTimeSinceCenterFOV;
+    m_chase.timeInChase = snapshot.chaseTimeInChase;
+    m_bloodlust.tier = static_cast<int>(snapshot.bloodlustTier);
 
     const SurvivorHealthState nextState = static_cast<SurvivorHealthState>(
         glm::clamp(static_cast<int>(snapshot.survivorState), 0, static_cast<int>(SurvivorHealthState::Dead))
@@ -3453,13 +3505,13 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
                 m_chase.timeSinceCenterFOV += fixedDt;
             }
 
-            // End chase conditions:
-            // 1. Distance >= endDistance (18m)
-            // 2. Lost LOS for > 8s
-            // 3. Lost center FOV for > 8s
+            assert(m_chase.timeSinceSeenLOS >= 0.0F && "timeSinceSeenLOS should never be negative");
+            assert(m_chase.timeSinceCenterFOV >= 0.0F && "timeSinceCenterFOV should never be negative");
+            assert(m_chase.timeInChase >= 0.0F && "timeInChase should never be negative");
+
             const bool tooFar = m_chase.distance >= m_chase.endDistance;
-            const bool lostLOSLong = m_chase.timeSinceSeenLOS > m_chase.lostSightTimeout; // 8s
-            const bool lostCenterFOVLong = m_chase.timeSinceCenterFOV > m_chase.lostCenterFOVTimeout; // 8s
+            const bool lostLOSLong = m_chase.timeSinceSeenLOS > m_chase.lostSightTimeout;
+            const bool lostCenterFOVLong = m_chase.timeSinceCenterFOV > m_chase.lostCenterFOVTimeout;
 
             if (tooFar || lostLOSLong || lostCenterFOVLong)
             {
@@ -5631,24 +5683,43 @@ void GameplaySystems::UpdateBloodlust(float fixedDt)
 }
 
 // ============================================================================
-// Phase B2/B3: Scratch Marks and Blood Pools
+// Phase B2/B3: Scratch Marks and Blood Pools (Refactored for DBD accuracy)
 // ============================================================================
+
+float GameplaySystems::DeterministicRandom(const glm::vec3& position, int seed)
+{
+    unsigned int hash = static_cast<unsigned int>(seed);
+    hash ^= static_cast<unsigned int>(static_cast<int>(position.x * 1000.0F));
+    hash ^= static_cast<unsigned int>(static_cast<int>(position.y * 1000.0F)) << 8;
+    hash ^= static_cast<unsigned int>(static_cast<int>(position.z * 1000.0F)) << 16;
+    hash = (hash ^ (hash >> 16)) * 0x85ebca6b;
+    hash = (hash ^ (hash >> 13)) * 0xc2b2ae35;
+    hash = hash ^ (hash >> 16);
+    return static_cast<float>(hash % 10000) / 10000.0F;
+}
+
+glm::vec3 GameplaySystems::ComputePerpendicular(const glm::vec3& forward)
+{
+    glm::vec3 up{0.0F, 1.0F, 0.0F};
+    glm::vec3 perp = glm::cross(forward, up);
+    if (glm::length(perp) < 0.001F)
+    {
+        perp = glm::vec3{1.0F, 0.0F, 0.0F};
+    }
+    return glm::normalize(perp);
+}
 
 bool GameplaySystems::CanSeeScratchMarks(bool localIsKiller) const
 {
-    // DBD-like: Scratch marks are visible ONLY to killer
-    // Future-proof: allow survivor to see own marks via profile setting
     if (m_scratchProfile.allowSurvivorSeeOwn)
     {
-        return true;  // Anyone can see if config allows
+        return true;
     }
     return localIsKiller;
 }
 
 bool GameplaySystems::CanSeeBloodPools(bool localIsKiller) const
 {
-    // DBD-like: Blood pools are visible ONLY to killer
-    // Future-proof: allow survivor to see own pools via profile setting
     if (m_bloodProfile.allowSurvivorSeeOwn)
     {
         return true;
@@ -5656,167 +5727,147 @@ bool GameplaySystems::CanSeeBloodPools(bool localIsKiller) const
     return localIsKiller;
 }
 
-void GameplaySystems::UpdateScratchMarks(float deltaSeconds, const glm::vec3& survivorPos, bool survivorSprinting)
+void GameplaySystems::UpdateScratchMarks(float fixedDt, const glm::vec3& survivorPos, const glm::vec3& survivorForward, bool survivorSprinting)
 {
-    // Update existing marks
-    for (auto it = m_scratchMarks.begin(); it != m_scratchMarks.end();)
+    for (auto& mark : m_scratchMarks)
     {
-        it->age += deltaSeconds;
-        if (it->age >= it->lifetime)
+        if (mark.active)
         {
-            it = m_scratchMarks.erase(it);
-        }
-        else
-        {
-            ++it;
+            mark.age += fixedDt;
+            if (mark.age >= mark.lifetime)
+            {
+                mark.active = false;
+            }
         }
     }
 
-    // Only spawn when survivor is sprinting
     if (!survivorSprinting)
     {
         return;
     }
 
-    // Check if we should spawn a new mark
-    m_scratchSpawnAccumulator += deltaSeconds;
-    if (m_scratchSpawnAccumulator >= m_scratchNextInterval)
-    {
-        m_scratchSpawnAccumulator = 0.0F;
-        // Randomize next interval (Phase B: faster spawn rate)
-        // Target: ~0.08-0.15s between spawns (more marks)
-        std::uniform_real_distribution<float> dist(0.08F, 0.15F);
-        m_scratchNextInterval = dist(m_rng);
-
-        // Check cap
-        if (static_cast<int>(m_scratchMarks.size()) >= m_scratchProfile.maxActive)
-        {
-            // Remove oldest mark
-            if (!m_scratchMarks.empty())
-            {
-                m_scratchMarks.erase(m_scratchMarks.begin());
-            }
-        }
-
-        // Spawn new mark behind survivor with jitter
-        ScratchMark mark;
-        mark.age = 0.0F;
-        mark.lifetime = m_scratchProfile.lifetime;
-
-        // Get survivor forward (direction they're moving)
-        const auto& survivorTransform = m_world.Transforms()[m_survivor];
-        mark.direction = survivorTransform.forward;
-
-        // Position: behind survivor with jitter
-        std::uniform_real_distribution<float> jitterDist(-m_scratchProfile.jitterRadius, m_scratchProfile.jitterRadius);
-        const glm::vec3 jitter{jitterDist(m_rng), 0.0F, jitterDist(m_rng)};
-
-        // Place behind survivor (opposite to movement direction)
-        const float behindOffset = 1.2F;  // Meters behind survivor
-        mark.position = survivorPos - mark.direction * behindOffset + jitter;
-
-        // Random size
-        std::uniform_real_distribution<float> sizeDist(m_scratchProfile.sizeMin, m_scratchProfile.sizeMax);
-        mark.size = sizeDist(m_rng);
-
-        // Ground clamp via raycast
-        glm::vec3 rayStart = mark.position;
-        rayStart.y += 2.0F;  // Start above
-        const glm::vec3 rayEnd = rayStart + glm::vec3{0.0F, -10.0F, 0.0F};
-
-        const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd);
-        if (hit.has_value())
-        {
-            mark.position.y = hit->position.y + 0.02F;  // Slightly above ground to prevent z-fighting
-        }
-        else
-        {
-            mark.position.y = 0.02F;  // Fallback to near ground
-        }
-
-        m_scratchMarks.push_back(mark);
-    }
-}
-
-void GameplaySystems::UpdateBloodPools(float deltaSeconds, const glm::vec3& survivorPos, bool survivorMoving)
-{
-    // Update existing pools
-    for (auto it = m_bloodPools.begin(); it != m_bloodPools.end();)
-    {
-        it->age += deltaSeconds;
-        if (it->age >= it->lifetime)
-        {
-            it = m_bloodPools.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-
-    // Only spawn when survivor is Injured OR Downed
-    if (m_survivorState == SurvivorHealthState::Healthy || m_survivorState == SurvivorHealthState::Dead)
+    const float distFromLast = glm::length(glm::vec2{survivorPos.x - m_lastScratchSpawnPos.x, survivorPos.z - m_lastScratchSpawnPos.z});
+    if (distFromLast < m_scratchProfile.minDistanceFromLast)
     {
         return;
     }
 
-    // Check if moving only flag is set
+    m_scratchSpawnAccumulator += fixedDt;
+    if (m_scratchSpawnAccumulator < m_scratchNextInterval)
+    {
+        return;
+    }
+
+    m_scratchSpawnAccumulator -= m_scratchNextInterval;
+
+    const float intervalRand = DeterministicRandom(survivorPos + glm::vec3{0.0F, m_scratchSpawnAccumulator, 0.0F}, 0);
+    m_scratchNextInterval = m_scratchProfile.spawnIntervalMin + intervalRand * (m_scratchProfile.spawnIntervalMax - m_scratchProfile.spawnIntervalMin);
+
+    ScratchMark& mark = m_scratchMarks[m_scratchMarkHead];
+    mark.active = true;
+    mark.age = 0.0F;
+    mark.lifetime = m_scratchProfile.lifetime;
+    mark.direction = survivorForward;
+    mark.perpOffset = ComputePerpendicular(survivorForward);
+
+    const float jitterRand1 = DeterministicRandom(survivorPos, 1) * 2.0F - 1.0F;
+    const float jitterRand2 = DeterministicRandom(survivorPos, 2) * 2.0F - 1.0F;
+    const glm::vec3 jitter{jitterRand1 * m_scratchProfile.jitterRadius, 0.0F, jitterRand2 * m_scratchProfile.jitterRadius};
+
+    constexpr float behindOffset = 1.2F;
+    mark.position = survivorPos - mark.direction * behindOffset + jitter;
+
+    const float sizeRand = DeterministicRandom(survivorPos, 3);
+    mark.size = m_scratchProfile.sizeMin + sizeRand * (m_scratchProfile.sizeMax - m_scratchProfile.sizeMin);
+
+    glm::vec3 rayStart = mark.position;
+    rayStart.y += 2.0F;
+    const glm::vec3 rayEnd = rayStart + glm::vec3{0.0F, -10.0F, 0.0F};
+
+    const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd);
+    if (hit.has_value())
+    {
+        mark.position.y = hit->position.y + 0.02F;
+    }
+    else
+    {
+        mark.position.y = 0.02F;
+    }
+
+    m_scratchMarkHead = (m_scratchMarkHead + 1) % kScratchMarkPoolSize;
+    m_lastScratchSpawnPos = survivorPos;
+}
+
+void GameplaySystems::UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving)
+{
+    for (auto& pool : m_bloodPools)
+    {
+        if (pool.active)
+        {
+            pool.age += fixedDt;
+            if (pool.age >= pool.lifetime)
+            {
+                pool.active = false;
+            }
+        }
+    }
+
+    if (!survivorInjuredOrDowned)
+    {
+        return;
+    }
+
     if (m_bloodProfile.onlyWhenMoving && !survivorMoving)
     {
         return;
     }
 
-    // Accumulate time
-    m_bloodSpawnAccumulator += deltaSeconds;
-    if (m_bloodSpawnAccumulator >= m_bloodProfile.spawnInterval)
+    const float distFromLast = glm::length(glm::vec2{survivorPos.x - m_lastBloodSpawnPos.x, survivorPos.z - m_lastBloodSpawnPos.z});
+    if (distFromLast < m_bloodProfile.minDistanceFromLast)
     {
-        m_bloodSpawnAccumulator = 0.0F;
-
-        // Check cap
-        if (static_cast<int>(m_bloodPools.size()) >= m_bloodProfile.maxActive)
-        {
-            if (!m_bloodPools.empty())
-            {
-                m_bloodPools.erase(m_bloodPools.begin());
-            }
-        }
-
-        // Spawn new pool at survivor position
-        BloodPool pool;
-        pool.age = 0.0F;
-        pool.lifetime = m_bloodProfile.lifetime;
-
-        // Position with small jitter
-        std::uniform_real_distribution<float> jitterDist(-0.3F, 0.3F);
-        pool.position = survivorPos + glm::vec3{jitterDist(m_rng), 0.0F, jitterDist(m_rng)};
-
-        // Random size
-        std::uniform_real_distribution<float> sizeDist(m_bloodProfile.sizeMin, m_bloodProfile.sizeMax);
-        pool.size = sizeDist(m_rng);
-
-        // Ground clamp
-        glm::vec3 rayStart = pool.position;
-        rayStart.y += 2.0F;
-        const glm::vec3 rayEnd = rayStart + glm::vec3{0.0F, -10.0F, 0.0F};
-
-        const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd);
-        if (hit.has_value())
-        {
-            pool.position.y = hit->position.y + 0.01F;
-        }
-        else
-        {
-            pool.position.y = 0.01F;
-        }
-
-        m_bloodPools.push_back(pool);
+        return;
     }
+
+    m_bloodSpawnAccumulator += fixedDt;
+    if (m_bloodSpawnAccumulator < m_bloodProfile.spawnInterval)
+    {
+        return;
+    }
+
+    m_bloodSpawnAccumulator -= m_bloodProfile.spawnInterval;
+
+    BloodPool& pool = m_bloodPools[m_bloodPoolHead];
+    pool.active = true;
+    pool.age = 0.0F;
+    pool.lifetime = m_bloodProfile.lifetime;
+
+    const float jitterRand1 = DeterministicRandom(survivorPos, 10) * 2.0F - 1.0F;
+    const float jitterRand2 = DeterministicRandom(survivorPos, 11) * 2.0F - 1.0F;
+    pool.position = survivorPos + glm::vec3{jitterRand1 * 0.3F, 0.0F, jitterRand2 * 0.3F};
+
+    const float sizeRand = DeterministicRandom(survivorPos, 12);
+    pool.size = m_bloodProfile.sizeMin + sizeRand * (m_bloodProfile.sizeMax - m_bloodProfile.sizeMin);
+
+    glm::vec3 rayStart = pool.position;
+    rayStart.y += 2.0F;
+    const glm::vec3 rayEnd = rayStart + glm::vec3{0.0F, -10.0F, 0.0F};
+
+    const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd);
+    if (hit.has_value())
+    {
+        pool.position.y = hit->position.y + 0.01F;
+    }
+    else
+    {
+        pool.position.y = 0.01F;
+    }
+
+    m_bloodPoolHead = (m_bloodPoolHead + 1) % kBloodPoolPoolSize;
+    m_lastBloodSpawnPos = survivorPos;
 }
 
 void GameplaySystems::RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const
 {
-    // Visibility check
-    // Phase B fix: Also render if debug mode is on (regardless of role)
     const bool visible = CanSeeScratchMarks(localIsKiller) || m_scratchDebugEnabled;
 
     if (!visible)
@@ -5824,57 +5875,43 @@ void GameplaySystems::RenderScratchMarks(engine::render::Renderer& renderer, boo
         return;
     }
 
-    // DBD-like scratch color: reddish scratches on ground
     const glm::vec3 baseColor{0.65F, 0.15F, 0.12F};
 
     for (const ScratchMark& mark : m_scratchMarks)
     {
-        // Fade out based on age
-        const float lifeT = mark.age / mark.lifetime;  // 0 = fresh, 1 = expired
-        const float alpha = glm::max(0.0F, 1.0F - lifeT);
-
-        // Phase B fix: Thinner streaks with multiple segments
-        // Each mark consists of 3 thin line segments (creates "streak" look)
-        const int numSegments = 3;
-        const float segmentLength = 1.0F;  // Length of each segment
-        const float halfWidth = 0.03F;  // Half-width of streak (very thin)
-
-        for (int seg = 0; seg < numSegments; ++seg)
+        if (!mark.active)
         {
-            const float t = static_cast<float>(seg) / static_cast<float>(numSegments);
-            const float theta1 = t * glm::two_pi<float>();
-            const float theta2 = static_cast<float>(seg + 1) * glm::two_pi<float>();
-            (void)theta1;  // Mark as intentionally unused (computed but not directly used)
-            (void)theta2;  // Mark as intentionally unused (computed but not directly used)
-
-            // Slight jitter per segment for natural variety
-            const float segJitterX = std::uniform_real_distribution<float>(-0.02F, 0.02F)(m_rng);
-            const float segJitterZ = std::uniform_real_distribution<float>(-0.02F, 0.02F)(m_rng);
-
-            // Perpendicular offset for each segment (creates width)
-            const glm::vec3 perpX = glm::vec3{-mark.direction.z, 0.0F, mark.direction.x} * halfWidth;
-
-            // Calculate segment positions (spaced along direction)
-            const glm::vec3 seg1Pos = mark.position + perpX * (t - segmentLength) + glm::vec3{segJitterX, 0.0F, segJitterZ};
-            const glm::vec3 seg2Pos = mark.position + perpX * t + glm::vec3{segJitterX, 0.0F, segJitterZ};
-
-            renderer.DrawLine(seg1Pos, seg2Pos, baseColor * alpha);
+            continue;
         }
 
-        // Draw small center dot for visibility
+        const float lifeT = mark.age / mark.lifetime;
+        const float alpha = glm::max(0.0F, 1.0F - lifeT);
+
+        constexpr float halfWidth = 0.04F;
+        const float streakLength = mark.size * 0.8F;
+
+        const glm::vec3 perp = mark.perpOffset * halfWidth;
+
+        const glm::vec3 p1 = mark.position - mark.direction * streakLength * 0.5F - perp;
+        const glm::vec3 p2 = mark.position - mark.direction * streakLength * 0.5F + perp;
+        const glm::vec3 p3 = mark.position + mark.direction * streakLength * 0.3F + perp * 0.7F;
+        const glm::vec3 p4 = mark.position + mark.direction * streakLength * 0.5F + perp * 0.4F;
+
+        renderer.DrawLine(p1, p2, baseColor * alpha);
+        renderer.DrawLine(p2, p3, baseColor * alpha);
+        renderer.DrawLine(p3, p4, baseColor * alpha);
+
         renderer.DrawOrientedBox(
             mark.position,
-            glm::vec3{halfWidth, 0.01F, halfWidth},  // Tiny center dot
+            glm::vec3{halfWidth * 0.5F, 0.01F, halfWidth * 0.5F},
             glm::vec3{0.0F, glm::degrees(std::atan2(mark.direction.x, mark.direction.z)), 0.0F},
-            baseColor * alpha  // Same alpha for fade
+            baseColor * alpha
         );
     }
 }
 
 void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const
 {
-    // Visibility check
-    // Phase B fix: Also render if debug mode is on (regardless of role)
     const bool visible = CanSeeBloodPools(localIsKiller) || m_bloodDebugEnabled;
 
     if (!visible)
@@ -5884,14 +5921,16 @@ void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool 
 
     for (const BloodPool& pool : m_bloodPools)
     {
-        // Fade out based on age (slower than scratch marks)
-        const float lifeT = pool.age / pool.lifetime;
-        const float alpha = glm::max(0.0F, 1.0F - lifeT * lifeT);  // Quadratic fade
+        if (!pool.active)
+        {
+            continue;
+        }
 
-        // Blood color
+        const float lifeT = pool.age / pool.lifetime;
+        const float alpha = glm::max(0.0F, 1.0F - lifeT * lifeT);
+
         const glm::vec3 color{0.55F, 0.08F, 0.08F};
 
-        // Draw as flat circle on ground (using oriented box)
         renderer.DrawOrientedBox(
             pool.position,
             glm::vec3{pool.size * 0.5F, 0.01F, pool.size * 0.5F},
@@ -5911,34 +5950,16 @@ void GameplaySystems::SetBloodDebug(bool enabled)
     m_bloodDebugEnabled = enabled;
 }
 
-void GameplaySystems::SetKillerLookLightIntensity(float intensity)
-{
-    m_killerLookLight.intensity = intensity;
-}
-
-void GameplaySystems::SetKillerLookLightAngle(float angleDegrees)
-{
-    m_killerLookLight.innerAngleDegrees = angleDegrees;
-}
-
-void GameplaySystems::SetKillerLookLightPitch(float pitchDegrees)
-{
-    m_killerLookLight.pitchDegrees = pitchDegrees;
-}
-
 void GameplaySystems::SetScratchProfile(const std::string& profileName)
 {
-    // For now, just reset to default (future: load from JSON)
     (void)profileName;
     m_scratchProfile = ScratchProfile{};
-    // Phase B: Updated defaults for faster spawn rate and thinner marks
-    m_scratchProfile.spawnIntervalMin = 0.08F;  // Faster spawn
+    m_scratchProfile.spawnIntervalMin = 0.08F;
     m_scratchProfile.spawnIntervalMax = 0.15F;
 }
 
 void GameplaySystems::SetBloodProfile(const std::string& profileName)
 {
-    // For now, just reset to default (future: load from JSON)
     (void)profileName;
     m_bloodProfile = BloodProfile{};
 }
