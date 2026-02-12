@@ -124,6 +124,14 @@ struct DeveloperConsole::Impl
         std::string category;
     };
 
+    struct LogEntry
+    {
+        std::string text;
+        glm::vec4 color;
+        bool isCommand = false;
+        int categoryDepth = 0;
+    };
+
     using CommandHandler = std::function<void(const std::vector<std::string>&, const ConsoleContext&)>;
 
     bool open = false;
@@ -133,22 +141,33 @@ struct DeveloperConsole::Impl
 
     std::array<char, 512> inputBuffer{};
 
-    std::vector<std::string> items;
+    std::vector<LogEntry> items;
     std::vector<std::string> history;
     int historyPos = -1;
 
     std::unordered_map<std::string, CommandHandler> commandRegistry;
     std::vector<CommandInfo> commandInfos;
 
-    void AddLog(const std::string& text)
+    void AddLog(const std::string& text, const glm::vec4& color = ConsoleColors::Default, bool isCommand = false, int categoryDepth = 0)
     {
-        items.push_back(text);
+        items.push_back(LogEntry{text, color, isCommand, categoryDepth});
         scrollToBottom = true;
+    }
+
+    void LogCommand(const std::string& text) { AddLog(text, ConsoleColors::Command, true, 0); }
+    void LogSuccess(const std::string& text) { AddLog("✓ " + text, ConsoleColors::Success, false, 0); }
+    void LogError(const std::string& text) { AddLog("✗ " + text, ConsoleColors::Error, false, 0); }
+    void LogWarning(const std::string& text) { AddLog("⚠ " + text, ConsoleColors::Warning, false, 0); }
+    void LogInfo(const std::string& text) { AddLog(text, ConsoleColors::Info, false, 0); }
+    void LogCategory(const std::string& text) { AddLog(text, ConsoleColors::Category, false, 0); }
+    void LogValue(const std::string& label, const std::string& value)
+    {
+        AddLog("  " + label + ": " + value, ConsoleColors::Info, false, 0);
     }
 
     void PrintHelp()
     {
-        AddLog("Available commands by category:");
+        AddLog("Available commands by category:", ConsoleColors::Category);
         std::map<std::string, std::vector<CommandInfo>> grouped;
         for (const CommandInfo& info : commandInfos)
         {
@@ -160,10 +179,10 @@ struct DeveloperConsole::Impl
             std::sort(commands.begin(), commands.end(), [](const CommandInfo& a, const CommandInfo& b) {
                 return a.usage < b.usage;
             });
-            AddLog("[" + category + "]");
+            AddLog("▸ " + category, ConsoleColors::Category);
             for (const CommandInfo& info : commands)
             {
-                AddLog("  " + info.usage + " - " + info.description);
+                AddLog("  • " + info.usage + " — " + info.description, ConsoleColors::Info, false, 1);
             }
         }
     }
@@ -212,12 +231,12 @@ struct DeveloperConsole::Impl
         RegisterCommand("fx_spawn <assetId>", "Spawn an FX asset at camera forward", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: fx_spawn <assetId>");
+                LogError("Usage: fx_spawn <assetId>");
                 return;
             }
 
             context.gameplay->SpawnFxDebug(tokens[1]);
-            AddLog("FX spawn requested: " + tokens[1]);
+            LogSuccess("FX spawned: " + tokens[1]);
         });
 
         RegisterCommand("fx_stop_all", "Stop all active FX instances", [this](const std::vector<std::string>&, const ConsoleContext& context) {
@@ -226,7 +245,7 @@ struct DeveloperConsole::Impl
                 return;
             }
             context.gameplay->StopAllFx();
-            AddLog("All FX stopped.");
+            LogSuccess("All FX stopped");
         });
 
         RegisterCommand("fx_list", "List available FX assets", [this](const std::vector<std::string>&, const ConsoleContext& context) {
@@ -237,46 +256,46 @@ struct DeveloperConsole::Impl
             const std::vector<std::string> assets = context.gameplay->ListFxAssets();
             if (assets.empty())
             {
-                AddLog("No FX assets found.");
+                LogWarning("No FX assets found");
                 return;
             }
-            AddLog("FX assets:");
+            AddLog("FX assets:", ConsoleColors::Category);
             for (const std::string& assetId : assets)
             {
-                AddLog("  " + assetId);
+                AddLog("  • " + assetId, ConsoleColors::Info);
             }
         });
 
         RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() < 2)
             {
-                AddLog("Usage: spawn survivor|killer|pallet|window");
+                LogError("Usage: spawn survivor|killer|pallet|window");
                 return;
             }
 
             if (tokens[1] == "survivor")
             {
                 context.gameplay->SpawnSurvivor();
-                AddLog("Spawned survivor.");
+                LogSuccess("Spawned survivor");
             }
             else if (tokens[1] == "killer")
             {
                 context.gameplay->SpawnKiller();
-                AddLog("Spawned killer.");
+                LogSuccess("Spawned killer");
             }
             else if (tokens[1] == "pallet")
             {
                 context.gameplay->SpawnPallet();
-                AddLog("Spawned pallet.");
+                LogSuccess("Spawned pallet");
             }
             else if (tokens[1] == "window")
             {
                 context.gameplay->SpawnWindow();
-                AddLog("Spawned window.");
+                LogSuccess("Spawned window");
             }
             else
             {
-                AddLog("Unknown spawn target.");
+                LogError("Unknown spawn target");
             }
         });
 
@@ -284,7 +303,7 @@ struct DeveloperConsole::Impl
             if (context.spawnRoleHere)
             {
                 context.spawnRoleHere("survivor");
-                AddLog("spawn_survivor_here requested.");
+                LogSuccess("Survivor spawned at camera position");
             }
         });
 
@@ -292,28 +311,28 @@ struct DeveloperConsole::Impl
             if (context.spawnRoleHere)
             {
                 context.spawnRoleHere("killer");
-                AddLog("spawn_killer_here requested.");
+                LogSuccess("Killer spawned at camera position");
             }
         });
 
         RegisterCommand("spawn_survivor_at <spawnId>", "Spawn/respawn survivor at spawn point ID", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.spawnRoleAt == nullptr)
             {
-                AddLog("Usage: spawn_survivor_at <spawnId>");
+                LogError("Usage: spawn_survivor_at <spawnId>");
                 return;
             }
             context.spawnRoleAt("survivor", ParseIntOr(-1, tokens[1]));
-            AddLog("spawn_survivor_at requested.");
+            LogSuccess("Survivor spawned at point " + tokens[1]);
         });
 
         RegisterCommand("spawn_killer_at <spawnId>", "Spawn/respawn killer at spawn point ID", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.spawnRoleAt == nullptr)
             {
-                AddLog("Usage: spawn_killer_at <spawnId>");
+                LogError("Usage: spawn_killer_at <spawnId>");
                 return;
             }
             context.spawnRoleAt("killer", ParseIntOr(-1, tokens[1]));
-            AddLog("spawn_killer_at requested.");
+            LogSuccess("Killer spawned at point " + tokens[1]);
         });
 
         RegisterCommand("list_spawns", "List spawn points with IDs", [this](const std::vector<std::string>&, const ConsoleContext& context) {
@@ -326,7 +345,7 @@ struct DeveloperConsole::Impl
         RegisterCommand("teleport survivor|killer x y z", "Teleport survivor or killer", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 5)
             {
-                AddLog("Usage: teleport survivor|killer x y z");
+                LogError("Usage: teleport survivor|killer x y z");
                 return;
             }
 
@@ -339,46 +358,46 @@ struct DeveloperConsole::Impl
             if (tokens[1] == "survivor")
             {
                 context.gameplay->TeleportSurvivor(position);
-                AddLog("Teleported survivor.");
+                LogSuccess("Teleported survivor to (" + tokens[2] + ", " + tokens[3] + ", " + tokens[4] + ")");
             }
             else if (tokens[1] == "killer")
             {
                 context.gameplay->TeleportKiller(position);
-                AddLog("Teleported killer.");
+                LogSuccess("Teleported killer to (" + tokens[2] + ", " + tokens[3] + ", " + tokens[4] + ")");
             }
             else
             {
-                AddLog("Unknown teleport target.");
+                LogError("Unknown teleport target");
             }
         });
 
         RegisterCommand("give_speed survivor 6.0", "Set survivor sprint speed", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 3 || tokens[1] != "survivor")
             {
-                AddLog("Usage: give_speed survivor 6.0");
+                LogError("Usage: give_speed survivor 6.0");
                 return;
             }
 
             context.gameplay->SetSurvivorSprintSpeed(ParseFloatOr(6.0F, tokens[2]));
-            AddLog("Updated survivor sprint speed.");
+            LogSuccess("Survivor sprint speed set to " + tokens[2]);
         });
 
         RegisterCommand("set_speed survivor|killer <percent>", "Set role movement speed percent (100 = default)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 3)
             {
-                AddLog("Usage: set_speed survivor|killer <percent>");
+                LogError("Usage: set_speed survivor|killer <percent>");
                 return;
             }
             if (tokens[1] != "survivor" && tokens[1] != "killer")
             {
-                AddLog("Role must be survivor or killer.");
+                LogError("Role must be survivor or killer");
                 return;
             }
 
             float value = ParseFloatOr(100.0F, tokens[2]);
             if (value <= 0.0F)
             {
-                AddLog("Percent must be > 0.");
+                LogError("Percent must be > 0");
                 return;
             }
 
@@ -387,58 +406,59 @@ struct DeveloperConsole::Impl
                 value *= 0.01F;
             }
             context.gameplay->SetRoleSpeedPercent(tokens[1], value);
-            AddLog("Updated " + tokens[1] + " speed multiplier to " + std::to_string(value));
+            LogSuccess(tokens[1] + " speed multiplier set to " + std::to_string(value));
         });
 
         RegisterCommand("set_size survivor|killer <radius> <height>", "Set role capsule size", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 4)
             {
-                AddLog("Usage: set_size survivor|killer <radius> <height>");
+                LogError("Usage: set_size survivor|killer <radius> <height>");
                 return;
             }
             if (tokens[1] != "survivor" && tokens[1] != "killer")
             {
-                AddLog("Role must be survivor or killer.");
+                LogError("Role must be survivor or killer");
                 return;
             }
 
             const float radius = ParseFloatOr(0.35F, tokens[2]);
             const float height = ParseFloatOr(1.8F, tokens[3]);
             context.gameplay->SetRoleCapsuleSize(tokens[1], radius, height);
-            AddLog("Updated " + tokens[1] + " capsule size.");
+            LogSuccess(tokens[1] + " capsule size: r=" + tokens[2] + " h=" + tokens[3]);
         });
 
         RegisterCommand("heal survivor", "Heal survivor (Injured -> Healthy)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2 || tokens[1] != "survivor")
             {
-                AddLog("Usage: heal survivor");
+                LogError("Usage: heal survivor");
                 return;
             }
 
             context.gameplay->HealSurvivor();
-            AddLog("Heal requested for survivor.");
+            LogSuccess("Survivor healed");
         });
 
         RegisterCommand("survivor_state healthy|injured|downed|carried|hooked|dead", "Force survivor FSM state (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: survivor_state healthy|injured|downed|carried|hooked|dead");
+                LogError("Usage: survivor_state healthy|injured|downed|carried|hooked|dead");
                 return;
             }
 
             context.gameplay->SetSurvivorStateDebug(tokens[1]);
-            AddLog("Survivor state debug command sent.");
+            LogSuccess("Survivor state set to: " + tokens[1]);
         });
 
         RegisterCommand("set_generators_done 0..5", "Set generator completion count", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: set_generators_done <count>");
+                LogError("Usage: set_generators_done <count>");
                 return;
             }
 
-            context.gameplay->SetGeneratorsCompleted(ParseIntOr(0, tokens[1]));
-            AddLog("Generator progress updated.");
+            const int count = ParseIntOr(0, tokens[1]);
+            context.gameplay->SetGeneratorsCompleted(count);
+            LogSuccess("Generators completed: " + tokens[1]);
         });
 
         RegisterCommand("hook_survivor", "Hook carried survivor on nearest hook", [this](const std::vector<std::string>&, const ConsoleContext& context) {
@@ -448,67 +468,67 @@ struct DeveloperConsole::Impl
             }
 
             context.gameplay->HookCarriedSurvivorDebug();
-            AddLog("Hook command requested.");
+            LogSuccess("Survivor hook requested");
         });
 
         RegisterCommand("skillcheck start", "Start skillcheck widget (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2 || tokens[1] != "start")
             {
-                AddLog("Usage: skillcheck start");
+                LogError("Usage: skillcheck start");
                 return;
             }
 
             context.gameplay->StartSkillCheckDebug();
-            AddLog("Skillcheck start requested.");
+            LogSuccess("Skillcheck started");
         });
 
         RegisterCommand("toggle_collision on|off", "Enable/disable collision", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: toggle_collision on|off");
+                LogError("Usage: toggle_collision on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
             context.gameplay->ToggleCollision(enabled);
-            AddLog(std::string("Collision ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Collision ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("toggle_debug_draw on|off", "Enable/disable collider and trigger debug draw", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: toggle_debug_draw on|off");
+                LogError("Usage: toggle_debug_draw on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
             context.gameplay->ToggleDebugDraw(enabled);
-            AddLog(std::string("Debug draw ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Debug draw ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("physics_debug on|off", "Toggle physics debug readout", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: physics_debug on|off");
+                LogError("Usage: physics_debug on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
@@ -517,20 +537,20 @@ struct DeveloperConsole::Impl
             {
                 context.setPhysicsDebug(enabled);
             }
-            AddLog(std::string("Physics debug ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Physics debug ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("noclip on|off", "Toggle noclip for players", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: noclip on|off");
+                LogError("Usage: noclip on|off");
                 return;
             }
 
             bool enabled = false;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
@@ -539,13 +559,13 @@ struct DeveloperConsole::Impl
             {
                 context.setNoClip(enabled);
             }
-            AddLog(std::string("Noclip ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Noclip ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("load map test|main|main_map|collision_test", "Load gameplay scene", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 3 || tokens[1] != "map")
             {
-                AddLog("Usage: load map test|main|main_map|collision_test");
+                LogError("Usage: load map test|main|main_map|collision_test");
                 return;
             }
 
@@ -555,38 +575,38 @@ struct DeveloperConsole::Impl
                 mapName = "main";
             }
             context.gameplay->LoadMap(mapName);
-            AddLog("Map loaded: " + mapName);
+            LogSuccess("Map loaded: " + mapName);
         });
 
         RegisterCommand("host [port]", "Host listen server (default 7777)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.hostSession == nullptr || tokens.size() > 2)
             {
-                AddLog("Usage: host [port]");
+                LogError("Usage: host [port]");
                 return;
             }
 
             const int port = std::clamp(ParseIntOr(7777, tokens.size() == 2 ? tokens[1] : "7777"), 1, 65535);
             context.hostSession(port);
-            AddLog("Host requested on port " + std::to_string(port));
+            LogSuccess("Hosting on port " + std::to_string(port));
         });
 
         RegisterCommand("join <ip> <port>", "Join listen server", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.joinSession == nullptr || tokens.size() != 3)
             {
-                AddLog("Usage: join <ip> <port>");
+                LogError("Usage: join <ip> <port>");
                 return;
             }
 
             const int port = std::clamp(ParseIntOr(7777, tokens[2]), 1, 65535);
             context.joinSession(tokens[1], port);
-            AddLog("Join requested.");
+            LogSuccess("Connecting to " + tokens[1] + ":" + tokens[2]);
         });
 
         RegisterCommand("disconnect", "Disconnect and return to menu", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.disconnectSession)
             {
                 context.disconnectSession();
-                AddLog("Disconnect requested.");
+                LogSuccess("Disconnected");
             }
         });
 
@@ -608,7 +628,7 @@ struct DeveloperConsole::Impl
             if (context.lanScan)
             {
                 context.lanScan();
-                AddLog("LAN scan requested.");
+                LogSuccess("LAN scan started");
             }
         });
 
@@ -622,32 +642,32 @@ struct DeveloperConsole::Impl
         RegisterCommand("lan_debug on|off", "Toggle LAN discovery debug", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.lanDebug == nullptr)
             {
-                AddLog("Usage: lan_debug on|off");
+                LogError("Usage: lan_debug on|off");
                 return;
             }
 
             bool enabled = false;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
             context.lanDebug(enabled);
-            AddLog(std::string("LAN debug ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("LAN debug ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("tr_vis on|off", "Toggle terror radius visualization", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2)
             {
-                AddLog("Usage: tr_vis on|off");
+                LogError("Usage: tr_vis on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
@@ -659,13 +679,13 @@ struct DeveloperConsole::Impl
             {
                 context.setTerrorRadiusVisible(enabled);
             }
-            AddLog(std::string("Terror radius ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Terror radius visual ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("tr_set <meters>", "Set terror radius meters", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2)
             {
-                AddLog("Usage: tr_set <meters>");
+                LogError("Usage: tr_set <meters>");
                 return;
             }
 
@@ -678,7 +698,7 @@ struct DeveloperConsole::Impl
             {
                 context.setTerrorRadiusMeters(meters);
             }
-            AddLog("Terror radius set to " + std::to_string(meters));
+            LogSuccess("Terror radius set to " + std::to_string(meters) + "m");
         });
 
         RegisterCommand("regen_loops [seed]", "Regenerate loop layout on main map (optional deterministic seed)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -691,55 +711,55 @@ struct DeveloperConsole::Impl
             {
                 const int parsedSeed = ParseIntOr(1337, tokens[1]);
                 context.gameplay->RegenerateLoops(static_cast<unsigned int>(std::max(1, parsedSeed)));
-                AddLog("Regenerated loops with explicit seed.");
+                LogSuccess("Regenerated loops with seed " + tokens[1]);
             }
             else
             {
                 context.gameplay->RegenerateLoops();
-                AddLog("Regenerated loops with incremented seed.");
+                LogSuccess("Regenerated loops with new seed");
             }
         });
 
         RegisterCommand("dbd_spawns on|off", "Enable/disable DBD-inspired spawn system", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: dbd_spawns on|off");
+                LogError("Usage: dbd_spawns on|off");
                 return;
             }
 
             bool enabled = false;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
             context.gameplay->SetDbdSpawnsEnabled(enabled);
-            AddLog(std::string("DBD spawns ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("DBD spawns ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("set_chase on|off", "Force chase state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: set_chase on|off");
+                LogError("Usage: set_chase on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
             context.gameplay->SetForcedChase(enabled);
-            AddLog(std::string("Forced chase ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("Forced chase ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: cam_mode survivor|killer|role");
+                LogError("Usage: cam_mode survivor|killer|role");
                 return;
             }
 
@@ -748,13 +768,13 @@ struct DeveloperConsole::Impl
             {
                 context.setCameraMode(tokens[1]);
             }
-            AddLog("Camera mode updated.");
+            LogSuccess("Camera mode: " + tokens[1]);
         });
 
         RegisterCommand("control_role survivor|killer", "Switch controlled role", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: control_role survivor|killer");
+                LogError("Usage: control_role survivor|killer");
                 return;
             }
 
@@ -770,13 +790,13 @@ struct DeveloperConsole::Impl
                     context.setControlledRole(tokens[1]);
                 }
             }
-            AddLog("Controlled role changed.");
+            LogSuccess("Controlled role: " + tokens[1]);
         });
 
         RegisterCommand("set_role survivor|killer", "Alias for control_role", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                AddLog("Usage: set_role survivor|killer");
+                LogError("Usage: set_role survivor|killer");
                 return;
             }
 
@@ -792,7 +812,7 @@ struct DeveloperConsole::Impl
                     context.setControlledRole(tokens[1]);
                 }
             }
-            AddLog("Role set.");
+            LogSuccess("Role set: " + tokens[1]);
         });
 
         RegisterCommand("player_dump", "Print player->pawn ownership mapping", [this](const std::vector<std::string>&, const ConsoleContext& context) {
@@ -805,14 +825,14 @@ struct DeveloperConsole::Impl
         RegisterCommand("render_mode wireframe|filled", "Set render mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2)
             {
-                AddLog("Usage: render_mode wireframe|filled");
+                LogError("Usage: render_mode wireframe|filled");
                 return;
             }
 
             if (context.applyRenderMode)
             {
                 context.applyRenderMode(tokens[1]);
-                AddLog("Render mode set to " + tokens[1]);
+                LogSuccess("Render mode: " + tokens[1]);
             }
         });
 
@@ -821,20 +841,20 @@ struct DeveloperConsole::Impl
             {
                 context.gameplay->RequestQuit();
             }
-            AddLog("Quit requested.");
+            LogWarning("Quit requested");
         });
 
         RegisterCommand("set_vsync on|off", "Toggle VSync", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2)
             {
-                AddLog("Usage: set_vsync on|off");
+                LogError("Usage: set_vsync on|off");
                 return;
             }
 
             bool enabled = true;
             if (!ParseBoolToken(tokens[1], enabled))
             {
-                AddLog("Expected on|off.");
+                LogError("Expected on|off");
                 return;
             }
 
@@ -846,13 +866,13 @@ struct DeveloperConsole::Impl
             {
                 context.applyVsync(enabled);
             }
-            AddLog(std::string("VSync ") + (enabled ? "enabled." : "disabled."));
+            LogSuccess(std::string("VSync ") + (enabled ? "enabled" : "disabled"));
         });
 
         RegisterCommand("set_fps 120", "Set FPS limit", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2)
             {
-                AddLog("Usage: set_fps <limit>");
+                LogError("Usage: set_fps <limit>");
                 return;
             }
 
@@ -865,26 +885,26 @@ struct DeveloperConsole::Impl
             {
                 context.applyFpsLimit(fps);
             }
-            AddLog("FPS limit set to " + std::to_string(fps));
+            LogSuccess("FPS limit: " + std::to_string(fps));
         });
 
         RegisterCommand("set_tick 30|60", "Set fixed simulation tick rate", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.setTickRate == nullptr)
             {
-                AddLog("Usage: set_tick 30|60");
+                LogError("Usage: set_tick 30|60");
                 return;
             }
 
             const int requested = ParseIntOr(60, tokens[1]);
             const int hz = requested <= 30 ? 30 : 60;
             context.setTickRate(hz);
-            AddLog("Fixed tick set to " + std::to_string(hz) + " Hz.");
+            LogSuccess("Fixed tick: " + std::to_string(hz) + " Hz");
         });
 
         RegisterCommand("set_resolution 1600 900", "Set window resolution", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 3)
             {
-                AddLog("Usage: set_resolution <width> <height>");
+                LogError("Usage: set_resolution <width> <height>");
                 return;
             }
 
@@ -894,21 +914,21 @@ struct DeveloperConsole::Impl
             {
                 context.applyResolution(width, height);
             }
-            AddLog("Resolution set.");
+            LogSuccess("Resolution: " + tokens[1] + "x" + tokens[2]);
         });
 
         RegisterCommand("toggle_fullscreen", "Toggle fullscreen", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.toggleFullscreen)
             {
                 context.toggleFullscreen();
-                AddLog("Toggled fullscreen.");
+                LogSuccess("Fullscreen toggled");
             }
         });
     }
 
     void ExecuteCommand(const std::string& commandLine, const ConsoleContext& context)
     {
-        AddLog("# " + commandLine);
+        LogCommand("» " + commandLine);
 
         std::vector<std::string> tokens = Tokenize(commandLine);
         if (tokens.empty())
@@ -923,7 +943,7 @@ struct DeveloperConsole::Impl
         const auto it = commandRegistry.find(tokens[0]);
         if (it == commandRegistry.end())
         {
-            AddLog("Unknown command. Type `help`.");
+            LogError("Unknown command. Type `help` for a list of available commands");
             return;
         }
 
@@ -965,10 +985,10 @@ struct DeveloperConsole::Impl
                 }
                 else if (candidates.size() > 1)
                 {
-                    AddLog("Possible matches:");
+                    AddLog("Possible matches:", ConsoleColors::Info);
                     for (const std::string& candidate : candidates)
                     {
-                        AddLog("  " + candidate);
+                        AddLog("  • " + candidate, ConsoleColors::Value);
                     }
                 }
                 break;
@@ -1020,7 +1040,7 @@ bool DeveloperConsole::Initialize(engine::platform::Window& window)
 #if BUILD_WITH_IMGUI
     m_impl = new Impl();
     m_impl->RegisterDefaultCommands();
-    m_impl->AddLog("Developer console ready. Press ~ to toggle.");
+    m_impl->AddLog("Developer console ready. Press ~ to toggle.", ConsoleColors::Success);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1336,7 +1356,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
     {
         if (!m_impl->firstOpenAnnouncementDone)
         {
-            m_impl->AddLog("Type `help` to list commands.");
+            m_impl->AddLog("Type `help` to list commands.", ConsoleColors::Info);
             m_impl->PrintHelp();
             m_impl->firstOpenAnnouncementDone = true;
         }
@@ -1344,18 +1364,36 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         ImGui::SetNextWindowSize(ImVec2(840.0F, 390.0F), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Developer Console", &m_impl->open))
         {
-            if (ImGui::Button("Clear"))
+            const ImVec2 buttonSize(60.0F, 0.0F);
+            if (ImGui::Button("Clear", buttonSize))
             {
                 m_impl->items.clear();
             }
             ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
             ImGui::Text("Examples: host 7777 | join 127.0.0.1 7777 | render_mode filled");
+            ImGui::PopStyleColor();
 
             ImGui::Separator();
+
+            // Console output with colors
             ImGui::BeginChild("ScrollingRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false, ImGuiWindowFlags_HorizontalScrollbar);
-            for (const std::string& item : m_impl->items)
+            for (const auto& entry : m_impl->items)
             {
-                ImGui::TextUnformatted(item.c_str());
+                ImU32 color = IM_COL32(255, 255, 255, 255);
+                if (entry.color.r >= 0.0F && entry.color.g >= 0.0F && entry.color.b >= 0.0F && entry.color.a >= 0.0F)
+                {
+                    color = IM_COL32(
+                        static_cast<int>(entry.color.r * 255.0F),
+                        static_cast<int>(entry.color.g * 255.0F),
+                        static_cast<int>(entry.color.b * 255.0F),
+                        static_cast<int>(entry.color.a * 255.0F)
+                    );
+                }
+
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(entry.color.r, entry.color.g, entry.color.b, entry.color.a));
+                ImGui::TextUnformatted(entry.text.c_str());
+                ImGui::PopStyleColor();
             }
             if (m_impl->scrollToBottom)
             {
@@ -1387,7 +1425,9 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             const std::string currentInput = m_impl->inputBuffer.data();
             if (currentInput.empty())
             {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6F, 0.6F, 0.7F, 1.0F));
                 ImGui::TextUnformatted("Hint: type a command, press TAB to autocomplete, ENTER to execute.");
+                ImGui::PopStyleColor();
             }
             else
             {
@@ -1395,12 +1435,34 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                 if (!hints.empty())
                 {
                     ImGui::Separator();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5F, 0.7F, 0.9F, 1.0F));
                     ImGui::TextUnformatted("Suggestions:");
+                    ImGui::PopStyleColor();
                     const int maxHints = std::min<int>(8, static_cast<int>(hints.size()));
                     for (int i = 0; i < maxHints; ++i)
                     {
                         const auto& hint = hints[static_cast<std::size_t>(i)];
-                        ImGui::Text("  [%s] %s - %s", hint.category.c_str(), hint.usage.c_str(), hint.description.c_str());
+                        ImVec4 catColor = ImVec4(0.55F, 0.85F, 0.95F, 1.0F);
+                        ImVec4 usageColor = ImVec4(0.4F, 0.8F, 1.0F, 1.0F);
+                        ImVec4 descColor = ImVec4(0.75F, 0.75F, 0.8F, 1.0F);
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, catColor);
+                        ImGui::Text("[%s]", hint.category.c_str());
+                        ImGui::SameLine(0.0F, 0.0F);
+                        ImGui::PopStyleColor();
+
+                        ImGui::SameLine(0.0F, 4.0F);
+                        ImGui::PushStyleColor(ImGuiCol_Text, usageColor);
+                        ImGui::Text(" %s", hint.usage.c_str());
+                        ImGui::SameLine(0.0F, 0.0F);
+                        ImGui::PopStyleColor();
+
+                        ImGui::SameLine(0.0F, 6.0F);
+                        ImGui::PushStyleColor(ImGuiCol_Text, descColor);
+                        ImGui::TextUnformatted(" — ");
+                        ImGui::SameLine(0.0F, 0.0F);
+                        ImGui::TextUnformatted(hint.description.c_str());
+                        ImGui::PopStyleColor();
                     }
                 }
             }
