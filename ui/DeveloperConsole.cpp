@@ -1402,6 +1402,11 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             }
             ImGui::EndChild();
 
+            if (m_impl->reclaimFocus)
+            {
+                ImGui::SetKeyboardFocusHere(0);
+            }
+
             ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue |
                                              ImGuiInputTextFlags_CallbackCompletion |
                                              ImGuiInputTextFlags_CallbackHistory;
@@ -1466,12 +1471,6 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                     }
                 }
             }
-
-            if (m_impl->reclaimFocus)
-            {
-                ImGui::SetKeyboardFocusHere(-1);
-                m_impl->reclaimFocus = false;
-            }
         }
         ImGui::End();
     }
@@ -1491,6 +1490,10 @@ void DeveloperConsole::Toggle()
     if (m_impl != nullptr)
     {
         m_impl->open = !m_impl->open;
+        if (m_impl->open)
+        {
+            m_impl->reclaimFocus = true;
+        }
     }
 #endif
 }
