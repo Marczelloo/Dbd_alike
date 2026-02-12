@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
@@ -29,6 +30,568 @@ namespace ui
 #if BUILD_WITH_IMGUI
 namespace
 {
+// Colors for graphical perk HUD
+namespace PerkHudColors
+{
+    constexpr ImU32 Background = IM_COL32(8, 8, 10, 200);
+    constexpr ImU32 SlotReady = IM_COL32(30, 35, 45, 240);
+    constexpr ImU32 SlotCooldown = IM_COL32(18, 18, 22, 200);
+    constexpr ImU32 SlotActive = IM_COL32(80, 55, 25, 250);
+    constexpr ImU32 CooldownRing = IM_COL32(170, 175, 185, 255);
+    constexpr ImU32 CooldownBg = IM_COL32(30, 30, 35, 150);
+    constexpr ImU32 BorderReady = IM_COL32(65, 75, 90, 255);
+    constexpr ImU32 BorderCooldown = IM_COL32(35, 35, 40, 180);
+    constexpr ImU32 ActiveGlow = IM_COL32(255, 200, 80, 150);
+}
+
+// Perk icon pattern types
+enum class PerkPattern
+{
+    Lightning,      // Sprint, speed
+    Heart,          // Healing, self-care
+    Shield,         // Protection, iron will
+    ArrowUp,        // Dead hard, escape
+    Fist,           // Iron grasp, strength
+    Eye,            // Whispers, detection
+    Star,           // Bamboozle, tricks
+    Hammer,         // Brutal, breaking
+    Default
+};
+
+// Determine perk pattern from id
+PerkPattern GetPerkPattern(const std::string& perkId)
+{
+    if (perkId.find("sprint") != std::string::npos || perkId.find("adrenaline") != std::string::npos) return PerkPattern::Lightning;
+    if (perkId.find("heal") != std::string::npos || perkId.find("self_care") != std::string::npos || perkId.find("sloppy") != std::string::npos) return PerkPattern::Heart;
+    if (perkId.find("iron_will") != std::string::npos || perkId.find("resilience") != std::string::npos) return PerkPattern::Shield;
+    if (perkId.find("dead_hard") != std::string::npos) return PerkPattern::ArrowUp;
+    if (perkId.find("iron_grasp") != std::string::npos || perkId.find("enduring") != std::string::npos) return PerkPattern::Fist;
+    if (perkId.find("whispers") != std::string::npos || perkId.find("terrifying") != std::string::npos) return PerkPattern::Eye;
+    if (perkId.find("bamboozle") != std::string::npos) return PerkPattern::Star;
+    if (perkId.find("brutal") != std::string::npos) return PerkPattern::Hammer;
+    return PerkPattern::Default;
+}
+
+// Get colors for perk based on id
+void GetPerkColors(const std::string& perkId, ImU32& primary, ImU32& secondary, ImU32& accent)
+{
+    // Sprint/speed - blue/cyan
+    if (perkId.find("sprint") != std::string::npos || perkId.find("adrenaline") != std::string::npos)
+    {
+        primary = IM_COL32(40, 130, 200, 255);
+        secondary = IM_COL32(80, 180, 240, 255);
+        accent = IM_COL32(150, 220, 255, 255);
+        return;
+    }
+    // Healing - red/pink
+    if (perkId.find("heal") != std::string::npos || perkId.find("self_care") != std::string::npos || perkId.find("sloppy") != std::string::npos)
+    {
+        primary = IM_COL32(180, 50, 60, 255);
+        secondary = IM_COL32(220, 90, 100, 255);
+        accent = IM_COL32(255, 150, 160, 255);
+        return;
+    }
+    // Iron will - gray/steel
+    if (perkId.find("iron_will") != std::string::npos)
+    {
+        primary = IM_COL32(90, 100, 120, 255);
+        secondary = IM_COL32(130, 140, 160, 255);
+        accent = IM_COL32(180, 190, 210, 255);
+        return;
+    }
+    // Dead hard - green
+    if (perkId.find("dead_hard") != std::string::npos)
+    {
+        primary = IM_COL32(40, 160, 80, 255);
+        secondary = IM_COL32(70, 200, 110, 255);
+        accent = IM_COL32(140, 240, 170, 255);
+        return;
+    }
+    // Resilience - teal
+    if (perkId.find("resilience") != std::string::npos)
+    {
+        primary = IM_COL32(50, 140, 130, 255);
+        secondary = IM_COL32(80, 180, 170, 255);
+        accent = IM_COL32(140, 220, 210, 255);
+        return;
+    }
+    // Killer perks - purple/red
+    if (perkId.find("iron_grasp") != std::string::npos || perkId.find("enduring") != std::string::npos)
+    {
+        primary = IM_COL32(150, 60, 60, 255);
+        secondary = IM_COL32(190, 90, 90, 255);
+        accent = IM_COL32(240, 140, 140, 255);
+        return;
+    }
+    if (perkId.find("whispers") != std::string::npos || perkId.find("terrifying") != std::string::npos)
+    {
+        primary = IM_COL32(110, 50, 150, 255);
+        secondary = IM_COL32(150, 80, 200, 255);
+        accent = IM_COL32(200, 140, 250, 255);
+        return;
+    }
+    if (perkId.find("bamboozle") != std::string::npos)
+    {
+        primary = IM_COL32(180, 130, 40, 255);
+        secondary = IM_COL32(220, 170, 70, 255);
+        accent = IM_COL32(255, 210, 120, 255);
+        return;
+    }
+    if (perkId.find("brutal") != std::string::npos)
+    {
+        primary = IM_COL32(130, 50, 50, 255);
+        secondary = IM_COL32(180, 70, 70, 255);
+        accent = IM_COL32(230, 120, 120, 255);
+        return;
+    }
+    // Default
+    primary = IM_COL32(70, 100, 150, 255);
+    secondary = IM_COL32(100, 140, 190, 255);
+    accent = IM_COL32(160, 200, 240, 255);
+}
+
+// Draw procedural perk icon pattern
+void DrawPerkPattern(ImDrawList* drawList, const ImVec2& center, float size, PerkPattern pattern, ImU32 primary, ImU32 secondary, ImU32 accent, float animPhase, bool isActive)
+{
+    const float halfSize = size * 0.5F;
+    const float quarterSize = size * 0.25F;
+
+    switch (pattern)
+    {
+        case PerkPattern::Lightning:
+        {
+            // Lightning bolt icon
+            const float pulse = isActive ? 0.5F + 0.5F * std::sin(animPhase * 8.0F) : 0.0F;
+            const ImU32 glowColor = isActive ? 
+                IM_COL32(150 + static_cast<int>(105 * pulse), static_cast<int>(220 * (1 - pulse * 0.3F)), 255, static_cast<int>(80 + 100 * pulse)) :
+                primary;
+            
+            // Main bolt
+            ImVec2 bolt[] = {
+                ImVec2(center.x + quarterSize * 0.3F, center.y - halfSize * 0.8F),
+                ImVec2(center.x - quarterSize * 0.5F, center.y),
+                ImVec2(center.x + quarterSize * 0.1F, center.y),
+                ImVec2(center.x - quarterSize * 0.3F, center.y + halfSize * 0.8F),
+            };
+            drawList->AddPolyline(bolt, 4, glowColor, false, 3.0F);
+            drawList->AddPolyline(bolt, 4, secondary, false, 2.0F);
+            break;
+        }
+        case PerkPattern::Heart:
+        {
+            // Heart shape
+            const float beat = isActive ? 1.0F + 0.15F * std::sin(animPhase * 10.0F) : 1.0F;
+            const float r = quarterSize * 0.8F * beat;
+            
+            // Two circles for top of heart
+            drawList->AddCircleFilled(ImVec2(center.x - r * 0.55F, center.y - r * 0.3F), r * 0.7F, primary, 16);
+            drawList->AddCircleFilled(ImVec2(center.x + r * 0.55F, center.y - r * 0.3F), r * 0.7F, primary, 16);
+            // Bottom triangle
+            ImVec2 heartBot[] = {
+                ImVec2(center.x - r * 1.1F, center.y - r * 0.1F),
+                ImVec2(center.x + r * 1.1F, center.y - r * 0.1F),
+                ImVec2(center.x, center.y + r * 1.0F)
+            };
+            drawList->AddConvexPolyFilled(heartBot, 3, primary);
+            
+            if (isActive)
+            {
+                // Glow effect
+                const ImU32 glow = IM_COL32(255, 150, 160, 80);
+                drawList->AddCircleFilled(center, r * 1.5F, glow, 24);
+            }
+            break;
+        }
+        case PerkPattern::Shield:
+        {
+            // Shield shape
+            ImVec2 shield[] = {
+                ImVec2(center.x, center.y - halfSize * 0.7F),
+                ImVec2(center.x + halfSize * 0.6F, center.y - halfSize * 0.3F),
+                ImVec2(center.x + halfSize * 0.5F, center.y + halfSize * 0.4F),
+                ImVec2(center.x, center.y + halfSize * 0.7F),
+                ImVec2(center.x - halfSize * 0.5F, center.y + halfSize * 0.4F),
+                ImVec2(center.x - halfSize * 0.6F, center.y - halfSize * 0.3F),
+            };
+            drawList->AddConvexPolyFilled(shield, 6, primary);
+            drawList->AddPolyline(shield, 6, secondary, true, 1.5F);
+            
+            // Inner cross
+            drawList->AddLine(ImVec2(center.x, center.y - quarterSize * 0.5F), ImVec2(center.x, center.y + quarterSize * 0.6F), accent, 2.0F);
+            drawList->AddLine(ImVec2(center.x - quarterSize * 0.5F, center.y), ImVec2(center.x + quarterSize * 0.5F, center.y), accent, 2.0F);
+            break;
+        }
+        case PerkPattern::ArrowUp:
+        {
+            // Arrow pointing upward (escape/dodge)
+            const float bounce = isActive ? -quarterSize * 0.3F * std::sin(animPhase * 12.0F) : 0.0F;
+            const ImVec2 tip(center.x, center.y - halfSize * 0.7F + bounce);
+            
+            // Arrow head
+            ImVec2 arrowHead[] = {
+                tip,
+                ImVec2(center.x - halfSize * 0.5F, center.y - quarterSize * 0.3F + bounce),
+                ImVec2(center.x - quarterSize * 0.2F, center.y - quarterSize * 0.3F + bounce),
+                ImVec2(center.x - quarterSize * 0.2F, center.y + halfSize * 0.5F),
+                ImVec2(center.x + quarterSize * 0.2F, center.y + halfSize * 0.5F),
+                ImVec2(center.x + quarterSize * 0.2F, center.y - quarterSize * 0.3F + bounce),
+                ImVec2(center.x + halfSize * 0.5F, center.y - quarterSize * 0.3F + bounce),
+            };
+            drawList->AddConvexPolyFilled(arrowHead, 7, primary);
+            drawList->AddPolyline(arrowHead, 7, secondary, true, 1.5F);
+            
+            if (isActive)
+            {
+                // Trail lines
+                drawList->AddLine(ImVec2(center.x - quarterSize * 0.6F, center.y + quarterSize), 
+                                  ImVec2(center.x - quarterSize * 0.3F, tip.y + quarterSize), IM_COL32(100, 200, 130, 150), 2.0F);
+                drawList->AddLine(ImVec2(center.x + quarterSize * 0.6F, center.y + quarterSize), 
+                                  ImVec2(center.x + quarterSize * 0.3F, tip.y + quarterSize), IM_COL32(100, 200, 130, 150), 2.0F);
+            }
+            break;
+        }
+        case PerkPattern::Fist:
+        {
+            // Fist/grip
+            if (isActive)
+            {
+                const float shake = std::sin(animPhase * 20.0F) * 2.0F;
+                drawList->AddCircleFilled(ImVec2(center.x + shake, center.y), quarterSize * 1.1F, secondary, 16);
+            }
+            
+            // Fingers (4 rounded rectangles)
+            for (int i = 0; i < 4; ++i)
+            {
+                const float angle = -0.3F + static_cast<float>(i) * 0.2F;
+                const float fingerX = center.x + std::sin(angle) * quarterSize * 0.6F;
+                const float fingerY = center.y - quarterSize * 0.3F - static_cast<float>(i % 2) * quarterSize * 0.2F;
+                drawList->AddRectFilled(ImVec2(fingerX - quarterSize * 0.2F, fingerY - quarterSize * 0.4F),
+                                        ImVec2(fingerX + quarterSize * 0.2F, fingerY + quarterSize * 0.4F), primary, 3.0F);
+            }
+            // Palm
+            drawList->AddRectFilled(ImVec2(center.x - quarterSize * 0.5F, center.y - quarterSize * 0.1F),
+                                    ImVec2(center.x + quarterSize * 0.5F, center.y + halfSize * 0.5F), secondary, 4.0F);
+            break;
+        }
+        case PerkPattern::Eye:
+        {
+            // All-seeing eye
+            const float blink = isActive ? 0.8F + 0.2F * std::sin(animPhase * 3.0F) : 0.85F;
+            
+            // Eye shape (scaled circle vertically)
+            const float eyeRadiusX = halfSize * 0.55F;
+            const float eyeRadiusY = quarterSize * blink;
+            drawList->PathClear();
+            for (int i = 0; i < 24; ++i)
+            {
+                const float angle = static_cast<float>(i) / 24.0F * 2.0F * 3.14159265F;
+                drawList->PathLineTo(ImVec2(center.x + std::cos(angle) * eyeRadiusX, center.y + std::sin(angle) * eyeRadiusY));
+            }
+            drawList->PathFillConvex(primary);
+            // Pupil
+            drawList->AddCircleFilled(center, quarterSize * 0.35F, IM_COL32(20, 20, 30, 255), 16);
+            // Highlight
+            drawList->AddCircleFilled(ImVec2(center.x - quarterSize * 0.15F, center.y - quarterSize * 0.15F), quarterSize * 0.12F, accent, 8);
+            
+            if (isActive)
+            {
+                // Rays around eye
+                for (int i = 0; i < 8; ++i)
+                {
+                    const float angle = static_cast<float>(i) * 3.14159F / 4.0F + animPhase * 0.5F;
+                    const float innerR = halfSize * 0.7F;
+                    const float outerR = halfSize * 0.9F;
+                    drawList->AddLine(
+                        ImVec2(center.x + std::cos(angle) * innerR, center.y + std::sin(angle) * innerR),
+                        ImVec2(center.x + std::cos(angle) * outerR, center.y + std::sin(angle) * outerR),
+                        IM_COL32(200, 140, 250, 150), 2.0F
+                    );
+                }
+            }
+            break;
+        }
+        case PerkPattern::Star:
+        {
+            // 5-pointed star
+            const float spin = isActive ? animPhase * 2.0F : 0.0F;
+            const float scale = isActive ? 1.0F + 0.1F * std::sin(animPhase * 6.0F) : 1.0F;
+            
+            ImVec2 starPts[10];
+            for (int i = 0; i < 10; ++i)
+            {
+                const float angle = spin + static_cast<float>(i) * 3.14159F * 2.0F / 10.0F - 3.14159F * 0.5F;
+                const float r = (i % 2 == 0) ? halfSize * 0.7F * scale : quarterSize * 0.4F * scale;
+                starPts[i] = ImVec2(center.x + std::cos(angle) * r, center.y + std::sin(angle) * r);
+            }
+            drawList->AddConvexPolyFilled(starPts, 10, primary);
+            drawList->AddPolyline(starPts, 10, secondary, true, 1.5F);
+            
+            if (isActive)
+            {
+                // Sparkles
+                for (int i = 0; i < 4; ++i)
+                {
+                    const float sparkleAngle = spin * 0.5F + static_cast<float>(i) * 3.14159F * 0.5F;
+                    const float sparkleDist = halfSize * 0.9F;
+                    const ImVec2 sp(center.x + std::cos(sparkleAngle) * sparkleDist, 
+                                    center.y + std::sin(sparkleAngle) * sparkleDist);
+                    drawList->AddCircleFilled(sp, 3.0F, accent, 6);
+                }
+            }
+            break;
+        }
+        case PerkPattern::Hammer:
+        {
+            // Hammer/breaking icon
+            // Handle
+            drawList->AddRectFilled(ImVec2(center.x - quarterSize * 0.15F, center.y - quarterSize * 0.5F),
+                                    ImVec2(center.x + quarterSize * 0.15F, center.y + halfSize * 0.6F), secondary, 2.0F);
+            // Head
+            drawList->AddRectFilled(ImVec2(center.x - halfSize * 0.5F, center.y - halfSize * 0.65F),
+                                    ImVec2(center.x + halfSize * 0.5F, center.y - quarterSize * 0.4F), primary, 3.0F);
+            
+            if (isActive)
+            {
+                // Impact lines
+                const float impactPulse = std::sin(animPhase * 15.0F);
+                for (int i = 0; i < 5; ++i)
+                {
+                    const float angle = -0.6F + static_cast<float>(i) * 0.3F;
+                    const float len = quarterSize * (0.8F + 0.3F * impactPulse);
+                    drawList->AddLine(
+                        ImVec2(center.x, center.y - halfSize * 0.65F),
+                        ImVec2(center.x + std::sin(angle) * len, center.y - halfSize * 0.65F - std::cos(angle) * len),
+                        IM_COL32(255, 200, 100, 200), 2.0F
+                    );
+                }
+            }
+            break;
+        }
+        default:
+        {
+            // Default hexagon with inner design
+            ImVec2 hexPts[6];
+            for (int i = 0; i < 6; ++i)
+            {
+                const float angle = static_cast<float>(i) * 3.14159F / 3.0F - 3.14159F / 6.0F;
+                hexPts[i] = ImVec2(center.x + std::cos(angle) * halfSize * 0.65F, 
+                                   center.y + std::sin(angle) * halfSize * 0.65F);
+            }
+            drawList->AddConvexPolyFilled(hexPts, 6, primary);
+            drawList->AddPolyline(hexPts, 6, secondary, true, 1.5F);
+            // Inner circle
+            drawList->AddCircle(center, quarterSize * 0.5F, accent, 12, 1.5F);
+            break;
+        }
+    }
+}
+
+void RenderPerkSlotHud(
+    const std::array<game::gameplay::HudState::ActivePerkDebug, 4>& perks,
+    ImVec2 position,
+    bool alignRight,
+    bool isKiller
+)
+{
+    constexpr float kSlotSize = 60.0F;        // Size of rhombus (diagonal)
+    constexpr float kSlotSpacing = 14.0F;
+    constexpr float kPadding = 14.0F;
+    constexpr float kIconSize = 28.0F;
+    constexpr float kRingRadius = 26.0F;
+    constexpr float kRingThickness = 3.5F;
+    constexpr float kBottomMargin = 22.0F;
+
+    const float panelWidth = 4.0F * kSlotSize + 3.0F * kSlotSpacing + 2.0F * kPadding;
+    const float panelHeight = kSlotSize * 1.3F + 2.0F * kPadding + kBottomMargin;
+
+    // Animation time (simple global time)
+    static float globalTime = 0.0F;
+    globalTime += ImGui::GetIO().DeltaTime;
+
+    // Adjust position for right alignment
+    ImVec2 panelPos = position;
+    if (alignRight)
+    {
+        panelPos.x -= panelWidth;
+    }
+
+    ImGui::SetNextWindowPos(panelPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, panelHeight), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, PerkHudColors::Background);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kPadding, kPadding));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    if (ImGui::Begin("PerksHUD_Procedural", nullptr, flags))
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 winPos = ImGui::GetWindowPos();
+        
+        // Center Y in the available slot area
+        const float slotAreaY = winPos.y + kPadding + kSlotSize * 0.55F;
+
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+            const auto& perk = perks[i];
+            
+            // Position along horizontal axis
+            const float slotCenterX = winPos.x + kPadding + kSlotSize * 0.5F + static_cast<float>(i) * (kSlotSize + kSlotSpacing);
+            const ImVec2 slotCenter(slotCenterX, slotAreaY);
+
+            // Determine perk state
+            const bool hasPerk = !perk.id.empty();
+            const bool isOnCooldown = hasPerk && perk.cooldownRemainingSeconds > 0.01F;
+            const bool isActive = hasPerk && perk.isActive;
+            const float halfSize = kSlotSize * 0.5F;
+
+            // Build rhombus (diamond) points
+            ImVec2 rhombusPts[4] = {
+                ImVec2(slotCenter.x, slotCenter.y - halfSize),
+                ImVec2(slotCenter.x + halfSize, slotCenter.y),
+                ImVec2(slotCenter.x, slotCenter.y + halfSize),
+                ImVec2(slotCenter.x - halfSize, slotCenter.y)
+            };
+
+            // Slot background color based on state
+            ImU32 slotBgColor;
+            if (!hasPerk)
+            {
+                slotBgColor = IM_COL32(15, 15, 18, 220);
+            }
+            else if (isActive)
+            {
+                // Pulsing orange for active
+                const float pulse = 0.5F + 0.5F * std::sin(globalTime * 4.0F + static_cast<float>(i));
+                slotBgColor = IM_COL32(70 + static_cast<int>(30 * pulse), 45, 20, 250);
+            }
+            else if (isOnCooldown)
+            {
+                slotBgColor = IM_COL32(20, 20, 25, 200);
+            }
+            else
+            {
+                slotBgColor = IM_COL32(30, 35, 45, 240);
+            }
+
+            // Draw rhombus background
+            drawList->AddConvexPolyFilled(rhombusPts, 4, slotBgColor);
+
+            // Draw rhombus border with glow for active perks
+            ImU32 borderColor;
+            if (isActive)
+            {
+                const float glowPulse = 0.5F + 0.5F * std::sin(globalTime * 5.0F);
+                borderColor = IM_COL32(200 + static_cast<int>(55 * glowPulse), 150 + static_cast<int>(50 * glowPulse), 50, 255);
+                
+                // Outer glow
+                const ImVec2 glowPts[4] = {
+                    ImVec2(slotCenter.x, slotCenter.y - halfSize - 4),
+                    ImVec2(slotCenter.x + halfSize + 4, slotCenter.y),
+                    ImVec2(slotCenter.x, slotCenter.y + halfSize + 4),
+                    ImVec2(slotCenter.x - halfSize - 4, slotCenter.y)
+                };
+                drawList->AddPolyline(glowPts, 4, IM_COL32(255, 180, 60, static_cast<int>(80 + 60 * glowPulse)), true, 4.0F);
+            }
+            else
+            {
+                borderColor = hasPerk ?
+                    (isOnCooldown ? IM_COL32(35, 35, 40, 200) : IM_COL32(60, 70, 85, 255)) :
+                    IM_COL32(30, 30, 35, 160);
+            }
+            drawList->AddPolyline(rhombusPts, 4, borderColor, true, 2.0F);
+
+            if (hasPerk)
+            {
+                // Get perk colors and pattern
+                ImU32 primary, secondary, accent;
+                GetPerkColors(perk.id, primary, secondary, accent);
+                const PerkPattern pattern = GetPerkPattern(perk.id);
+
+                // Draw procedural icon pattern
+                const float animPhase = globalTime + static_cast<float>(i) * 0.4F;
+                DrawPerkPattern(drawList, slotCenter, kIconSize * 1.8F, pattern, primary, secondary, accent, animPhase, isActive);
+
+                // Cooldown progress arc
+                if (perk.maxCooldownSeconds > 0.01F && !isActive)
+                {
+                    drawList->AddCircle(slotCenter, kRingRadius, PerkHudColors::CooldownBg, 32, kRingThickness + 1.0F);
+                    
+                    if (isOnCooldown)
+                    {
+                        const float cooldownProgress = perk.cooldownRemainingSeconds / perk.maxCooldownSeconds;
+                        constexpr float kPi = 3.1415926535F;
+                        constexpr float kStartAngle = -kPi * 0.5F;
+                        const float endAngle = kStartAngle + cooldownProgress * 2.0F * kPi;
+                        drawList->PathArcTo(slotCenter, kRingRadius, kStartAngle, endAngle, 24);
+                        drawList->PathStroke(PerkHudColors::CooldownRing, false, kRingThickness);
+                    }
+                }
+
+                // Tier indicator (dots below the rhombus)
+                const int tier = std::clamp(perk.tier, 1, 3);
+                const ImU32 tierColor = (tier == 3) ? IM_COL32(240, 170, 50, 255) :
+                                        (tier == 2) ? IM_COL32(80, 160, 240, 255) : IM_COL32(120, 120, 130, 255);
+                const float tierY = slotCenter.y + halfSize + 10.0F;
+                const float tierStartX = slotCenter.x - static_cast<float>(tier - 1) * 6.0F;
+                for (int t = 0; t < tier; ++t)
+                {
+                    drawList->AddCircleFilled(ImVec2(tierStartX + static_cast<float>(t) * 12.0F, tierY), 3.0F, tierColor);
+                }
+
+                // Active status text
+                if (isActive)
+                {
+                    const std::string activeText = "ACTIVE";
+                    const ImVec2 textSize = ImGui::CalcTextSize(activeText.c_str());
+                    const float textX = slotCenter.x - textSize.x * 0.5F;
+                    const float textY = slotCenter.y + halfSize * 0.3F;
+                    
+                    // Background for text
+                    drawList->AddRectFilled(ImVec2(textX - 4, textY - 2), ImVec2(textX + textSize.x + 4, textY + textSize.y + 2), 
+                                           IM_COL32(0, 0, 0, 150), 3.0F);
+                    drawList->AddText(ImVec2(textX, textY), IM_COL32(255, 220, 100, 255), activeText.c_str());
+                }
+                else if (isOnCooldown)
+                {
+                    // Show cooldown time
+                    const std::string cdText = std::to_string(static_cast<int>(perk.cooldownRemainingSeconds)) + "s";
+                    const ImVec2 textSize = ImGui::CalcTextSize(cdText.c_str());
+                    const float textX = slotCenter.x - textSize.x * 0.5F;
+                    const float textY = slotCenter.y - textSize.y * 0.5F;
+                    drawList->AddText(ImVec2(textX, textY), IM_COL32(180, 180, 190, 200), cdText.c_str());
+                }
+            }
+            else
+            {
+                // Empty slot - draw placeholder
+                const ImU32 emptyColor = IM_COL32(40, 40, 50, 180);
+                drawList->AddLine(ImVec2(slotCenter.x - 12, slotCenter.y), ImVec2(slotCenter.x + 12, slotCenter.y), emptyColor, 2.5F);
+                drawList->AddLine(ImVec2(slotCenter.x, slotCenter.y - 12), ImVec2(slotCenter.x, slotCenter.y + 12), emptyColor, 2.5F);
+                
+                // Empty text
+                const std::string emptyText = "empty";
+                const ImVec2 textSize = ImGui::CalcTextSize(emptyText.c_str());
+                drawList->AddText(ImVec2(slotCenter.x - textSize.x * 0.5F, slotCenter.y + halfSize * 0.4F), 
+                                  IM_COL32(60, 60, 70, 150), emptyText.c_str());
+            }
+        }
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor();
+}
+
 std::vector<std::string> Tokenize(const std::string& text)
 {
     std::istringstream stream(text);
@@ -934,10 +1497,18 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                 return;
             }
 
-            AddLog("Unknown perks subcommand. Use: perks list | perks equip | perks clear");
+            if (subcommand == "reset")
+            {
+                // Reset to default dev loadout
+                context.gameplay->GetPerkSystem().SetDefaultDevLoadout();
+                AddLog("Reset perks to default dev loadout");
+                return;
+            }
+
+            AddLog("Unknown perks subcommand. Use: perks list | perks equip | perks clear | perks reset");
         });
 
-        RegisterCommand("perks <list|equip|clear>", "Manage perks (list/equip/clear)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("perks <list|equip|clear|reset>", "Manage perks (list/equip/clear/reset to defaults)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr)
             {
                 return;
@@ -1891,7 +2462,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         }
 
         ImGui::SetNextWindowSize(ImVec2(840.0F, 390.0F), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Developer Console", &m_impl->open, ImGuiWindowFlags_NoNavFocus))
+        if (ImGui::Begin("Developer Console", &m_impl->open, ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoNavInputs))
         {
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && ImGui::IsWindowFocused())
             {
@@ -1899,7 +2470,9 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             }
 
             // Console output with colors
-            ImGui::BeginChild("ScrollingRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false, ImGuiWindowFlags_HorizontalScrollbar);
+            // Reserve extra space for input + 2 hint lines at bottom (no scrolling needed for hints)
+            constexpr float kHintLinesHeight = 50.0F; // Space for hints below input
+            ImGui::BeginChild("ScrollingRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - kHintLinesHeight), false, ImGuiWindowFlags_HorizontalScrollbar);
             for (const auto& entry : m_impl->items)
             {
                 ImU32 color = IM_COL32(255, 255, 255, 255);
@@ -1926,8 +2499,8 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
 
             if (m_impl->reclaimFocus)
             {
-                ImGui::SetKeyboardFocusHere(-1);
-                m_impl->reclaimFocus = false;
+            ImGui::SetKeyboardFocusHere();
+            m_impl->reclaimFocus = false;
             }
 
             ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue |
@@ -2024,6 +2597,41 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             }
         }
         ImGui::End();
+    }
+
+    // Perks HUD - only visible when loadout has perks
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float screenHeight = viewport->Size.y;
+        const float perkHudY = screenHeight - 160.0F;
+        const bool isKiller = hudState.roleName == "Killer";
+
+        // Check if any perks are equipped
+        const auto& slots = isKiller ? hudState.killerPerkSlots : hudState.survivorPerkSlots;
+        const bool hasAnyPerk = std::any_of(slots.begin(), slots.end(), 
+            [](const game::gameplay::HudState::ActivePerkDebug& p) { return !p.id.empty(); });
+
+        // Debug logging only when perks are present (avoid spam)
+        // static float lastDebugTime = 0.0F;
+        // const float currentTime = ImGui::GetTime();
+        // if (hasAnyPerk && currentTime - lastDebugTime > 2.0F)
+        // {
+        //     std::cout << "[PERK HUD] role=" << hudState.roleName << " hasAnyPerk=" << hasAnyPerk << "\n";
+        //     lastDebugTime = currentTime;
+        // }
+
+        // Only render if at least one perk is equipped
+        if (hasAnyPerk)
+        {
+            if (isKiller)
+            {
+                RenderPerkSlotHud(hudState.killerPerkSlots, ImVec2(viewport->Size.x - 18.0F, perkHudY), true, true);
+            }
+            else
+            {
+                RenderPerkSlotHud(hudState.survivorPerkSlots, ImVec2(18.0F, perkHudY), false, false);
+            }
+        }
     }
 
     ImGui::Render();

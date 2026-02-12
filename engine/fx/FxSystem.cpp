@@ -870,6 +870,9 @@ void FxSystem::Update(float deltaSeconds, const glm::vec3& cameraPosition)
 
 void FxSystem::Render(engine::render::Renderer& renderer, const glm::vec3& cameraPosition) const
 {
+    std::vector<engine::render::Renderer::BillboardData> billboards;
+    billboards.reserve(256);
+
     for (const FxInstance& instance : m_instances)
     {
         if (!instance.active || instance.asset == nullptr)
@@ -898,20 +901,11 @@ void FxSystem::Render(engine::render::Renderer& renderer, const glm::vec3& camer
                         color *= 1.35F;
                     }
 
-                    glm::vec3 toCamera = cameraPosition - particle.position;
-                    if (glm::length(toCamera) < 1.0e-5F)
-                    {
-                        toCamera = glm::vec3{0.0F, 0.0F, 1.0F};
-                    }
-                    toCamera = glm::normalize(toCamera);
-                    const float yaw = std::atan2(toCamera.x, -toCamera.z);
-                    const float pitch = std::asin(glm::clamp(toCamera.y, -1.0F, 1.0F));
-                    renderer.DrawOrientedBox(
-                        particle.position,
-                        glm::vec3{size, size, 0.01F},
-                        glm::vec3{glm::degrees(pitch), 180.0F - glm::degrees(yaw), 0.0F},
-                        glm::vec3{color.r, color.g, color.b}
-                    );
+                    engine::render::Renderer::BillboardData billboard;
+                    billboard.position = particle.position;
+                    billboard.size = size;
+                    billboard.color = color;
+                    billboards.push_back(billboard);
                 }
             }
             else
@@ -928,6 +922,11 @@ void FxSystem::Render(engine::render::Renderer& renderer, const glm::vec3& camer
                 }
             }
         }
+    }
+
+    if (!billboards.empty())
+    {
+        renderer.DrawBillboards(billboards.data(), billboards.size(), cameraPosition);
     }
 }
 

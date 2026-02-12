@@ -320,6 +320,11 @@ private:
     int m_menuSavedMapIndex = -1;
     int m_menuPort = 7777;
     std::string m_menuJoinIp = "127.0.0.1";
+    
+    // Menu perk loadout selection (4 slots like in-game HUD)
+    std::vector<std::string> m_menuSurvivorPerks = {"sprint_burst", "self_care", "iron_will", ""};
+    std::vector<std::string> m_menuKillerPerks = {"brutal_strength", "terrifying_presence", "sloppy_butcher", ""};
+    
     float m_menuLanScroll = 0.0F;
     std::string m_menuNetStatus;
     std::string m_lastNetworkError;

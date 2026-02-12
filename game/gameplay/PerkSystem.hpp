@@ -150,6 +150,9 @@ public:
     void SetKillerLoadout(const PerkLoadout& loadout) { m_killerLoadout = loadout; }
     [[nodiscard]] const PerkLoadout& GetSurvivorLoadout() const { return m_survivorLoadout; }
     [[nodiscard]] const PerkLoadout& GetKillerLoadout() const { return m_killerLoadout; }
+    
+    // Set default dev loadouts (for testing)
+    void SetDefaultDevLoadout();
 
     // Active state management
     void InitializeActiveStates();

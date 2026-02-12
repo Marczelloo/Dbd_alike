@@ -531,10 +531,10 @@ bool App::Run()
         if (inGame)
         {
             m_renderer.SetLightingEnabled(true);
-            m_gameplay.Render(m_renderer);
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
+            m_gameplay.Render(m_renderer, aspect);
             viewProjection = m_gameplay.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_gameplay.CameraPosition());
         }
@@ -952,18 +952,17 @@ void App::ResetToMainMenu()
     m_serverGameplayValues = false;
     ApplyGameplaySettings(m_gameplayApplied, false);
 
-    m_gameplay.LoadMap("main");
-    m_gameplay.SetControlledRole("survivor");
-    m_renderer.SetEnvironmentSettings(render::EnvironmentSettings{});
-    m_renderer.SetPointLights({});
-    m_renderer.SetSpotLights({});
-
     m_sessionRoleName = "survivor";
     m_remoteRoleName = "killer";
     m_sessionMapName = "main";
     m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+    m_sessionSeed = std::random_device{}();
     m_connectedEndpoint.clear();
     InitializePlayerBindings();
+
+    m_gameplay.RegenerateLoops(m_sessionSeed);
+    m_gameplay.SetControlledRole("survivor");
+    m_renderer.SetEnvironmentSettings(render::EnvironmentSettings{});
 
     if (m_lanDiscovery.StartClient(m_lanDiscoveryPort, kProtocolVersion, kBuildId))
     {
@@ -1005,6 +1004,7 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     if (normalizedMap == "main")
     {
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+        m_sessionSeed = std::random_device{}();
     }
     else if (normalizedMap == "collision_test")
     {
@@ -1013,6 +1013,12 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     else
     {
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Test;
+    }
+
+    m_gameplay.LoadMap(normalizedMap);
+    if (normalizedMap == "main")
+    {
+        m_gameplay.RegenerateLoops(m_sessionSeed);
     }
 
     ApplyMapEnvironment(normalizedMap);
@@ -3343,7 +3349,7 @@ void App::DrawPlayersDebugUi(double nowSeconds)
 void App::DrawMainMenuUiCustom(bool* shouldQuit)
 {
     const std::vector<std::string> roleItems{"Survivor", "Killer"};
-    const std::vector<std::string> mapItems{"main_map", "collision_test", "test"};
+    const std::vector<std::string> mapItems{"Test", "Collision Test", "Random Generation"};
     const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
     if (m_menuSavedMapIndex >= static_cast<int>(savedMaps.size()))
     {
@@ -3538,6 +3544,91 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.Spacer(10.0F * scale);
     m_ui.Label(NetworkStateToText(m_networkState), m_ui.Theme().colorTextMuted, 0.85F);
+
+    m_ui.Spacer(12.0F * scale);
+    
+    // Get available perks based on selected role
+    const auto& perkSystem = m_gameplay.GetPerkSystem();
+    const bool isSurvivor = (m_menuRoleIndex == 0);
+    const auto survivorPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor);
+    const auto killerPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+    const auto& availablePerks = isSurvivor ? survivorPerks : killerPerks;
+    auto& selectedPerks = isSurvivor ? m_menuSurvivorPerks : m_menuKillerPerks;
+    
+    m_ui.Label(isSurvivor ? "SURVIVOR PERKS" : "KILLER PERKS", m_ui.Theme().colorTextMuted, 0.9F);
+    
+    // Ensure 4 slots
+    if (selectedPerks.size() < 4)
+    {
+        selectedPerks.resize(4, "");
+    }
+    
+    // Show 4 perk slots (like in-game HUD)
+    for (int slot = 0; slot < 4; ++slot)
+    {
+        const std::string slotLabel = "Slot " + std::to_string(slot + 1);
+        
+        // Build perk names list with "None" as first option
+        std::vector<std::string> perkNames{"None"};
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        
+        // Map selected index
+        int selectedIndex = 0;
+        if (slot < static_cast<int>(selectedPerks.size()) && !selectedPerks[slot].empty())
+        {
+            const auto& perkId = selectedPerks[slot];
+            const auto* perk = perkSystem.GetPerk(perkId);
+            const std::string perkName = perk ? perk->name : perkId;
+            for (std::size_t i = 0; i < availablePerks.size(); ++i)
+            {
+                const auto* p = perkSystem.GetPerk(availablePerks[i]);
+                if ((p && p->name == perkName) || availablePerks[i] == perkId)
+                {
+                    selectedIndex = static_cast<int>(i + 1); // +1 for "None"
+                    break;
+                }
+            }
+        }
+        
+        m_ui.PushIdScope("perk_slot_" + std::to_string(slot));
+        if (m_ui.Dropdown("perk", slotLabel.c_str(), &selectedIndex, perkNames))
+        {
+            if (selectedIndex == 0)
+            {
+                // "None" selected
+                selectedPerks[slot] = "";
+            }
+            else if (selectedIndex > 0 && static_cast<std::size_t>(selectedIndex - 1) < availablePerks.size())
+            {
+                // Perk selected
+                const std::string perkId = availablePerks[static_cast<std::size_t>(selectedIndex - 1)];
+                selectedPerks[slot] = perkId;
+            }
+            
+            // Update loadout in PerkSystem (based on role)
+            game::gameplay::perks::PerkLoadout loadout;
+            for (std::size_t i = 0; i < selectedPerks.size() && i < 4; ++i)
+            {
+                if (!selectedPerks[i].empty())
+                {
+                    loadout.SetPerk(static_cast<int>(i), selectedPerks[i]);
+                }
+            }
+            if (isSurvivor)
+            {
+                m_gameplay.SetSurvivorPerkLoadout(loadout);
+            }
+            else
+            {
+                m_gameplay.SetKillerPerkLoadout(loadout);
+            }
+        }
+        m_ui.PopIdScope();
+    }
 
     m_ui.Spacer(10.0F * scale);
     m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
@@ -5208,9 +5299,9 @@ std::string App::MapNameFromIndex(int index)
 {
     switch (index)
     {
+        case 0: return "test";
         case 1: return "collision_test";
-        case 2: return "test";
-        case 0:
+        case 2: return "main";
         default: return "main";
     }
 }

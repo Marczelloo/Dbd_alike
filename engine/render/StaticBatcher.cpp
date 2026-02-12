@@ -1,0 +1,194 @@
+#include "engine/render/StaticBatcher.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+#include <glad/glad.h>
+
+#include <glm/common.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+namespace engine::render
+{
+StaticBatcher::StaticBatcher() = default;
+
+StaticBatcher::~StaticBatcher()
+{
+    Clear();
+}
+
+void StaticBatcher::BeginBuild()
+{
+    m_buildVertices.clear();
+    m_chunks.clear();
+    m_built = false;
+    m_vertexCount = 0;
+    m_visibleCount = 0;
+}
+
+void StaticBatcher::AddBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec3& color)
+{
+    const glm::vec3 min = center - halfExtents;
+    const glm::vec3 max = center + halfExtents;
+
+    const glm::vec3 c000 = min;
+    const glm::vec3 c001 = glm::vec3{min.x, min.y, max.z};
+    const glm::vec3 c010 = glm::vec3{min.x, max.y, min.z};
+    const glm::vec3 c011 = glm::vec3{min.x, max.y, max.z};
+    const glm::vec3 c100 = glm::vec3{max.x, min.y, min.z};
+    const glm::vec3 c101 = glm::vec3{max.x, min.y, max.z};
+    const glm::vec3 c110 = glm::vec3{max.x, max.y, min.z};
+    const glm::vec3 c111 = max;
+
+    auto emitVertex = [&](const glm::vec3& pos, const glm::vec3& normal) {
+        m_buildVertices.push_back(pos.x);
+        m_buildVertices.push_back(pos.y);
+        m_buildVertices.push_back(pos.z);
+        m_buildVertices.push_back(normal.x);
+        m_buildVertices.push_back(normal.y);
+        m_buildVertices.push_back(normal.z);
+        m_buildVertices.push_back(color.r);
+        m_buildVertices.push_back(color.g);
+        m_buildVertices.push_back(color.b);
+        m_buildVertices.push_back(0.55F);
+        m_buildVertices.push_back(0.0F);
+        m_buildVertices.push_back(0.0F);
+        m_buildVertices.push_back(0.0F);
+    };
+
+    auto emitTri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& n) {
+        emitVertex(a, n);
+        emitVertex(b, n);
+        emitVertex(c, n);
+    };
+
+    emitTri(c000, c001, c011, glm::vec3{-1.0F, 0.0F, 0.0F});
+    emitTri(c000, c011, c010, glm::vec3{-1.0F, 0.0F, 0.0F});
+
+    emitTri(c100, c110, c111, glm::vec3{1.0F, 0.0F, 0.0F});
+    emitTri(c100, c111, c101, glm::vec3{1.0F, 0.0F, 0.0F});
+
+    emitTri(c000, c010, c110, glm::vec3{0.0F, 0.0F, -1.0F});
+    emitTri(c000, c110, c100, glm::vec3{0.0F, 0.0F, -1.0F});
+
+    emitTri(c001, c101, c111, glm::vec3{0.0F, 0.0F, 1.0F});
+    emitTri(c001, c111, c011, glm::vec3{0.0F, 0.0F, 1.0F});
+
+    emitTri(c000, c100, c101, glm::vec3{0.0F, -1.0F, 0.0F});
+    emitTri(c000, c101, c001, glm::vec3{0.0F, -1.0F, 0.0F});
+
+    emitTri(c010, c011, c111, glm::vec3{0.0F, 1.0F, 0.0F});
+    emitTri(c010, c111, c110, glm::vec3{0.0F, 1.0F, 0.0F});
+
+    BatchChunk chunk;
+    chunk.firstVertex = m_chunks.empty() ? 0 : (m_chunks.back().firstVertex + m_chunks.back().vertexCount);
+    chunk.vertexCount = kVerticesPerBox;
+    chunk.boundsMin = min;
+    chunk.boundsMax = max;
+    m_chunks.push_back(chunk);
+}
+
+void StaticBatcher::EndBuild()
+{
+    if (m_buildVertices.empty())
+    {
+        m_built = true;
+        return;
+    }
+
+    if (m_vao == 0)
+    {
+        glGenVertexArrays(1, &m_vao);
+        glGenBuffers(1, &m_vbo);
+    }
+
+    m_vertexCount = m_buildVertices.size() / 13;
+
+    glBindVertexArray(m_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(m_buildVertices.size() * sizeof(float)),
+        m_buildVertices.data(),
+        GL_STATIC_DRAW
+    );
+
+    constexpr GLsizei stride = 13 * sizeof(float);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(6 * sizeof(float)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(9 * sizeof(float)));
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    m_buildVertices.clear();
+    m_buildVertices.shrink_to_fit();
+    m_built = true;
+}
+
+void StaticBatcher::Render(
+    const glm::mat4& viewProjection,
+    const Frustum& frustum,
+    unsigned int shaderProgram,
+    int viewProjLocation
+)
+{
+    if (!m_built || m_vao == 0 || m_chunks.empty())
+    {
+        return;
+    }
+
+    m_visibleCount = 0;
+
+    std::vector<GLint> firsts;
+    std::vector<GLsizei> counts;
+    firsts.reserve(m_chunks.size());
+    counts.reserve(m_chunks.size());
+
+    for (const auto& chunk : m_chunks)
+    {
+        if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+        {
+            firsts.push_back(static_cast<GLint>(chunk.firstVertex));
+            counts.push_back(static_cast<GLsizei>(chunk.vertexCount));
+            m_visibleCount += chunk.vertexCount;
+        }
+    }
+
+    if (firsts.empty())
+    {
+        return;
+    }
+
+    glUseProgram(shaderProgram);
+    glUniformMatrix4fv(viewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+
+    glBindVertexArray(m_vao);
+    glMultiDrawArrays(GL_TRIANGLES, firsts.data(), counts.data(), static_cast<GLsizei>(firsts.size()));
+    glBindVertexArray(0);
+}
+
+void StaticBatcher::Clear()
+{
+    if (m_vbo != 0)
+    {
+        glDeleteBuffers(1, &m_vbo);
+        m_vbo = 0;
+    }
+    if (m_vao != 0)
+    {
+        glDeleteVertexArrays(1, &m_vao);
+        m_vao = 0;
+    }
+    m_buildVertices.clear();
+    m_chunks.clear();
+    m_vertexCount = 0;
+    m_visibleCount = 0;
+    m_built = false;
+}
+}

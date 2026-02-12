@@ -159,6 +159,9 @@ void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
 
     // Initialize perk system with default perks
     m_perkSystem.InitializeDefaultPerks();
+    
+    // Set default dev loadout for testing
+    m_perkSystem.SetDefaultDevLoadout();
 
     // Initialize perk system active states
     m_perkSystem.InitializeActiveStates();
@@ -455,8 +458,11 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
     UpdateCamera(deltaSeconds);
 }
 
-void GameplaySystems::Render(engine::render::Renderer& renderer) const
+void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRatio)
 {
+    const glm::mat4 viewProjection = BuildViewProjection(aspectRatio);
+    m_frustum.Extract(viewProjection);
+
     renderer.SetPostFxPulse(m_fxSystem.PostFxPulseColor(), m_fxSystem.PostFxPulseIntensity());
     renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F});
 
@@ -466,15 +472,14 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
 
     const auto& transforms = m_world.Transforms();
 
-    for (const auto& [entity, box] : m_world.StaticBoxes())
+    if (m_staticBatcher.IsBuilt())
     {
-        const auto transformIt = transforms.find(entity);
-        if (transformIt == transforms.end())
-        {
-            continue;
-        }
-
-        renderer.DrawBox(transformIt->second.position, box.halfExtents, glm::vec3{0.58F, 0.62F, 0.68F});
+        m_staticBatcher.Render(
+            viewProjection,
+            m_frustum,
+            renderer.GetSolidShaderProgram(),
+            renderer.GetSolidViewProjLocation()
+        );
     }
 
     for (const auto& [entity, window] : m_world.Windows())
@@ -685,15 +690,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer) const
             const float radius = baseRadius + perkModifier;
             const glm::vec3 center = killerTransformIt->second.position + glm::vec3{0.0F, 0.06F, 0.0F};
             const glm::vec3 trColor = m_chase.isChasing ? glm::vec3{1.0F, 0.2F, 0.2F} : glm::vec3{1.0F, 0.5F, 0.15F};
-            constexpr int kSegments = 48;
-            glm::vec3 prev = center + glm::vec3{radius, 0.0F, 0.0F};
-            for (int i = 1; i <= kSegments; ++i)
-            {
-                const float t = 2.0F * glm::pi<float>() * static_cast<float>(i) / static_cast<float>(kSegments);
-                const glm::vec3 curr = center + glm::vec3{std::cos(t) * radius, 0.0F, std::sin(t) * radius};
-                renderer.DrawOverlayLine(prev, curr, trColor);
-                prev = curr;
-            }
+            renderer.DrawCircle(center, radius, 48, trColor, true);
         }
     }
 
@@ -1053,10 +1050,82 @@ HudState GameplaySystems::BuildHudState() const
     pushDebugLabel(m_survivor, "Player1", false);
     pushDebugLabel(m_killer, "Player2", true);
 
+    // Populate perk slots from actual loadouts
+    const auto& survivorLoadout = m_perkSystem.GetSurvivorLoadout();
+    const auto& killerLoadout = m_perkSystem.GetKillerLoadout();
+    
+    // Helper to get active state for a perk
+    const auto getActiveState = [&](const std::string& perkId, engine::scene::Role role) -> const perks::ActivePerkState* {
+        if (perkId.empty()) return nullptr;
+        const auto& activePerks = m_perkSystem.GetActivePerks(role);
+        for (const auto& state : activePerks)
+        {
+            if (state.perkId == perkId)
+            {
+                return &state;
+            }
+        }
+        return nullptr;
+    };
+
+    // Populate survivor perk slots (loadout has 3 slots, HUD has 4)
+    for (int i = 0; i < 4; ++i)
+    {
+        const std::string perkId = (i < 3) ? survivorLoadout.GetPerk(i) : "";
+        if (perkId.empty())
+        {
+            hud.survivorPerkSlots[i] = HudState::ActivePerkDebug{}; // Empty slot
+        }
+        else
+        {
+            const auto* perk = m_perkSystem.GetPerk(perkId);
+            const auto* activeState = getActiveState(perkId, engine::scene::Role::Survivor);
+            hud.survivorPerkSlots[i] = HudState::ActivePerkDebug{
+                perkId,
+                perk ? perk->name : perkId,
+                activeState ? activeState->isActive : false,
+                activeState ? activeState->activeRemainingSeconds : 0.0F,
+                activeState ? activeState->cooldownRemainingSeconds : 0.0F,
+                activeState ? activeState->currentStacks : 0,
+                1, // Default tier (TODO: implement tier system)
+                perk ? perk->effects.activationCooldownSeconds : 0.0F
+            };
+            // std::cout << "[PERK] SURVIVOR SLOT " << i << ": " << perkId << " (active=" << hud.survivorPerkSlots[i].isActive << ")\n";
+        }
+    }
+
+    // Populate killer perk slots
+    for (int i = 0; i < 4; ++i)
+    {
+        const std::string perkId = (i < 3) ? killerLoadout.GetPerk(i) : "";
+        if (perkId.empty())
+        {
+            hud.killerPerkSlots[i] = HudState::ActivePerkDebug{}; // Empty slot
+        }
+        else
+        {
+            const auto* perk = m_perkSystem.GetPerk(perkId);
+            const auto* activeState = getActiveState(perkId, engine::scene::Role::Killer);
+            hud.killerPerkSlots[i] = HudState::ActivePerkDebug{
+                perkId,
+                perk ? perk->name : perkId,
+                activeState ? activeState->isActive : false,
+                activeState ? activeState->activeRemainingSeconds : 0.0F,
+                activeState ? activeState->cooldownRemainingSeconds : 0.0F,
+                activeState ? activeState->currentStacks : 0,
+                1, // Default tier
+                perk ? perk->effects.activationCooldownSeconds : 0.0F
+            };
+            // std::cout << "[PERK] KILLER SLOT " << i << ": " << perkId << " (active=" << hud.killerPerkSlots[i].isActive << ")\n";
+        }
+    }
+
     return hud;
 }
 void GameplaySystems::LoadMap(const std::string& mapName)
 {
+    m_staticBatcher.Clear();
+
     if (mapName == "test")
     {
         BuildSceneFromMap(MapType::Test, m_generationSeed);
@@ -2116,6 +2185,13 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         };
         m_world.StaticBoxes()[wallEntity] = engine::scene::StaticBoxComponent{wall.halfExtents, true};
     }
+
+    m_staticBatcher.BeginBuild();
+    for (const auto& wall : generated.walls)
+    {
+        m_staticBatcher.AddBox(wall.center, wall.halfExtents, glm::vec3{0.58F, 0.62F, 0.68F});
+    }
+    m_staticBatcher.EndBuild();
 
     m_spawnPoints.push_back(SpawnPointInfo{
         m_nextSpawnPointId++,

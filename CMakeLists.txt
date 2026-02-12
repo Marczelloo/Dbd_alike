@@ -82,6 +82,8 @@ set(ENGINE_SOURCES
     engine/net/NetworkSession.cpp
     engine/net/LanDiscovery.cpp
     engine/render/Renderer.cpp
+    engine/render/Frustum.cpp
+    engine/render/StaticBatcher.cpp
     engine/physics/PhysicsWorld.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
