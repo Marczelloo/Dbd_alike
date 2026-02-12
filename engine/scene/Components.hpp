@@ -22,6 +22,13 @@ enum class PalletState
     Broken
 };
 
+enum class TrapState
+{
+    Armed,
+    Triggered,
+    Disarmed
+};
+
 struct Transform
 {
     glm::vec3 position{0.0F, 0.0F, 0.0F};
@@ -102,6 +109,17 @@ struct GeneratorComponent
     glm::vec3 halfExtents{0.35F, 0.6F, 0.35F};  // Zmniejszone: 0.7->0.35 (XZ), 0.7->0.6 (Y)
     float progress = 0.0F;
     bool completed = false;
+};
+
+struct BearTrapComponent
+{
+    TrapState state = TrapState::Armed;
+    glm::vec3 halfExtents{0.36F, 0.08F, 0.36F};
+    Entity trappedEntity = 0;
+    float escapeChance = 0.22F;
+    float escapeChanceStep = 0.14F;
+    int escapeAttempts = 0;
+    int maxEscapeAttempts = 6;
 };
 
 struct DebugColorComponent

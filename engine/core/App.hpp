@@ -313,6 +313,14 @@ private:
     int m_menuRoleIndex = 0;
     int m_menuMapIndex = 0;
     int m_menuSavedMapIndex = -1;
+    int m_menuSurvivorCharacterIndex = 0;
+    int m_menuKillerCharacterIndex = 0;
+    int m_menuSurvivorItemIndex = 0;
+    int m_menuSurvivorAddonAIndex = 0;
+    int m_menuSurvivorAddonBIndex = 0;
+    int m_menuKillerPowerIndex = 0;
+    int m_menuKillerAddonAIndex = 0;
+    int m_menuKillerAddonBIndex = 0;
     int m_menuPort = 7777;
     std::string m_menuJoinIp = "127.0.0.1";
     std::string m_menuNetStatus;

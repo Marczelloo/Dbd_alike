@@ -22,6 +22,7 @@ public:
     std::unordered_map<Entity, PalletComponent>& Pallets() { return m_pallets; }
     std::unordered_map<Entity, HookComponent>& Hooks() { return m_hooks; }
     std::unordered_map<Entity, GeneratorComponent>& Generators() { return m_generators; }
+    std::unordered_map<Entity, BearTrapComponent>& BearTraps() { return m_bearTraps; }
     std::unordered_map<Entity, DebugColorComponent>& DebugColors() { return m_debugColors; }
     std::unordered_map<Entity, NameComponent>& Names() { return m_names; }
 
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] const std::unordered_map<Entity, PalletComponent>& Pallets() const { return m_pallets; }
     [[nodiscard]] const std::unordered_map<Entity, HookComponent>& Hooks() const { return m_hooks; }
     [[nodiscard]] const std::unordered_map<Entity, GeneratorComponent>& Generators() const { return m_generators; }
+    [[nodiscard]] const std::unordered_map<Entity, BearTrapComponent>& BearTraps() const { return m_bearTraps; }
     [[nodiscard]] const std::unordered_map<Entity, DebugColorComponent>& DebugColors() const { return m_debugColors; }
     [[nodiscard]] const std::unordered_map<Entity, NameComponent>& Names() const { return m_names; }
 
@@ -46,6 +48,7 @@ private:
     std::unordered_map<Entity, PalletComponent> m_pallets;
     std::unordered_map<Entity, HookComponent> m_hooks;
     std::unordered_map<Entity, GeneratorComponent> m_generators;
+    std::unordered_map<Entity, BearTrapComponent> m_bearTraps;
     std::unordered_map<Entity, DebugColorComponent> m_debugColors;
     std::unordered_map<Entity, NameComponent> m_names;
 };

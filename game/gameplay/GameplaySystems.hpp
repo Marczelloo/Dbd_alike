@@ -18,6 +18,7 @@
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
 #include "engine/scene/World.hpp"
+#include "game/gameplay/LoadoutSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"
 #include "game/maps/TileGenerator.hpp"
 
@@ -157,6 +158,21 @@ struct HudState
     int fxActiveInstances = 0;
     int fxActiveParticles = 0;
     float fxCpuMs = 0.0F;
+
+    std::string survivorCharacterId = "survivor_dwight";
+    std::string killerCharacterId = "killer_trapper";
+    std::string survivorItemId = "none";
+    std::string survivorItemAddonA = "none";
+    std::string survivorItemAddonB = "none";
+    float survivorItemCharges = 0.0F;
+    bool survivorItemActive = false;
+    std::string killerPowerId = "none";
+    std::string killerPowerAddonA = "none";
+    std::string killerPowerAddonB = "none";
+    int activeTrapCount = 0;
+    bool trapDebugEnabled = false;
+    int trappedEscapeAttempts = 0;
+    float trappedEscapeChance = 0.0F;
 
     // Perks debug info
     struct ActivePerkDebug
@@ -308,12 +324,32 @@ public:
         glm::vec3 halfExtents{0.5F};
     };
 
+    struct TrapSnapshot
+    {
+        engine::scene::Entity entity = 0;
+        std::uint8_t state = 0;
+        engine::scene::Entity trappedEntity = 0;
+        glm::vec3 position{0.0F};
+        glm::vec3 halfExtents{0.36F, 0.08F, 0.36F};
+        float escapeChance = 0.22F;
+        std::uint8_t escapeAttempts = 0;
+        std::uint8_t maxEscapeAttempts = 6;
+    };
+
     struct Snapshot
     {
         MapType mapType = MapType::Test;
         unsigned int seed = 1337U;
         std::array<std::string, 3> survivorPerkIds = {"", "", ""};
         std::array<std::string, 3> killerPerkIds = {"", "", ""};
+        std::string survivorCharacterId = "survivor_dwight";
+        std::string killerCharacterId = "killer_trapper";
+        std::string survivorItemId;
+        std::string survivorItemAddonA;
+        std::string survivorItemAddonB;
+        std::string killerPowerId;
+        std::string killerPowerAddonA;
+        std::string killerPowerAddonB;
         ActorSnapshot survivor;
         ActorSnapshot killer;
         std::uint8_t survivorState = 0;
@@ -328,7 +364,10 @@ public:
         float chaseTimeSinceCenterFOV = 0.0F;
         float chaseTimeInChase = 0.0F;
         std::uint8_t bloodlustTier = 0;
+        float survivorItemCharges = 0.0F;
+        std::uint8_t survivorItemActive = 0;
         std::vector<PalletSnapshot> pallets;
+        std::vector<TrapSnapshot> traps;
     };
 
     GameplaySystems();
@@ -424,6 +463,22 @@ public:
     [[nodiscard]] perks::PerkSystem& GetPerkSystem() { return m_perkSystem; }
     [[nodiscard]] const perks::PerkSystem& GetPerkSystem() const { return m_perkSystem; }
 
+    bool SetSurvivorItemLoadout(const std::string& itemId, const std::string& addonAId, const std::string& addonBId);
+    bool SetKillerPowerLoadout(const std::string& powerId, const std::string& addonAId, const std::string& addonBId);
+    [[nodiscard]] std::string ItemDump() const;
+    [[nodiscard]] std::string PowerDump() const;
+    [[nodiscard]] const loadout::GameplayCatalog& GetLoadoutCatalog() const { return m_loadoutCatalog; }
+
+    bool SetSelectedSurvivorCharacter(const std::string& characterId);
+    bool SetSelectedKillerCharacter(const std::string& characterId);
+    [[nodiscard]] std::vector<std::string> ListSurvivorCharacters() const;
+    [[nodiscard]] std::vector<std::string> ListKillerCharacters() const;
+
+    void TrapSpawnDebug();
+    void TrapClearDebug();
+    void SetTrapDebug(bool enabled) { m_trapDebugEnabled = enabled; }
+    [[nodiscard]] bool TrapDebugEnabled() const { return m_trapDebugEnabled; }
+
     // Phase B2/B3: Scratch Marks and Blood Pools debug control
     void SetScratchDebug(bool enabled);
     void SetBloodDebug(bool enabled);
@@ -495,6 +550,7 @@ private:
         Healthy,
         Injured,
         Downed,
+        Trapped,
         Carried,
         Hooked,
         Dead
@@ -683,6 +739,15 @@ private:
     [[nodiscard]] static float DistanceXZ(const glm::vec3& a, const glm::vec3& b);
     [[nodiscard]] static float DistancePointToSegment(const glm::vec3& point, const glm::vec3& segmentA, const glm::vec3& segmentB);
     [[nodiscard]] static glm::vec3 ForwardFromYawPitch(float yaw, float pitch);
+    void InitializeLoadoutCatalog();
+    void RefreshLoadoutModifiers();
+    void ResetItemAndPowerRuntimeState();
+    void UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt);
+    void UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt);
+    engine::scene::Entity SpawnBearTrap(const glm::vec3& basePosition, const glm::vec3& forward);
+    void ClearAllBearTraps();
+    void TryTriggerBearTraps(engine::scene::Entity survivorEntity, const glm::vec3& survivorPos);
     static const char* CameraModeToName(CameraMode mode);
     [[nodiscard]] const char* MapTypeToName(MapType type) const;
     static std::uint8_t MapTypeToByte(MapType type);
@@ -847,6 +912,26 @@ private:
     perks::PerkSystem m_perkSystem;
     perks::PerkLoadout m_survivorPerks;
     perks::PerkLoadout m_killerPerks;
+
+    loadout::GameplayCatalog m_loadoutCatalog;
+    loadout::LoadoutSurvivor m_survivorLoadout;
+    loadout::LoadoutKiller m_killerLoadout;
+    loadout::AddonModifierContext m_survivorItemModifiers;
+    loadout::AddonModifierContext m_killerPowerModifiers;
+    std::string m_selectedSurvivorCharacterId = "survivor_dwight";
+    std::string m_selectedKillerCharacterId = "killer_trapper";
+    bool m_trapDebugEnabled = false;
+
+    struct SurvivorItemRuntimeState
+    {
+        float charges = 0.0F;
+        bool active = false;
+        float cooldown = 0.0F;
+        float flashBlindAccum = 0.0F;
+        float mapPulseTtl = 0.0F;
+    };
+
+    SurvivorItemRuntimeState m_survivorItemState{};
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
 

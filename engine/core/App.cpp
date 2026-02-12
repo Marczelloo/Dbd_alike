@@ -1568,6 +1568,21 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     writePerks(snapshot.survivorPerkIds);
     writePerks(snapshot.killerPerkIds);
 
+    auto writeString = [&](const std::string& value, std::uint16_t maxLen) {
+        const std::uint16_t length = static_cast<std::uint16_t>(std::min<std::size_t>(value.size(), maxLen));
+        AppendValue(outBuffer, length);
+        outBuffer.insert(outBuffer.end(), value.begin(), value.begin() + length);
+    };
+
+    writeString(snapshot.survivorCharacterId, 128);
+    writeString(snapshot.killerCharacterId, 128);
+    writeString(snapshot.survivorItemId, 128);
+    writeString(snapshot.survivorItemAddonA, 128);
+    writeString(snapshot.survivorItemAddonB, 128);
+    writeString(snapshot.killerPowerId, 128);
+    writeString(snapshot.killerPowerAddonA, 128);
+    writeString(snapshot.killerPowerAddonB, 128);
+
     auto writeActor = [&](const game::gameplay::GameplaySystems::ActorSnapshot& actor) {
         AppendValue(outBuffer, actor.position.x);
         AppendValue(outBuffer, actor.position.y);
@@ -1597,6 +1612,8 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     AppendValue(outBuffer, snapshot.chaseTimeSinceCenterFOV);
     AppendValue(outBuffer, snapshot.chaseTimeInChase);
     AppendValue(outBuffer, snapshot.bloodlustTier);
+    AppendValue(outBuffer, snapshot.survivorItemCharges);
+    AppendValue(outBuffer, snapshot.survivorItemActive);
 
     const std::uint16_t palletCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.pallets.size(), 1024));
     AppendValue(outBuffer, palletCount);
@@ -1612,6 +1629,25 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
         AppendValue(outBuffer, pallet.halfExtents.x);
         AppendValue(outBuffer, pallet.halfExtents.y);
         AppendValue(outBuffer, pallet.halfExtents.z);
+    }
+
+    const std::uint16_t trapCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.traps.size(), 1024));
+    AppendValue(outBuffer, trapCount);
+    for (std::size_t i = 0; i < trapCount; ++i)
+    {
+        const auto& trap = snapshot.traps[i];
+        AppendValue(outBuffer, trap.entity);
+        AppendValue(outBuffer, trap.state);
+        AppendValue(outBuffer, trap.trappedEntity);
+        AppendValue(outBuffer, trap.position.x);
+        AppendValue(outBuffer, trap.position.y);
+        AppendValue(outBuffer, trap.position.z);
+        AppendValue(outBuffer, trap.halfExtents.x);
+        AppendValue(outBuffer, trap.halfExtents.y);
+        AppendValue(outBuffer, trap.halfExtents.z);
+        AppendValue(outBuffer, trap.escapeChance);
+        AppendValue(outBuffer, trap.escapeAttempts);
+        AppendValue(outBuffer, trap.maxEscapeAttempts);
     }
 
     return true;
@@ -1662,6 +1698,33 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         return false;
     }
 
+    auto readString = [&](std::string& outValue) {
+        std::uint16_t length = 0;
+        if (!ReadValue(buffer, offset, length))
+        {
+            return false;
+        }
+        if (offset + length > buffer.size())
+        {
+            return false;
+        }
+        outValue.assign(reinterpret_cast<const char*>(buffer.data() + offset), length);
+        offset += length;
+        return true;
+    };
+
+    if (!readString(outSnapshot.survivorCharacterId) ||
+        !readString(outSnapshot.killerCharacterId) ||
+        !readString(outSnapshot.survivorItemId) ||
+        !readString(outSnapshot.survivorItemAddonA) ||
+        !readString(outSnapshot.survivorItemAddonB) ||
+        !readString(outSnapshot.killerPowerId) ||
+        !readString(outSnapshot.killerPowerAddonA) ||
+        !readString(outSnapshot.killerPowerAddonB))
+    {
+        return false;
+    }
+
     auto readActor = [&](game::gameplay::GameplaySystems::ActorSnapshot& actor) {
         return ReadValue(buffer, offset, actor.position.x) &&
                ReadValue(buffer, offset, actor.position.y) &&
@@ -1695,7 +1758,9 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceLOS) ||
         !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceCenterFOV) ||
         !ReadValue(buffer, offset, outSnapshot.chaseTimeInChase) ||
-        !ReadValue(buffer, offset, outSnapshot.bloodlustTier))
+        !ReadValue(buffer, offset, outSnapshot.bloodlustTier) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemCharges) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemActive))
     {
         return false;
     }
@@ -1730,6 +1795,34 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         }
 
         outSnapshot.pallets.push_back(pallet);
+    }
+
+    std::uint16_t trapCount = 0;
+    if (!ReadValue(buffer, offset, trapCount))
+    {
+        return false;
+    }
+    outSnapshot.traps.clear();
+    outSnapshot.traps.reserve(trapCount);
+    for (std::uint16_t i = 0; i < trapCount; ++i)
+    {
+        game::gameplay::GameplaySystems::TrapSnapshot trap;
+        if (!ReadValue(buffer, offset, trap.entity) ||
+            !ReadValue(buffer, offset, trap.state) ||
+            !ReadValue(buffer, offset, trap.trappedEntity) ||
+            !ReadValue(buffer, offset, trap.position.x) ||
+            !ReadValue(buffer, offset, trap.position.y) ||
+            !ReadValue(buffer, offset, trap.position.z) ||
+            !ReadValue(buffer, offset, trap.halfExtents.x) ||
+            !ReadValue(buffer, offset, trap.halfExtents.y) ||
+            !ReadValue(buffer, offset, trap.halfExtents.z) ||
+            !ReadValue(buffer, offset, trap.escapeChance) ||
+            !ReadValue(buffer, offset, trap.escapeAttempts) ||
+            !ReadValue(buffer, offset, trap.maxEscapeAttempts))
+        {
+            return false;
+        }
+        outSnapshot.traps.push_back(trap);
     }
 
     return true;
@@ -3906,6 +3999,54 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     const std::vector<std::string> roleItems{"Survivor", "Killer"};
     const std::vector<std::string> mapItems{"main_map", "collision_test", "test"};
     const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
+    const auto survivorCharacters = m_gameplay.ListSurvivorCharacters();
+    const auto killerCharacters = m_gameplay.ListKillerCharacters();
+    const auto survivorItems = m_gameplay.GetLoadoutCatalog().ListItemIds();
+    const auto killerPowers = m_gameplay.GetLoadoutCatalog().ListPowerIds();
+
+    auto makeWithNone = [](const std::vector<std::string>& source) {
+        std::vector<std::string> out;
+        out.reserve(source.size() + 1);
+        out.push_back("none");
+        out.insert(out.end(), source.begin(), source.end());
+        return out;
+    };
+
+    const std::string selectedItemId =
+        (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0 && m_menuSurvivorItemIndex < static_cast<int>(survivorItems.size()))
+            ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+            : (survivorItems.empty() ? std::string{} : survivorItems.front());
+    const std::string selectedPowerId =
+        (!killerPowers.empty() && m_menuKillerPowerIndex >= 0 && m_menuKillerPowerIndex < static_cast<int>(killerPowers.size()))
+            ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+            : (killerPowers.empty() ? std::string{} : killerPowers.front());
+    const std::vector<std::string> survivorAddonOptions = makeWithNone(
+        m_gameplay.GetLoadoutCatalog().ListAddonIdsForTarget(game::gameplay::loadout::TargetKind::Item, selectedItemId)
+    );
+    const std::vector<std::string> killerAddonOptions = makeWithNone(
+        m_gameplay.GetLoadoutCatalog().ListAddonIdsForTarget(game::gameplay::loadout::TargetKind::Power, selectedPowerId)
+    );
+
+    auto clampDropdownIndex = [](int& index, std::size_t count) {
+        if (count == 0)
+        {
+            index = -1;
+            return;
+        }
+        if (index < 0 || index >= static_cast<int>(count))
+        {
+            index = 0;
+        }
+    };
+    clampDropdownIndex(m_menuSurvivorCharacterIndex, survivorCharacters.size());
+    clampDropdownIndex(m_menuKillerCharacterIndex, killerCharacters.size());
+    clampDropdownIndex(m_menuSurvivorItemIndex, survivorItems.size());
+    clampDropdownIndex(m_menuKillerPowerIndex, killerPowers.size());
+    clampDropdownIndex(m_menuSurvivorAddonAIndex, survivorAddonOptions.size());
+    clampDropdownIndex(m_menuSurvivorAddonBIndex, survivorAddonOptions.size());
+    clampDropdownIndex(m_menuKillerAddonAIndex, killerAddonOptions.size());
+    clampDropdownIndex(m_menuKillerAddonBIndex, killerAddonOptions.size());
+
     if (m_menuSavedMapIndex >= static_cast<int>(savedMaps.size()))
     {
         m_menuSavedMapIndex = savedMaps.empty() ? -1 : 0;
@@ -3946,6 +4087,32 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Label("Session", m_ui.Theme().colorAccent);
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
+    if (!survivorCharacters.empty())
+    {
+        m_ui.Dropdown("survivor_character", "Survivor Character", &m_menuSurvivorCharacterIndex, survivorCharacters);
+    }
+    if (!killerCharacters.empty())
+    {
+        m_ui.Dropdown("killer_character", "Killer Character", &m_menuKillerCharacterIndex, killerCharacters);
+    }
+    if (!survivorItems.empty())
+    {
+        m_ui.Dropdown("survivor_item", "Survivor Item", &m_menuSurvivorItemIndex, survivorItems);
+    }
+    if (!survivorAddonOptions.empty())
+    {
+        m_ui.Dropdown("survivor_item_addon_a", "Survivor Addon A", &m_menuSurvivorAddonAIndex, survivorAddonOptions);
+        m_ui.Dropdown("survivor_item_addon_b", "Survivor Addon B", &m_menuSurvivorAddonBIndex, survivorAddonOptions);
+    }
+    if (!killerPowers.empty())
+    {
+        m_ui.Dropdown("killer_power", "Killer Power", &m_menuKillerPowerIndex, killerPowers);
+    }
+    if (!killerAddonOptions.empty())
+    {
+        m_ui.Dropdown("killer_power_addon_a", "Killer Addon A", &m_menuKillerAddonAIndex, killerAddonOptions);
+        m_ui.Dropdown("killer_power_addon_b", "Killer Addon B", &m_menuKillerAddonBIndex, killerAddonOptions);
+    }
 
     std::string portText = std::to_string(m_menuPort);
     if (m_ui.InputText("menu_port", "Port", &portText, 6))
@@ -3963,8 +4130,48 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
+    auto applyMenuGameplaySelections = [&]() {
+        if (!survivorCharacters.empty())
+        {
+            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+        }
+        if (!killerCharacters.empty())
+        {
+            m_gameplay.SetSelectedKillerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+        }
+        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
+                                       ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+                                       : std::string{};
+        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
+                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
+                                           : std::string{"none"};
+        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
+                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
+                                           : std::string{"none"};
+        m_gameplay.SetSurvivorItemLoadout(
+            itemId,
+            itemAddonA == "none" ? "" : itemAddonA,
+            itemAddonB == "none" ? "" : itemAddonB
+        );
+
+        const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
+                                        ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+                                        : std::string{};
+        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
+                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
+                                            : std::string{"none"};
+        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
+                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
+                                            : std::string{"none"};
+        m_gameplay.SetKillerPowerLoadout(
+            powerId,
+            powerAddonA == "none" ? "" : powerAddonA,
+            powerAddonB == "none" ? "" : powerAddonB
+        );
+    };
     if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
     {
+        applyMenuGameplaySelections();
         StartSoloSession(mapName, roleName);
     }
 
@@ -3973,6 +4180,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_ui.Dropdown("saved_maps", "Play Saved Map", &m_menuSavedMapIndex, savedMaps);
         if (m_ui.Button("play_saved", "Play Map"))
         {
+            applyMenuGameplaySelections();
             StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
         }
     }
@@ -4008,10 +4216,12 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Label("Multiplayer", m_ui.Theme().colorAccent);
     if (m_ui.Button("host_btn", "Host Multiplayer"))
     {
+        applyMenuGameplaySelections();
         StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
     }
     if (m_ui.Button("join_btn", "Join Multiplayer"))
     {
+        applyMenuGameplaySelections();
         StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
     }
 
@@ -4540,6 +4750,30 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         "Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal),
         m_ui.Theme().colorAccent
     );
+    m_ui.Label(
+        "Survivor: " + hudState.survivorCharacterId + " | Killer: " + hudState.killerCharacterId,
+        m_ui.Theme().colorTextMuted
+    );
+    m_ui.Label(
+        "Item: " + hudState.survivorItemId +
+            " [" + hudState.survivorItemAddonA + ", " + hudState.survivorItemAddonB + "]"
+            " charges=" + std::to_string(hudState.survivorItemCharges),
+        hudState.survivorItemActive ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
+    );
+    m_ui.Label(
+        "Power: " + hudState.killerPowerId +
+            " [" + hudState.killerPowerAddonA + ", " + hudState.killerPowerAddonB + "]"
+            " traps=" + std::to_string(hudState.activeTrapCount),
+        m_ui.Theme().colorTextMuted
+    );
+    if (hudState.survivorStateName == "Trapped")
+    {
+        m_ui.Label(
+            "TRAPPED attempts: " + std::to_string(hudState.trappedEscapeAttempts) +
+                " chance: " + std::to_string(static_cast<int>(hudState.trappedEscapeChance * 100.0F)) + "%",
+            m_ui.Theme().colorDanger
+        );
+    }
     m_ui.EndPanel();
 
     if (hudState.debugDrawEnabled)
