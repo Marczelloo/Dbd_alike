@@ -3,6 +3,7 @@
   "description": "Reveals key interactables/traps around survivor.",
   "display_name": "Map",
   "id": "map",
+  "mesh_path": "assets/meshes/items/map.glb",
   "max_charges": 5.0,
   "params": {
     "channel_seconds": 0.75,

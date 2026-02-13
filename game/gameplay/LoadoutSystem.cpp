@@ -495,6 +495,7 @@ bool GameplayCatalog::LoadItems()
         item.id = root.value("id", std::string{});
         item.displayName = root.value("display_name", item.id);
         item.description = root.value("description", std::string{});
+        item.meshPath = root.value("mesh_path", std::string{});
         item.maxCharges = root.value("max_charges", 0.0F);
         item.useMode = root.value("use_mode", std::string{"hold"});
         if (root.contains("params") && root["params"].is_object())

@@ -3,6 +3,7 @@
   "description": "Repairs generators faster while charges remain.",
   "display_name": "Toolbox",
   "id": "toolbox",
+  "mesh_path": "assets/meshes/items/toolbox.glb",
   "max_charges": 15.0,
   "params": {
     "charge_per_second": 1.0,

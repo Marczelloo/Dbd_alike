@@ -56,6 +56,7 @@ struct ItemDefinition
     std::string id;
     std::string displayName;
     std::string description;
+    std::string meshPath;
     float maxCharges = 0.0F;
     std::string useMode = "hold";
     std::unordered_map<std::string, float> params;

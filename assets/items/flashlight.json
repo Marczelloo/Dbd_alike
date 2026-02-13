@@ -3,6 +3,7 @@
   "description": "Beam can blind/stun killer after exposure.",
   "display_name": "Flashlight",
   "id": "flashlight",
+  "mesh_path": "assets/meshes/items/flashlight.glb",
   "max_charges": 8.0,
   "params": {
     "beam_angle_deg": 22.0,

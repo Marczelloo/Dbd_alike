@@ -3,6 +3,7 @@
   "description": "Self-heal item with charges.",
   "display_name": "Medkit",
   "id": "medkit",
+  "mesh_path": "assets/meshes/items/medkit.glb",
   "max_charges": 24.0,
   "params": {
     "full_heal_charges": 16.0,
