@@ -212,7 +212,9 @@ private:
         float height,
         float radius,
         const glm::vec3& color,
-        const MaterialParams& material
+        const MaterialParams& material,
+        int segments = 16,
+        int hemiRings = 6
     );
     void AddSolidTriangle(
         const glm::vec3& a,

@@ -224,6 +224,7 @@ private:
         glm::vec3 trailHead{0.0F};
         glm::vec3 trailVelocity{0.0F};
         glm::vec3 lastInstancePosition{0.0F};
+        FxEmitterAsset cachedEmitter; // Cached parameterized copy (avoids per-frame alloc).
     };
 
     struct FxInstance

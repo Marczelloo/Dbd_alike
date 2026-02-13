@@ -864,7 +864,26 @@ void Renderer::DrawCapsule(
     }
     else
     {
-        AddSolidCapsule(center, height, radius, color, material);
+        // Distance-based LOD for capsule tessellation.
+        const float distSq = glm::dot(center - m_cameraWorldPosition, center - m_cameraWorldPosition);
+        int segments = 16;
+        int hemiRings = 6;
+        if (distSq > 900.0F)       // > 30m
+        {
+            segments = 6;
+            hemiRings = 2;
+        }
+        else if (distSq > 225.0F)  // > 15m
+        {
+            segments = 8;
+            hemiRings = 3;
+        }
+        else if (distSq > 64.0F)   // > 8m
+        {
+            segments = 12;
+            hemiRings = 4;
+        }
+        AddSolidCapsule(center, height, radius, color, material, segments, hemiRings);
     }
 }
 
@@ -1416,11 +1435,11 @@ void Renderer::AddSolidCapsule(
     float height,
     float radius,
     const glm::vec3& color,
-    const MaterialParams& material
+    const MaterialParams& material,
+    int segments,
+    int hemiRings
 )
 {
-    constexpr int segments = 16;
-    constexpr int hemiRings = 6;
 
     const float halfCylinder = std::max(0.0F, height * 0.5F - radius);
     const glm::vec3 topCenter = center + glm::vec3{0.0F, halfCylinder, 0.0F};

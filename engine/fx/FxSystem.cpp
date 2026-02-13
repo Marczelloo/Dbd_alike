@@ -689,7 +689,15 @@ void FxSystem::UpdateEmitter(FxInstance& instance, EmitterRuntime& emitterRuntim
     {
         return;
     }
-    const FxEmitterAsset emitter = BuildEmitterWithParams(*emitterRuntime.emitter, instance.parameters);
+
+    // Fast path: skip full copy if no parameter overrides exist.
+    const bool hasParamOverrides = !instance.parameters.values.empty() &&
+        (!emitterRuntime.emitter->rateParam.empty() ||
+         !emitterRuntime.emitter->sizeParam.empty() ||
+         !emitterRuntime.emitter->colorParam.empty());
+    const FxEmitterAsset& emitter = hasParamOverrides
+        ? (emitterRuntime.cachedEmitter = BuildEmitterWithParams(*emitterRuntime.emitter, instance.parameters))
+        : *emitterRuntime.emitter;
     emitterRuntime.age += dt;
 
     if (emitter.localSpace)
