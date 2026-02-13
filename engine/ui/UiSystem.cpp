@@ -407,6 +407,7 @@ bool UiSystem::IsShiftDown() const
 std::string UiSystem::CollectTypedCharacters() const
 {
     std::string result;
+    result.reserve(16);
     if (m_input == nullptr)
     {
         return result;

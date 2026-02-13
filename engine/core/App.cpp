@@ -436,6 +436,49 @@ bool App::Run()
                 m_menuKillerPerks[i] = perkArray[i];
             }
         }
+        
+        // Apply character/item/power selections from lobby
+        const auto& lobbyState = m_lobbyScene.GetState();
+        if (!lobbyState.selectedCharacter.empty())
+        {
+            if (role == "survivor")
+            {
+                m_gameplay.SetSelectedSurvivorCharacter(lobbyState.selectedCharacter);
+            }
+            else
+            {
+                m_gameplay.SetSelectedKillerCharacter(lobbyState.selectedCharacter);
+            }
+        }
+        
+        // Apply item/power loadouts from lobby
+        if (role == "survivor")
+        {
+            m_gameplay.SetSurvivorItemLoadout(
+                lobbyState.selectedItem,
+                lobbyState.selectedAddonA,
+                lobbyState.selectedAddonB
+            );
+        }
+        else
+        {
+            // For killer, get the power from selected character or use the selected power
+            std::string powerId = lobbyState.selectedPower;
+            if (!lobbyState.selectedCharacter.empty())
+            {
+                const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(lobbyState.selectedCharacter);
+                if (killerDef != nullptr && !killerDef->powerId.empty())
+                {
+                    powerId = killerDef->powerId;
+                }
+            }
+            m_gameplay.SetKillerPowerLoadout(
+                powerId,
+                lobbyState.selectedAddonA,
+                lobbyState.selectedAddonB
+            );
+        }
+        
         m_lobbyScene.ExitLobby();
         StartSoloSession(map, role);
     });
@@ -444,6 +487,18 @@ bool App::Run()
     });
     m_lobbyScene.SetRoleChangedCallback([this](const std::string& role) {
         m_sessionRoleName = role;
+    });
+    m_lobbyScene.SetCharacterChangedCallback([this](const std::string& characterId) {
+        // Update character selection in gameplay systems
+        const bool isSurvivor = (m_sessionRoleName == "survivor");
+        if (isSurvivor)
+        {
+            m_gameplay.SetSelectedSurvivorCharacter(characterId);
+        }
+        else
+        {
+            m_gameplay.SetSelectedKillerCharacter(characterId);
+        }
     });
 
     if (!m_console.Initialize(m_window))
@@ -660,6 +715,7 @@ bool App::Run()
         bool shouldQuit = false;
         bool closePauseMenu = false;
         bool backToMenu = false;
+        std::optional<game::gameplay::HudState> frameHudState;
 
         m_console.BeginFrame();
 
@@ -754,7 +810,8 @@ bool App::Run()
 
         if (m_appMode == AppMode::InGame)
         {
-            const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+            frameHudState = m_gameplay.BuildHudState();
+            const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
             
             m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
@@ -864,7 +921,7 @@ bool App::Run()
         m_ui.EndFrame();
 
         // Build HUD state before rendering toolbar (needed for game stats display)
-        game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        game::gameplay::HudState hudState = frameHudState.has_value() ? *frameHudState : m_gameplay.BuildHudState();
         hudState.isInGame = (m_appMode == AppMode::InGame);
 
         // Render developer toolbar LAST to be on top of everything
@@ -1168,6 +1225,96 @@ void App::ResetToMainMenu()
     {
         TransitionNetworkState(NetworkState::Offline, "Main menu");
     }
+}
+
+void App::InitializeLobbySelections(const std::string& roleName)
+{
+    const bool isSurvivor = (roleName == "survivor");
+    const auto& catalog = m_gameplay.GetLoadoutCatalog();
+    const auto& perkSystem = m_gameplay.GetPerkSystem();
+    
+    // Set available perks
+    const auto availablePerks = isSurvivor 
+        ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
+        : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+    std::vector<std::string> perkIds = availablePerks;
+    std::vector<std::string> perkNames;
+    for (const auto& id : availablePerks)
+    {
+        const auto* perk = perkSystem.GetPerk(id);
+        perkNames.push_back(perk ? perk->name : id);
+    }
+    m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+    
+    // Set available characters
+    const auto survivorChars = m_gameplay.ListSurvivorCharacters();
+    const auto killerChars = m_gameplay.ListKillerCharacters();
+    std::vector<std::string> survivorIds = survivorChars;
+    std::vector<std::string> survivorNames;
+    std::vector<std::string> killerIds = killerChars;
+    std::vector<std::string> killerNames;
+    
+    for (const auto& id : survivorChars)
+    {
+        const auto* def = catalog.FindSurvivor(id);
+        survivorNames.push_back(def ? def->displayName : id);
+    }
+    for (const auto& id : killerChars)
+    {
+        const auto* def = catalog.FindKiller(id);
+        killerNames.push_back(def ? def->displayName : id);
+    }
+    m_lobbyScene.SetAvailableCharacters(survivorIds, survivorNames, killerIds, killerNames);
+    
+    // Set available items (for survivors)
+    const auto items = catalog.ListItemIds();
+    std::vector<std::string> itemNames;
+    for (const auto& id : items)
+    {
+        const auto* def = catalog.FindItem(id);
+        itemNames.push_back(def ? def->displayName : id);
+    }
+    m_lobbyScene.SetAvailableItems(items, itemNames);
+    
+    // Set available powers (for killers)
+    const auto powers = catalog.ListPowerIds();
+    std::vector<std::string> powerNames;
+    for (const auto& id : powers)
+    {
+        const auto* def = catalog.FindPower(id);
+        powerNames.push_back(def ? def->displayName : id);
+    }
+    m_lobbyScene.SetAvailablePowers(powers, powerNames);
+    
+    // Set available addons
+    // For survivors, addons relate to items; for killers, addons relate to powers
+    // We'll combine both lists for simplicity
+    std::vector<std::string> allAddonIds;
+    std::vector<std::string> allAddonNames;
+    
+    if (isSurvivor && !items.empty())
+    {
+        const auto itemAddons = catalog.ListAddonIdsForTarget(
+            game::gameplay::loadout::TargetKind::Item, items.front());
+        for (const auto& id : itemAddons)
+        {
+            const auto* def = catalog.FindAddon(id);
+            allAddonIds.push_back(id);
+            allAddonNames.push_back(def ? def->displayName : id);
+        }
+    }
+    else if (!isSurvivor && !powers.empty())
+    {
+        const auto powerAddons = catalog.ListAddonIdsForTarget(
+            game::gameplay::loadout::TargetKind::Power, powers.front());
+        for (const auto& id : powerAddons)
+        {
+            const auto* def = catalog.FindAddon(id);
+            allAddonIds.push_back(id);
+            allAddonNames.push_back(def ? def->displayName : id);
+        }
+    }
+    m_lobbyScene.SetAvailableAddons(allAddonIds, allAddonNames);
 }
 
 void App::StartSoloSession(const std::string& mapName, const std::string& roleName)
@@ -3692,10 +3839,12 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
         return;
     }
 
+    const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+
     // Early exit for Killer: only chase layer matters
     if (localPlayerIsKiller)
     {
-        const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+        const bool chaseActive = hudState.chaseActive;
         const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
 
         for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
@@ -3723,7 +3872,7 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
     const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
     const float distance = glm::length(delta);
     const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
-    const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+    const bool chaseActive = hudState.chaseActive;
 
     // Track chase state transitions for anti-leak guard
     const bool justEnteredChase = chaseActive && !m_chaseWasActive;
@@ -3846,6 +3995,7 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 std::string App::DumpTerrorRadiusState() const
 {
     std::string out = "=== Terror Radius State ===\n";
+    const auto hudState = m_gameplay.BuildHudState();
 
     // Phase B1: Local role and audio routing info
     out += "Local Role: " + m_localPlayer.controlledRole + "\n";
@@ -3854,7 +4004,6 @@ std::string App::DumpTerrorRadiusState() const
     out += "TR Enabled: " + std::string(localPlayerIsSurvivor ? "YES" : "NO") + "\n";
     if (localPlayerIsKiller)
     {
-        const auto hudState = m_gameplay.BuildHudState();
         out += "Chase Enabled for Killer: " + std::string(hudState.chaseActive ? "YES" : "NO") + "\n";
     }
 
@@ -3888,7 +4037,6 @@ std::string App::DumpTerrorRadiusState() const
     }
 
     // Chase state
-    const auto hudState = m_gameplay.BuildHudState();
     out += std::string("Chase Active: ") + (hudState.chaseActive ? "YES" : "NO") + "\n";
 
     // Bus volume
@@ -4491,119 +4639,27 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.Spacer(24.0F * scale);
 
-    // Session settings
+    // Session settings - simplified to role and map only
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
-    if (!survivorCharacters.empty())
-    {
-        m_ui.Dropdown("survivor_character", "Survivor Character", &m_menuSurvivorCharacterIndex, survivorCharacters);
-    }
-    if (!killerCharacters.empty())
-    {
-        if (m_ui.Dropdown("killer_character", "Killer Character", &m_menuKillerCharacterIndex, killerCharacters))
-        {
-            const std::string& killerId = killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)];
-            m_gameplay.SetSelectedKillerCharacter(killerId);
-            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(killerId);
-            if (killerDef != nullptr && !killerDef->powerId.empty() && !killerPowers.empty())
-            {
-                const auto it = std::find(killerPowers.begin(), killerPowers.end(), killerDef->powerId);
-                if (it != killerPowers.end())
-                {
-                    m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
-                }
-            }
-        }
-    }
-    if (!survivorItems.empty())
-    {
-        m_ui.Dropdown("survivor_item", "Survivor Item", &m_menuSurvivorItemIndex, survivorItems);
-    }
-    if (!survivorAddonOptions.empty())
-    {
-        m_ui.Dropdown("survivor_item_addon_a", "Survivor Addon A", &m_menuSurvivorAddonAIndex, survivorAddonOptions);
-        m_ui.Dropdown("survivor_item_addon_b", "Survivor Addon B", &m_menuSurvivorAddonBIndex, survivorAddonOptions);
-    }
-    if (!killerPowers.empty())
-    {
-        m_ui.Dropdown("killer_power", "Killer Power", &m_menuKillerPowerIndex, killerPowers);
-    }
-    if (!killerAddonOptions.empty())
-    {
-        m_ui.Dropdown("killer_power_addon_a", "Killer Addon A", &m_menuKillerAddonAIndex, killerAddonOptions);
-        m_ui.Dropdown("killer_power_addon_b", "Killer Addon B", &m_menuKillerAddonBIndex, killerAddonOptions);
-    }
 
     const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
+    
+    // Apply default selections for PLAY button (defaults only - lobby handles custom selections)
     auto applyMenuGameplaySelections = [&]() {
+        // Use first available character as default
         if (!survivorCharacters.empty())
         {
-            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters.front());
         }
         if (!killerCharacters.empty())
         {
-            m_gameplay.SetSelectedKillerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            m_gameplay.SetSelectedKillerCharacter(killerCharacters.front());
         }
-
-        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
-                                       ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
-                                       : std::string{};
-        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
-                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
-                                           : std::string{"none"};
-        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
-                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
-                                           : std::string{"none"};
-        m_gameplay.SetSurvivorItemLoadout(
-            itemId,
-            itemAddonA == "none" ? "" : itemAddonA,
-            itemAddonB == "none" ? "" : itemAddonB
-        );
-
-        std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
-                                  ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
-                                  : std::string{};
-        bool powerForcedByCharacter = false;
-        if (!killerCharacters.empty() && m_menuKillerCharacterIndex >= 0 &&
-            m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
-        {
-            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(
-                killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]
-            );
-            if (killerDef != nullptr && !killerDef->powerId.empty())
-            {
-                powerId = killerDef->powerId;
-                powerForcedByCharacter = true;
-                if (!killerPowers.empty())
-                {
-                    const auto it = std::find(killerPowers.begin(), killerPowers.end(), powerId);
-                    if (it != killerPowers.end())
-                    {
-                        m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
-                    }
-                }
-            }
-        }
-
-        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
-                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
-                                            : std::string{"none"};
-        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
-                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
-                                            : std::string{"none"};
-        const std::string resolvedPowerAddonA = powerForcedByCharacter ? std::string{"none"} : powerAddonA;
-        const std::string resolvedPowerAddonB = powerForcedByCharacter ? std::string{"none"} : powerAddonB;
-        if (powerForcedByCharacter)
-        {
-            m_menuKillerAddonAIndex = 0;
-            m_menuKillerAddonBIndex = 0;
-        }
-        m_gameplay.SetKillerPowerLoadout(
-            powerId,
-            resolvedPowerAddonA == "none" ? "" : resolvedPowerAddonA,
-            resolvedPowerAddonB == "none" ? "" : resolvedPowerAddonB
-        );
+        // Clear item/power loadouts (let gameplay systems use defaults)
+        m_gameplay.SetSurvivorItemLoadout("", "", "");
+        m_gameplay.SetKillerPowerLoadout("", "", "");
     };
 
     m_ui.Spacer(12.0F * scale);
@@ -4614,7 +4670,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
     {
-        applyMenuGameplaySelections();
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
         localPlayer.netId = 1;
@@ -4622,6 +4677,10 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         localPlayer.selectedRole = roleName;
         localPlayer.isHost = true;
         localPlayer.isConnected = true;
+        
+        // Setup lobby with available selections
+        InitializeLobbySelections(roleName);
+        
         m_lobbyScene.SetPlayers({localPlayer});
         m_lobbyScene.SetLocalPlayerRole(roleName);
         m_lobbyScene.SetLocalPlayerPerks({m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]});
@@ -4659,7 +4718,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Spacer(8.0F * scale);
     if (m_ui.Button("host_btn", "HOST GAME"))
     {
-        applyMenuGameplaySelections();
         // Host goes to lobby
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
@@ -4669,31 +4727,18 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         localPlayer.isHost = true;
         localPlayer.isConnected = true;
         
-        // Set available perks based on role
-        const bool isSurvivor = (roleName == "survivor");
-        const auto& perkSystem = m_gameplay.GetPerkSystem();
-        const auto availablePerks = isSurvivor 
-            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
-            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
-        std::vector<std::string> perkIds = availablePerks;
-        std::vector<std::string> perkNames;
-        for (const auto& id : availablePerks)
-        {
-            const auto* perk = perkSystem.GetPerk(id);
-            perkNames.push_back(perk ? perk->name : id);
-        }
-        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        // Setup lobby with available selections
+        InitializeLobbySelections(roleName);
         
         m_lobbyScene.SetPlayers({localPlayer});
         m_lobbyScene.SetLocalPlayerRole(roleName);
-        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+        m_lobbyScene.SetLocalPlayerPerks((roleName == "survivor")
             ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
             : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
         m_lobbyScene.EnterLobby();
     }
     if (m_ui.Button("join_btn", "JOIN GAME"))
     {
-        applyMenuGameplaySelections();
         // Join goes to lobby (simulated for now)
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer hostPlayer;
@@ -4710,24 +4755,12 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         localPlayer.isHost = false;
         localPlayer.isConnected = true;
         
-        // Set available perks based on role
-        const bool isSurvivor = (roleName == "survivor");
-        const auto& perkSystem = m_gameplay.GetPerkSystem();
-        const auto availablePerks = isSurvivor 
-            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
-            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
-        std::vector<std::string> perkIds = availablePerks;
-        std::vector<std::string> perkNames;
-        for (const auto& id : availablePerks)
-        {
-            const auto* perk = perkSystem.GetPerk(id);
-            perkNames.push_back(perk ? perk->name : id);
-        }
-        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        // Setup lobby with available selections
+        InitializeLobbySelections(roleName);
         
         m_lobbyScene.SetPlayers({hostPlayer, localPlayer});
         m_lobbyScene.SetLocalPlayerRole(roleName);
-        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+        m_lobbyScene.SetLocalPlayerPerks((roleName == "survivor")
             ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
             : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
         m_lobbyScene.EnterLobby();
