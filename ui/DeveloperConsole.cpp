@@ -3270,6 +3270,12 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
         }
     }
 
+    // Draw profiler overlay before ImGui::Render()
+    if (context.profilerDraw)
+    {
+        context.profilerDraw();
+    }
+
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 #else

@@ -76,6 +76,7 @@ struct ConsoleContext
     std::function<void(bool)> profilerSetCompact;
     std::function<void(int)> profilerBenchmark;
     std::function<void()> profilerBenchmarkStop;
+    std::function<void()> profilerDraw;  // Draw profiler overlay (called before ImGui::Render)
 
     // Automated perf test callbacks.
     std::function<void(const std::string&, int)> perfTest; // (mapName, frames)

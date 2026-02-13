@@ -1,7 +1,9 @@
 #include "engine/ui/ProfilerOverlay.hpp"
 #include "engine/core/Profiler.hpp"
 
-#ifdef HAS_IMGUI
+// Support both macro names (HAS_IMGUI is legacy, BUILD_WITH_IMGUI is from CMake)
+#if defined(HAS_IMGUI) || defined(BUILD_WITH_IMGUI)
+#define IMGUI_ENABLED 1
 #include <imgui.h>
 #endif
 
@@ -13,7 +15,7 @@ namespace engine::ui
 
 void ProfilerOverlay::Draw([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     if (!m_visible)
     {
         return;
@@ -104,7 +106,7 @@ void ProfilerOverlay::Draw([[maybe_unused]] engine::core::Profiler& profiler)
 
 void ProfilerOverlay::DrawFrameTimeGraph([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     const auto& history = profiler.FrameTimeHistory();
 
     // Copy history into a flat array for ImGui plot.
@@ -170,7 +172,7 @@ void ProfilerOverlay::DrawFrameTimeGraph([[maybe_unused]] engine::core::Profiler
 
 void ProfilerOverlay::DrawSectionTable([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     const auto& sections = profiler.Sections();
 
     if (sections.empty())
@@ -216,7 +218,7 @@ void ProfilerOverlay::DrawSectionTable([[maybe_unused]] engine::core::Profiler& 
 
 void ProfilerOverlay::DrawRenderStats([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     const auto& stats = profiler.Stats();
 
     ImGui::Text("Draw Calls: %u", stats.drawCalls);
@@ -238,7 +240,7 @@ void ProfilerOverlay::DrawRenderStats([[maybe_unused]] engine::core::Profiler& p
 
 void ProfilerOverlay::DrawBenchmarkPanel([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     if (profiler.IsBenchmarkRunning())
     {
         ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "BENCHMARK RUNNING...");
@@ -289,17 +291,21 @@ void ProfilerOverlay::DrawBenchmarkPanel([[maybe_unused]] engine::core::Profiler
 
 void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler& profiler)
 {
-#ifdef HAS_IMGUI
+#ifdef IMGUI_ENABLED
     const auto& stats = profiler.Stats();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 260.0F, viewport->WorkPos.y + 2.0F));
-    ImGui::SetNextWindowSize(ImVec2(255.0F, 0.0F));
+    // Position at bottom-right corner
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 2.0F, 
+                                   viewport->WorkPos.y + viewport->WorkSize.y - 2.0F),
+                            ImGuiCond_Always, ImVec2(1.0F, 1.0F));
+    ImGui::SetNextWindowSize(ImVec2(0.0F, 0.0F));
 
+    // Remove NoInputs to allow interaction for close button
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
-                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+                             ImGuiWindowFlags_NoNav;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.85F);
@@ -317,13 +323,36 @@ void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler
         ImGui::TextColored(ImVec4(0.6F, 0.6F, 0.6F, 1.0F), "%.2fms", stats.totalFrameMs);
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.6F, 0.6F, 0.6F, 1.0F), "DC:%u V:%u", stats.drawCalls, stats.verticesSubmitted);
+        
+        // Click anywhere to expand, or click X to close
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5F, 0.2F, 0.2F, 0.6F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8F, 0.3F, 0.3F, 0.8F));
+        if (ImGui::SmallButton("X"))
+        {
+            m_visible = false;
+        }
+        ImGui::PopStyleColor(2);
+        
+        // Make entire window clickable to expand to full mode
+        if (ImGui::IsItemHovered() || ImGui::IsWindowHovered())
+        {
+            if (ImGui::IsMouseClicked(0) && !ImGui::IsItemHovered())
+            {
+                // Left click on window (not on X button) -> expand to full mode
+                m_compactMode = false;
+            }
+        }
+        
+        // Tooltip
+        if (ImGui::IsWindowHovered())
+        {
+            ImGui::SetTooltip("Click to expand | X to close\nOr use: perf_compact off");
+        }
     }
     ImGui::End();
 
     ImGui::PopStyleVar(2);
-
-    // Click-through: if clicked near this area, switch to full mode.
-    // (handled externally via console command)
 #endif
 }
 

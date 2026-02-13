@@ -1205,6 +1205,9 @@ bool App::Run()
         context.profilerBenchmarkStop = []() {
             engine::core::Profiler::Instance().StopBenchmark();
         };
+        context.profilerDraw = [this, &profiler]() {
+            m_profilerOverlay.Draw(profiler);
+        };
 
         // Automated perf test callbacks.
         context.perfTest = [this](const std::string& mapName, int frames) {
@@ -1239,9 +1242,6 @@ bool App::Run()
         };
 
         m_console.Render(context, currentFps, hudState);
-
-        // Profiler overlay (rendered in ImGui pass).
-        m_profilerOverlay.Draw(profiler);
 
         m_window.SwapBuffers();
 
