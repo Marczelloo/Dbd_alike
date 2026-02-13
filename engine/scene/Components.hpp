@@ -120,6 +120,19 @@ struct BearTrapComponent
     float escapeChanceStep = 0.14F;
     int escapeAttempts = 0;
     int maxEscapeAttempts = 6;
+    Entity protectedKiller = 0;
+    float killerProtectionDistance = 2.0F;
+};
+
+struct GroundItemComponent
+{
+    std::string itemId;
+    float charges = 0.0F;
+    std::string addonAId;
+    std::string addonBId;
+    std::uint32_t ownerNetId = 0;
+    bool pickupEnabled = true;
+    bool respawnTag = false;
 };
 
 struct DebugColorComponent

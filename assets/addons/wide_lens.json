@@ -1,0 +1,25 @@
+{
+  "applies_to": {
+    "ids": [
+      "flashlight"
+    ],
+    "kind": "item"
+  },
+  "asset_version": 1,
+  "description": "Flashlight add-on: wider cone, slightly shorter range.",
+  "display_name": "Wide Lens",
+  "hooks": [],
+  "id": "wide_lens",
+  "modifiers": [
+    {
+      "op": "add",
+      "stat": "beam_angle_deg",
+      "value": 6.0
+    },
+    {
+      "op": "mul",
+      "stat": "beam_range",
+      "value": 0.9200000166893005
+    }
+  ]
+}

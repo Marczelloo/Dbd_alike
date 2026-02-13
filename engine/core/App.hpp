@@ -274,6 +274,7 @@ private:
     bool m_settingsOpenedFromPause = false;
     int m_settingsTabIndex = 0;
     std::array<float, 4> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F};
+    float m_mainMenuScrollY = 0.0F;
     bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
 

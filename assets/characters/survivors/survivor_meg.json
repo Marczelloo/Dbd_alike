@@ -1,0 +1,7 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Meg",
+  "id": "survivor_meg",
+  "model_path": "assets/meshes/survivor_meg.glb"
+}

@@ -318,13 +318,17 @@ Placement rules:
   - `Shift` sprint
   - `Ctrl` crouch
   - `E` interact (vault/pallet/heal/repair)
+  - `RMB` use equipped item
+  - `R` drop equipped item
+  - `LMB` pick up nearby ground item
   - `Space` skill check
 - Killer:
   - `WASD` move
   - `Mouse` look
   - `LMB click` short swing
   - `Hold LMB` lunge (instant start + acceleration while held)
-  - `E` interact (pickup/break/hook)
+  - `RMB` use killer power
+  - `E` secondary power action / interact (pickup/reset trap, break/hook)
 - Global:
   - `~` console
   - `F1` debug HUD
@@ -671,7 +675,8 @@ Default assets are auto-generated on startup if missing.
 - `power_dump`
 - `set_survivor <characterId>`
 - `set_killer <characterId>`
-- `trap_spawn`
+- `item_respawn_near [radius]`
+- `trap_spawn [count]`
 - `trap_clear`
 - `trap_debug on|off`
 

@@ -1,0 +1,12 @@
+{
+  "asset_version": 1,
+  "description": "Self-heal item with charges.",
+  "display_name": "Medkit",
+  "id": "medkit",
+  "max_charges": 24.0,
+  "params": {
+    "full_heal_charges": 16.0,
+    "heal_speed_multiplier": 1.5
+  },
+  "use_mode": "hold"
+}

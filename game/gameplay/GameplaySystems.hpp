@@ -165,14 +165,30 @@ struct HudState
     std::string survivorItemAddonA = "none";
     std::string survivorItemAddonB = "none";
     float survivorItemCharges = 0.0F;
+    float survivorItemMaxCharges = 0.0F;
+    float survivorItemCharge01 = 0.0F;
+    float survivorItemUseProgress01 = 0.0F;
     bool survivorItemActive = false;
+    bool survivorFlashlightAiming = false;
+    float survivorFlashlightBlindBuild01 = 0.0F;
+    int survivorItemUsesRemaining = 0;
     std::string killerPowerId = "none";
     std::string killerPowerAddonA = "none";
     std::string killerPowerAddonB = "none";
     int activeTrapCount = 0;
+    int carriedTrapCount = 0;
+    float trapSetProgress01 = 0.0F;
+    bool wraithCloaked = false;
+    float wraithPostUncloakHasteSeconds = 0.0F;
     bool trapDebugEnabled = false;
     int trappedEscapeAttempts = 0;
     float trappedEscapeChance = 0.0F;
+    float killerBlindRemaining = 0.0F;
+    bool killerBlindWhiteStyle = true;
+    float killerStunRemaining = 0.0F;
+    std::string trapIndicatorText;
+    float trapIndicatorTtl = 0.0F;
+    bool trapIndicatorDanger = true;
 
     // Perks debug info
     struct ActivePerkDebug
@@ -249,6 +265,40 @@ public:
         float healDurationSeconds = 12.5F;
         float skillCheckMinInterval = 2.5F;
         float skillCheckMaxInterval = 6.5F;
+        float generatorRepairSecondsBase = 90.0F;
+
+        float medkitFullHealCharges = 16.0F;
+        float medkitHealSpeedMultiplier = 1.5F;
+        float toolboxCharges = 15.0F;
+        float toolboxChargeDrainPerSecond = 1.0F;
+        float toolboxRepairSpeedBonus = 0.9F;
+
+        float flashlightMaxUseSeconds = 8.0F;
+        float flashlightBlindBuildSeconds = 1.0F;
+        float flashlightBlindDurationSeconds = 5.0F;
+        float flashlightBeamRange = 9.5F;
+        float flashlightBeamAngleDegrees = 22.0F;
+        int flashlightBlindStyle = 0; // 0=white, 1=dark
+
+        float mapChannelSeconds = 0.75F;
+        int mapUses = 5;
+        float mapRevealRangeMeters = 48.0F;
+        float mapRevealDurationSeconds = 3.0F;
+
+        int trapperStartCarryTraps = 5;
+        int trapperMaxCarryTraps = 5;
+        int trapperGroundSpawnTraps = 8;
+        float trapperSetTrapSeconds = 1.5F;
+        float trapperDisarmSeconds = 2.0F;
+        float trapEscapeBaseChance = 0.2F;
+        float trapEscapeChanceStep = 0.2F;
+        float trapEscapeChanceMax = 0.85F;
+        float trapKillerStunSeconds = 2.0F;
+
+        float wraithCloakMoveSpeedMultiplier = 1.3F;
+        float wraithCloakTransitionSeconds = 1.0F;
+        float wraithUncloakTransitionSeconds = 1.0F;
+        float wraithPostUncloakHasteSeconds = 2.0F;
 
         float weightTLWalls = 1.0F;
         float weightJungleGymLong = 1.0F;
@@ -302,6 +352,11 @@ public:
         bool attackHeld = false;
         bool attackReleased = false;
         bool lungeHeld = false;
+        bool useAltPressed = false;
+        bool useAltHeld = false;
+        bool useAltReleased = false;
+        bool dropItemPressed = false;
+        bool pickupItemPressed = false;
         bool wiggleLeftPressed = false;
         bool wiggleRightPressed = false;
     };
@@ -336,6 +391,16 @@ public:
         std::uint8_t maxEscapeAttempts = 6;
     };
 
+    struct GroundItemSnapshot
+    {
+        engine::scene::Entity entity = 0;
+        glm::vec3 position{0.0F};
+        float charges = 0.0F;
+        std::string itemId;
+        std::string addonAId;
+        std::string addonBId;
+    };
+
     struct Snapshot
     {
         MapType mapType = MapType::Test;
@@ -366,8 +431,16 @@ public:
         std::uint8_t bloodlustTier = 0;
         float survivorItemCharges = 0.0F;
         std::uint8_t survivorItemActive = 0;
+        std::uint8_t survivorItemUsesRemaining = 0;
+        std::uint8_t wraithCloaked = 0;
+        float wraithTransitionTimer = 0.0F;
+        float wraithPostUncloakTimer = 0.0F;
+        float killerBlindTimer = 0.0F;
+        std::uint8_t killerBlindStyleWhite = 1;
+        std::uint8_t carriedTrapCount = 0;
         std::vector<PalletSnapshot> pallets;
         std::vector<TrapSnapshot> traps;
+        std::vector<GroundItemSnapshot> groundItems;
     };
 
     GameplaySystems();
@@ -467,14 +540,18 @@ public:
     bool SetKillerPowerLoadout(const std::string& powerId, const std::string& addonAId, const std::string& addonBId);
     [[nodiscard]] std::string ItemDump() const;
     [[nodiscard]] std::string PowerDump() const;
+    [[nodiscard]] std::vector<std::string> ListItemIds() const;
+    [[nodiscard]] std::vector<std::string> ListPowerIds() const;
     [[nodiscard]] const loadout::GameplayCatalog& GetLoadoutCatalog() const { return m_loadoutCatalog; }
+    bool RespawnItemsNearPlayer(float radiusMeters = 3.0F);
+    bool SpawnGroundItemDebug(const std::string& itemId, float charges = -1.0F);
 
     bool SetSelectedSurvivorCharacter(const std::string& characterId);
     bool SetSelectedKillerCharacter(const std::string& characterId);
     [[nodiscard]] std::vector<std::string> ListSurvivorCharacters() const;
     [[nodiscard]] std::vector<std::string> ListKillerCharacters() const;
 
-    void TrapSpawnDebug();
+    void TrapSpawnDebug(int count = 1);
     void TrapClearDebug();
     void SetTrapDebug(bool enabled) { m_trapDebugEnabled = enabled; }
     [[nodiscard]] bool TrapDebugEnabled() const { return m_trapDebugEnabled; }
@@ -745,9 +822,32 @@ private:
     void UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt);
     void UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt);
     void UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt);
-    engine::scene::Entity SpawnBearTrap(const glm::vec3& basePosition, const glm::vec3& forward);
+    void UpdateWraithPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void ApplySurvivorItemActionLock(float durationSeconds);
+    bool TryDropSurvivorItemToGround();
+    bool TryPickupSurvivorGroundItem();
+    bool TrySwapSurvivorGroundItem();
+    [[nodiscard]] engine::scene::Entity FindNearestGroundItem(const glm::vec3& fromPosition, float radiusMeters) const;
+    engine::scene::Entity SpawnGroundItemEntity(
+        const std::string& itemId,
+        const glm::vec3& position,
+        float charges,
+        const std::string& addonAId = std::string{},
+        const std::string& addonBId = std::string{},
+        bool respawnTag = false
+    );
+    void SpawnInitialTrapperGroundTraps();
+    bool TryFindNearestTrap(
+        const glm::vec3& fromPosition,
+        float radiusMeters,
+        bool requireDisarmed,
+        engine::scene::Entity* outTrapEntity
+    ) const;
+    bool ComputeTrapPlacementPreview(glm::vec3* outPosition, glm::vec3* outHalfExtents, bool* outValid = nullptr) const;
+    engine::scene::Entity SpawnBearTrap(const glm::vec3& basePosition, const glm::vec3& forward, bool emitMessage = true);
     void ClearAllBearTraps();
     void TryTriggerBearTraps(engine::scene::Entity survivorEntity, const glm::vec3& survivorPos);
+    void ClearTrappedSurvivorBinding(engine::scene::Entity survivorEntity, bool disarmTrap);
     static const char* CameraModeToName(CameraMode mode);
     [[nodiscard]] const char* MapTypeToName(MapType type) const;
     static std::uint8_t MapTypeToByte(MapType type);
@@ -928,10 +1028,45 @@ private:
         bool active = false;
         float cooldown = 0.0F;
         float flashBlindAccum = 0.0F;
-        float mapPulseTtl = 0.0F;
+        float flashlightBatterySeconds = 0.0F;
+        float flashlightSuccessFlashTimer = 0.0F;
+        float actionLockTimer = 0.0F;
+        float mapRevealTtl = 0.0F;
+        float mapChannelSeconds = 0.0F;
+        int mapUsesRemaining = 0;
+        engine::scene::Entity mapRevealLastGenerator = 0;
+        float trapDisarmProgress = 0.0F;
+        engine::scene::Entity trapDisarmTarget = 0;
+    };
+
+    struct KillerPowerRuntimeState
+    {
+        int trapperCarriedTraps = 0;
+        int trapperMaxCarryTraps = 5;
+        float trapperSetTimer = 0.0F;
+        bool trapperSetting = false;
+        bool trapperSetRequiresRelease = false;
+        engine::scene::Entity trapperFocusTrap = 0;
+
+        bool wraithCloaked = false;
+        bool wraithCloakTransition = false;
+        bool wraithUncloakTransition = false;
+        float wraithTransitionTimer = 0.0F;
+        float wraithPostUncloakTimer = 0.0F;
+
+        float killerBlindTimer = 0.0F;
     };
 
     SurvivorItemRuntimeState m_survivorItemState{};
+    KillerPowerRuntimeState m_killerPowerState{};
+    std::unordered_map<engine::scene::Entity, float> m_mapRevealGenerators;
+    std::string m_trapIndicatorText;
+    float m_trapIndicatorTimer = 0.0F;
+    bool m_trapIndicatorDanger = true;
+    glm::vec3 m_trapPreviewPosition{0.0F};
+    glm::vec3 m_trapPreviewHalfExtents{0.36F, 0.08F, 0.36F};
+    bool m_trapPreviewActive = false;
+    bool m_trapPreviewValid = true;
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
 

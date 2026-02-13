@@ -1,0 +1,20 @@
+{
+  "applies_to": {
+    "ids": [
+      "medkit"
+    ],
+    "kind": "item"
+  },
+  "asset_version": 1,
+  "description": "Medkit add-on: faster heal speed.",
+  "display_name": "Surgical Tape",
+  "hooks": [],
+  "id": "surgical_tape",
+  "modifiers": [
+    {
+      "op": "mul",
+      "stat": "heal_per_second",
+      "value": 1.2000000476837158
+    }
+  ]
+}

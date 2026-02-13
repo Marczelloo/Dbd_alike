@@ -1,0 +1,15 @@
+{
+  "asset_version": 1,
+  "description": "Beam can blind/stun killer after exposure.",
+  "display_name": "Flashlight",
+  "id": "flashlight",
+  "max_charges": 8.0,
+  "params": {
+    "beam_angle_deg": 22.0,
+    "beam_range": 9.5,
+    "blind_duration": 5.0,
+    "blind_time_required": 1.0,
+    "charge_per_second": 1.0
+  },
+  "use_mode": "hold"
+}

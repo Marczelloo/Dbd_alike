@@ -461,7 +461,7 @@ bool GameplayCatalog::EnsureDefaultAssets() const
              {"display_name", "Wraith"},
              {"model_path", "assets/meshes/killer_wraith.glb"},
              {"cosmetic_id", "default"},
-             {"power_id", "bear_trap"}}
+             {"power_id", "wraith_cloak"}}
     );
 
     return true;

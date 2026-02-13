@@ -104,6 +104,9 @@ std::string CommandCategoryForUsage(const std::string& usage)
         command == "noclip" || command == "tr_vis" || command == "tr_set" || command == "set_chase" ||
         command == "cam_mode" || command == "control_role" || command == "set_role" ||
         command == "trap_spawn" || command == "trap_clear" || command == "trap_debug" ||
+        command == "item_respawn_near" || command == "item_ids" || command == "items" || command == "list_items" ||
+        command == "power_ids" || command == "powers" || command == "list_powers" ||
+        command == "item_spawn" || command == "spawn_item" || command == "spawn_item_here" ||
         command == "item_dump" || command == "power_dump" || command == "set_survivor" || command == "set_killer" ||
         command == "fx_spawn" || command == "fx_stop_all" || command == "fx_list" ||
         command == "player_dump" || command == "scene_dump")
@@ -1416,6 +1419,136 @@ struct DeveloperConsole::Impl
             }
         });
 
+        const auto printItemIds = [this](const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return false;
+            }
+            const auto ids = context.gameplay->ListItemIds();
+            if (ids.empty())
+            {
+                AddLog("No items found.");
+                return false;
+            }
+            AddLog("Item IDs:");
+            for (const auto& id : ids)
+            {
+                AddLog(" - " + id);
+            }
+            AddLog("Use: item_spawn <id> [charges], item_set <id>, item_respawn_near [radius]");
+            return true;
+        };
+
+        const auto printPowerIds = [this](const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return false;
+            }
+            const auto ids = context.gameplay->ListPowerIds();
+            if (ids.empty())
+            {
+                AddLog("No killer powers found.");
+                return false;
+            }
+            AddLog("Killer Power IDs:");
+            for (const auto& id : ids)
+            {
+                AddLog(" - " + id);
+            }
+            AddLog("Use: power_set <id>, set_killer <characterId>");
+            return true;
+        };
+
+        RegisterCommand("item_ids", "List all item IDs for item_set/item_spawn", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("items", "Alias for item_ids", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("list_items", "Alias for item_ids", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("power_ids", "List all killer power IDs for power_set", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("powers", "Alias for power_ids", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("list_powers", "Alias for power_ids", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("item_spawn <id> [charges]", "Spawn one ground item near controlled player", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: item_spawn <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("item_spawn failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("item_spawn OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
+        RegisterCommand("spawn_item <id> [charges]", "Alias for item_spawn", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: spawn_item <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("spawn_item failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("spawn_item OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
+        RegisterCommand("spawn_item_here <id> [charges]", "Alias for item_spawn", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: spawn_item_here <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("spawn_item_here failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("spawn_item_here OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
         RegisterCommand("power_dump", "Print killer power loadout and trap summary", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.gameplay)
             {
@@ -1451,12 +1584,31 @@ struct DeveloperConsole::Impl
             AddLog("set_killer OK: " + tokens[1]);
         });
 
-        RegisterCommand("trap_spawn", "Spawn bear trap at killer forward", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+        RegisterCommand("trap_spawn [count]", "Spawn bear trap(s) at killer forward", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay != nullptr)
             {
-                context.gameplay->TrapSpawnDebug();
-                AddLog("trap_spawn requested.");
+                int count = 1;
+                if (tokens.size() >= 2)
+                {
+                    count = std::max(1, ParseIntOr(1, tokens[1]));
+                }
+                context.gameplay->TrapSpawnDebug(count);
+                AddLog("trap_spawn requested: " + std::to_string(count));
             }
+        });
+
+        RegisterCommand("item_respawn_near [radius]", "Respawn medkit/toolbox/flashlight/map around local player", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            float radius = 3.0F;
+            if (tokens.size() >= 2)
+            {
+                radius = std::max(0.5F, ParseFloatOr(3.0F, tokens[1]));
+            }
+            const bool ok = context.gameplay->RespawnItemsNearPlayer(radius);
+            AddLog(ok ? ("item_respawn_near OK radius=" + std::to_string(radius)) : "item_respawn_near failed");
         });
 
         RegisterCommand("trap_clear", "Clear all bear traps", [this](const std::vector<std::string>&, const ConsoleContext& context) {

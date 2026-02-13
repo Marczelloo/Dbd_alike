@@ -1,0 +1,20 @@
+{
+  "applies_to": {
+    "ids": [
+      "toolbox"
+    ],
+    "kind": "item"
+  },
+  "asset_version": 1,
+  "description": "Toolbox add-on: repair speed bonus.",
+  "display_name": "Wire Spool",
+  "hooks": [],
+  "id": "wire_spool",
+  "modifiers": [
+    {
+      "op": "mul",
+      "stat": "repair_speed_bonus",
+      "value": 1.25
+    }
+  ]
+}

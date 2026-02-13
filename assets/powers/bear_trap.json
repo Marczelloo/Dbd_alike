@@ -1,0 +1,16 @@
+{
+  "asset_version": 1,
+  "description": "Place trap that captures survivor and forces escape attempts.",
+  "display_name": "Bear Trap",
+  "id": "bear_trap",
+  "params": {
+    "base_escape_chance": 0.2,
+    "escape_chance_step": 0.2,
+    "max_active_traps": 8.0,
+    "max_escape_attempts": 6.0,
+    "set_duration": 1.5,
+    "trap_half_x": 0.36000001430511475,
+    "trap_half_y": 0.07999999821186066,
+    "trap_half_z": 0.36000001430511475
+  }
+}

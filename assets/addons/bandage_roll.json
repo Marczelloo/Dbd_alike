@@ -1,0 +1,20 @@
+{
+  "applies_to": {
+    "ids": [
+      "medkit"
+    ],
+    "kind": "item"
+  },
+  "asset_version": 1,
+  "description": "Medkit add-on: more charges.",
+  "display_name": "Bandage Roll",
+  "hooks": [],
+  "id": "bandage_roll",
+  "modifiers": [
+    {
+      "op": "add",
+      "stat": "max_charges",
+      "value": 8.0
+    }
+  ]
+}

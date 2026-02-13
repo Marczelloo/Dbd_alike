@@ -70,6 +70,11 @@ constexpr std::uint16_t kButtonAttackHeld = 1 << 7;
 constexpr std::uint16_t kButtonAttackReleased = 1 << 8;
 constexpr std::uint16_t kButtonCrouchHeld = 1 << 9;
 constexpr std::uint16_t kButtonLungeHeld = 1 << 10;
+constexpr std::uint16_t kButtonUseAltPressed = 1 << 11;
+constexpr std::uint16_t kButtonUseAltHeld = 1 << 12;
+constexpr std::uint16_t kButtonUseAltReleased = 1 << 13;
+constexpr std::uint16_t kButtonDropItemPressed = 1 << 14;
+constexpr std::uint16_t kButtonPickupItemPressed = 1 << 15;
 
 std::string RenderModeToText(render::RenderMode mode)
 {
@@ -1246,6 +1251,11 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         command.lungeHeld = (inputPacket.buttons & kButtonLungeHeld) != 0;
         command.jumpPressed = (inputPacket.buttons & kButtonJumpPressed) != 0;
         command.crouchHeld = (inputPacket.buttons & kButtonCrouchHeld) != 0;
+        command.useAltPressed = (inputPacket.buttons & kButtonUseAltPressed) != 0;
+        command.useAltHeld = (inputPacket.buttons & kButtonUseAltHeld) != 0;
+        command.useAltReleased = (inputPacket.buttons & kButtonUseAltReleased) != 0;
+        command.dropItemPressed = (inputPacket.buttons & kButtonDropItemPressed) != 0;
+        command.pickupItemPressed = (inputPacket.buttons & kButtonPickupItemPressed) != 0;
         command.wiggleLeftPressed = (inputPacket.buttons & kButtonWiggleLeftPressed) != 0;
         command.wiggleRightPressed = (inputPacket.buttons & kButtonWiggleRightPressed) != 0;
 
@@ -1452,6 +1462,26 @@ void App::SendClientInput(const engine::platform::Input& input, bool controlsEna
         {
             packet.buttons |= kButtonLungeHeld;
         }
+        if (input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltPressed;
+        }
+        if (input.IsMouseDown(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltHeld;
+        }
+        if (input.IsMouseReleased(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltReleased;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_R))
+        {
+            packet.buttons |= kButtonDropItemPressed;
+        }
+        if (input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            packet.buttons |= kButtonPickupItemPressed;
+        }
         if (input.IsKeyPressed(GLFW_KEY_SPACE))
         {
             packet.buttons |= kButtonJumpPressed;
@@ -1614,6 +1644,13 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     AppendValue(outBuffer, snapshot.bloodlustTier);
     AppendValue(outBuffer, snapshot.survivorItemCharges);
     AppendValue(outBuffer, snapshot.survivorItemActive);
+    AppendValue(outBuffer, snapshot.survivorItemUsesRemaining);
+    AppendValue(outBuffer, snapshot.wraithCloaked);
+    AppendValue(outBuffer, snapshot.wraithTransitionTimer);
+    AppendValue(outBuffer, snapshot.wraithPostUncloakTimer);
+    AppendValue(outBuffer, snapshot.killerBlindTimer);
+    AppendValue(outBuffer, snapshot.killerBlindStyleWhite);
+    AppendValue(outBuffer, snapshot.carriedTrapCount);
 
     const std::uint16_t palletCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.pallets.size(), 1024));
     AppendValue(outBuffer, palletCount);
@@ -1648,6 +1685,21 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
         AppendValue(outBuffer, trap.escapeChance);
         AppendValue(outBuffer, trap.escapeAttempts);
         AppendValue(outBuffer, trap.maxEscapeAttempts);
+    }
+
+    const std::uint16_t groundItemCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.groundItems.size(), 1024));
+    AppendValue(outBuffer, groundItemCount);
+    for (std::size_t i = 0; i < groundItemCount; ++i)
+    {
+        const auto& groundItem = snapshot.groundItems[i];
+        AppendValue(outBuffer, groundItem.entity);
+        AppendValue(outBuffer, groundItem.position.x);
+        AppendValue(outBuffer, groundItem.position.y);
+        AppendValue(outBuffer, groundItem.position.z);
+        AppendValue(outBuffer, groundItem.charges);
+        writeString(groundItem.itemId, 128);
+        writeString(groundItem.addonAId, 128);
+        writeString(groundItem.addonBId, 128);
     }
 
     return true;
@@ -1760,7 +1812,14 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         !ReadValue(buffer, offset, outSnapshot.chaseTimeInChase) ||
         !ReadValue(buffer, offset, outSnapshot.bloodlustTier) ||
         !ReadValue(buffer, offset, outSnapshot.survivorItemCharges) ||
-        !ReadValue(buffer, offset, outSnapshot.survivorItemActive))
+        !ReadValue(buffer, offset, outSnapshot.survivorItemActive) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemUsesRemaining) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithCloaked) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithTransitionTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithPostUncloakTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.killerBlindTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.killerBlindStyleWhite) ||
+        !ReadValue(buffer, offset, outSnapshot.carriedTrapCount))
     {
         return false;
     }
@@ -1825,6 +1884,33 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         outSnapshot.traps.push_back(trap);
     }
 
+    std::uint16_t groundItemCount = 0;
+    if (!ReadValue(buffer, offset, groundItemCount))
+    {
+        return false;
+    }
+    outSnapshot.groundItems.clear();
+    outSnapshot.groundItems.reserve(groundItemCount);
+    for (std::uint16_t i = 0; i < groundItemCount; ++i)
+    {
+        game::gameplay::GameplaySystems::GroundItemSnapshot groundItem;
+        if (!ReadValue(buffer, offset, groundItem.entity) ||
+            !ReadValue(buffer, offset, groundItem.position.x) ||
+            !ReadValue(buffer, offset, groundItem.position.y) ||
+            !ReadValue(buffer, offset, groundItem.position.z) ||
+            !ReadValue(buffer, offset, groundItem.charges))
+        {
+            return false;
+        }
+        if (!readString(groundItem.itemId) ||
+            !readString(groundItem.addonAId) ||
+            !readString(groundItem.addonBId))
+        {
+            return false;
+        }
+        outSnapshot.groundItems.push_back(groundItem);
+    }
+
     return true;
 }
 
@@ -1865,6 +1951,35 @@ bool App::SerializeGameplayTuning(
     AppendValue(outBuffer, tuning.healDurationSeconds);
     AppendValue(outBuffer, tuning.skillCheckMinInterval);
     AppendValue(outBuffer, tuning.skillCheckMaxInterval);
+    AppendValue(outBuffer, tuning.generatorRepairSecondsBase);
+    AppendValue(outBuffer, tuning.medkitFullHealCharges);
+    AppendValue(outBuffer, tuning.medkitHealSpeedMultiplier);
+    AppendValue(outBuffer, tuning.toolboxCharges);
+    AppendValue(outBuffer, tuning.toolboxChargeDrainPerSecond);
+    AppendValue(outBuffer, tuning.toolboxRepairSpeedBonus);
+    AppendValue(outBuffer, tuning.flashlightMaxUseSeconds);
+    AppendValue(outBuffer, tuning.flashlightBlindBuildSeconds);
+    AppendValue(outBuffer, tuning.flashlightBlindDurationSeconds);
+    AppendValue(outBuffer, tuning.flashlightBeamRange);
+    AppendValue(outBuffer, tuning.flashlightBeamAngleDegrees);
+    AppendValue(outBuffer, tuning.flashlightBlindStyle);
+    AppendValue(outBuffer, tuning.mapChannelSeconds);
+    AppendValue(outBuffer, tuning.mapUses);
+    AppendValue(outBuffer, tuning.mapRevealRangeMeters);
+    AppendValue(outBuffer, tuning.mapRevealDurationSeconds);
+    AppendValue(outBuffer, tuning.trapperStartCarryTraps);
+    AppendValue(outBuffer, tuning.trapperMaxCarryTraps);
+    AppendValue(outBuffer, tuning.trapperGroundSpawnTraps);
+    AppendValue(outBuffer, tuning.trapperSetTrapSeconds);
+    AppendValue(outBuffer, tuning.trapperDisarmSeconds);
+    AppendValue(outBuffer, tuning.trapEscapeBaseChance);
+    AppendValue(outBuffer, tuning.trapEscapeChanceStep);
+    AppendValue(outBuffer, tuning.trapEscapeChanceMax);
+    AppendValue(outBuffer, tuning.trapKillerStunSeconds);
+    AppendValue(outBuffer, tuning.wraithCloakMoveSpeedMultiplier);
+    AppendValue(outBuffer, tuning.wraithCloakTransitionSeconds);
+    AppendValue(outBuffer, tuning.wraithUncloakTransitionSeconds);
+    AppendValue(outBuffer, tuning.wraithPostUncloakHasteSeconds);
     AppendValue(outBuffer, tuning.weightTLWalls);
     AppendValue(outBuffer, tuning.weightJungleGymLong);
     AppendValue(outBuffer, tuning.weightJungleGymShort);
@@ -1931,6 +2046,35 @@ bool App::DeserializeGameplayTuning(
            ReadValue(buffer, offset, outTuning.healDurationSeconds) &&
            ReadValue(buffer, offset, outTuning.skillCheckMinInterval) &&
            ReadValue(buffer, offset, outTuning.skillCheckMaxInterval) &&
+           ReadValue(buffer, offset, outTuning.generatorRepairSecondsBase) &&
+           ReadValue(buffer, offset, outTuning.medkitFullHealCharges) &&
+           ReadValue(buffer, offset, outTuning.medkitHealSpeedMultiplier) &&
+           ReadValue(buffer, offset, outTuning.toolboxCharges) &&
+           ReadValue(buffer, offset, outTuning.toolboxChargeDrainPerSecond) &&
+           ReadValue(buffer, offset, outTuning.toolboxRepairSpeedBonus) &&
+           ReadValue(buffer, offset, outTuning.flashlightMaxUseSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindBuildSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindDurationSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBeamRange) &&
+           ReadValue(buffer, offset, outTuning.flashlightBeamAngleDegrees) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindStyle) &&
+           ReadValue(buffer, offset, outTuning.mapChannelSeconds) &&
+           ReadValue(buffer, offset, outTuning.mapUses) &&
+           ReadValue(buffer, offset, outTuning.mapRevealRangeMeters) &&
+           ReadValue(buffer, offset, outTuning.mapRevealDurationSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapperStartCarryTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperMaxCarryTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperGroundSpawnTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperSetTrapSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapperDisarmSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeBaseChance) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeChanceStep) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeChanceMax) &&
+           ReadValue(buffer, offset, outTuning.trapKillerStunSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithCloakMoveSpeedMultiplier) &&
+           ReadValue(buffer, offset, outTuning.wraithCloakTransitionSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithUncloakTransitionSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithPostUncloakHasteSeconds) &&
            ReadValue(buffer, offset, outTuning.weightTLWalls) &&
            ReadValue(buffer, offset, outTuning.weightJungleGymLong) &&
            ReadValue(buffer, offset, outTuning.weightJungleGymShort) &&
@@ -3003,6 +3147,35 @@ bool App::LoadGameplayConfig()
     readFloat("heal_duration", m_gameplayApplied.healDurationSeconds);
     readFloat("skillcheck_interval_min", m_gameplayApplied.skillCheckMinInterval);
     readFloat("skillcheck_interval_max", m_gameplayApplied.skillCheckMaxInterval);
+    readFloat("generator_repair_seconds_base", m_gameplayApplied.generatorRepairSecondsBase);
+    readFloat("medkit_full_heal_charges", m_gameplayApplied.medkitFullHealCharges);
+    readFloat("medkit_heal_speed_multiplier", m_gameplayApplied.medkitHealSpeedMultiplier);
+    readFloat("toolbox_charges", m_gameplayApplied.toolboxCharges);
+    readFloat("toolbox_charge_drain_per_second", m_gameplayApplied.toolboxChargeDrainPerSecond);
+    readFloat("toolbox_repair_speed_bonus", m_gameplayApplied.toolboxRepairSpeedBonus);
+    readFloat("flashlight_max_use_seconds", m_gameplayApplied.flashlightMaxUseSeconds);
+    readFloat("flashlight_blind_build_seconds", m_gameplayApplied.flashlightBlindBuildSeconds);
+    readFloat("flashlight_blind_duration_seconds", m_gameplayApplied.flashlightBlindDurationSeconds);
+    readFloat("flashlight_beam_range", m_gameplayApplied.flashlightBeamRange);
+    readFloat("flashlight_beam_angle_degrees", m_gameplayApplied.flashlightBeamAngleDegrees);
+    readInt("flashlight_blind_style", m_gameplayApplied.flashlightBlindStyle);
+    readFloat("map_channel_seconds", m_gameplayApplied.mapChannelSeconds);
+    readInt("map_uses", m_gameplayApplied.mapUses);
+    readFloat("map_reveal_range_meters", m_gameplayApplied.mapRevealRangeMeters);
+    readFloat("map_reveal_duration_seconds", m_gameplayApplied.mapRevealDurationSeconds);
+    readInt("trapper_start_carry_traps", m_gameplayApplied.trapperStartCarryTraps);
+    readInt("trapper_max_carry_traps", m_gameplayApplied.trapperMaxCarryTraps);
+    readInt("trapper_ground_spawn_traps", m_gameplayApplied.trapperGroundSpawnTraps);
+    readFloat("trapper_set_trap_seconds", m_gameplayApplied.trapperSetTrapSeconds);
+    readFloat("trapper_disarm_seconds", m_gameplayApplied.trapperDisarmSeconds);
+    readFloat("trap_escape_base_chance", m_gameplayApplied.trapEscapeBaseChance);
+    readFloat("trap_escape_chance_step", m_gameplayApplied.trapEscapeChanceStep);
+    readFloat("trap_escape_chance_max", m_gameplayApplied.trapEscapeChanceMax);
+    readFloat("trap_killer_stun_seconds", m_gameplayApplied.trapKillerStunSeconds);
+    readFloat("wraith_cloak_move_speed_multiplier", m_gameplayApplied.wraithCloakMoveSpeedMultiplier);
+    readFloat("wraith_cloak_transition_seconds", m_gameplayApplied.wraithCloakTransitionSeconds);
+    readFloat("wraith_uncloak_transition_seconds", m_gameplayApplied.wraithUncloakTransitionSeconds);
+    readFloat("wraith_post_uncloak_haste_seconds", m_gameplayApplied.wraithPostUncloakHasteSeconds);
     readFloat("weight_tl", m_gameplayApplied.weightTLWalls);
     readFloat("weight_jungle_long", m_gameplayApplied.weightJungleGymLong);
     readFloat("weight_jungle_short", m_gameplayApplied.weightJungleGymShort);
@@ -3056,6 +3229,35 @@ bool App::SaveGameplayConfig() const
     root["heal_duration"] = t.healDurationSeconds;
     root["skillcheck_interval_min"] = t.skillCheckMinInterval;
     root["skillcheck_interval_max"] = t.skillCheckMaxInterval;
+    root["generator_repair_seconds_base"] = t.generatorRepairSecondsBase;
+    root["medkit_full_heal_charges"] = t.medkitFullHealCharges;
+    root["medkit_heal_speed_multiplier"] = t.medkitHealSpeedMultiplier;
+    root["toolbox_charges"] = t.toolboxCharges;
+    root["toolbox_charge_drain_per_second"] = t.toolboxChargeDrainPerSecond;
+    root["toolbox_repair_speed_bonus"] = t.toolboxRepairSpeedBonus;
+    root["flashlight_max_use_seconds"] = t.flashlightMaxUseSeconds;
+    root["flashlight_blind_build_seconds"] = t.flashlightBlindBuildSeconds;
+    root["flashlight_blind_duration_seconds"] = t.flashlightBlindDurationSeconds;
+    root["flashlight_beam_range"] = t.flashlightBeamRange;
+    root["flashlight_beam_angle_degrees"] = t.flashlightBeamAngleDegrees;
+    root["flashlight_blind_style"] = t.flashlightBlindStyle;
+    root["map_channel_seconds"] = t.mapChannelSeconds;
+    root["map_uses"] = t.mapUses;
+    root["map_reveal_range_meters"] = t.mapRevealRangeMeters;
+    root["map_reveal_duration_seconds"] = t.mapRevealDurationSeconds;
+    root["trapper_start_carry_traps"] = t.trapperStartCarryTraps;
+    root["trapper_max_carry_traps"] = t.trapperMaxCarryTraps;
+    root["trapper_ground_spawn_traps"] = t.trapperGroundSpawnTraps;
+    root["trapper_set_trap_seconds"] = t.trapperSetTrapSeconds;
+    root["trapper_disarm_seconds"] = t.trapperDisarmSeconds;
+    root["trap_escape_base_chance"] = t.trapEscapeBaseChance;
+    root["trap_escape_chance_step"] = t.trapEscapeChanceStep;
+    root["trap_escape_chance_max"] = t.trapEscapeChanceMax;
+    root["trap_killer_stun_seconds"] = t.trapKillerStunSeconds;
+    root["wraith_cloak_move_speed_multiplier"] = t.wraithCloakMoveSpeedMultiplier;
+    root["wraith_cloak_transition_seconds"] = t.wraithCloakTransitionSeconds;
+    root["wraith_uncloak_transition_seconds"] = t.wraithUncloakTransitionSeconds;
+    root["wraith_post_uncloak_haste_seconds"] = t.wraithPostUncloakHasteSeconds;
     root["weight_tl"] = t.weightTLWalls;
     root["weight_jungle_long"] = t.weightJungleGymLong;
     root["weight_jungle_short"] = t.weightJungleGymShort;
@@ -4067,6 +4269,8 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     };
 
     m_ui.BeginRootPanel("main_menu_custom", panel, true);
+    const float scrollHeight = std::max(200.0F * scale, panel.h - 24.0F * scale);
+    m_ui.BeginScrollRegion("main_menu_scroll_region", scrollHeight, &m_mainMenuScrollY);
     m_ui.Label("Asymmetric Horror Prototype", 1.2F);
     m_ui.Label("Press ~ for Console | F6 UI test | F10 Legacy UI toggle", m_ui.Theme().colorTextMuted);
     if (m_ui.Button("toggle_legacy_ui", std::string("Legacy ImGui menus: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
@@ -4093,7 +4297,20 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     if (!killerCharacters.empty())
     {
-        m_ui.Dropdown("killer_character", "Killer Character", &m_menuKillerCharacterIndex, killerCharacters);
+        if (m_ui.Dropdown("killer_character", "Killer Character", &m_menuKillerCharacterIndex, killerCharacters))
+        {
+            const std::string& killerId = killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)];
+            m_gameplay.SetSelectedKillerCharacter(killerId);
+            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(killerId);
+            if (killerDef != nullptr && !killerDef->powerId.empty() && !killerPowers.empty())
+            {
+                const auto it = std::find(killerPowers.begin(), killerPowers.end(), killerDef->powerId);
+                if (it != killerPowers.end())
+                {
+                    m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
+                }
+            }
+        }
     }
     if (!survivorItems.empty())
     {
@@ -4154,19 +4371,47 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
             itemAddonB == "none" ? "" : itemAddonB
         );
 
-        const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
-                                        ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
-                                        : std::string{};
+        std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
+                                  ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+                                  : std::string{};
+        bool powerForcedByCharacter = false;
+        if (!killerCharacters.empty() && m_menuKillerCharacterIndex >= 0 &&
+            m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+        {
+            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(
+                killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]
+            );
+            if (killerDef != nullptr && !killerDef->powerId.empty())
+            {
+                powerId = killerDef->powerId;
+                powerForcedByCharacter = true;
+                if (!killerPowers.empty())
+                {
+                    const auto it = std::find(killerPowers.begin(), killerPowers.end(), powerId);
+                    if (it != killerPowers.end())
+                    {
+                        m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
+                    }
+                }
+            }
+        }
         const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
                                             ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
                                             : std::string{"none"};
         const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
                                             ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
                                             : std::string{"none"};
+        const std::string resolvedPowerAddonA = powerForcedByCharacter ? std::string{"none"} : powerAddonA;
+        const std::string resolvedPowerAddonB = powerForcedByCharacter ? std::string{"none"} : powerAddonB;
+        if (powerForcedByCharacter)
+        {
+            m_menuKillerAddonAIndex = 0;
+            m_menuKillerAddonBIndex = 0;
+        }
         m_gameplay.SetKillerPowerLoadout(
             powerId,
-            powerAddonA == "none" ? "" : powerAddonA,
-            powerAddonB == "none" ? "" : powerAddonB
+            resolvedPowerAddonA == "none" ? "" : resolvedPowerAddonA,
+            resolvedPowerAddonB == "none" ? "" : resolvedPowerAddonB
         );
     };
     if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
@@ -4265,6 +4510,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     {
         *shouldQuit = true;
     }
+    m_ui.EndScrollRegion();
     m_ui.EndPanel();
 }
 
@@ -4678,10 +4924,52 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
             }
         }
 
-        m_ui.Label("Healing + Skill Checks", m_ui.Theme().colorAccent);
+        m_ui.Label("Repair + Healing", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_gen_base_seconds", "Generator Base Seconds", &t.generatorRepairSecondsBase, 20.0F, 180.0F, "%.1f");
         m_ui.SliderFloat("gp_heal_duration", "Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
         m_ui.SliderFloat("gp_skillcheck_min", "Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
         m_ui.SliderFloat("gp_skillcheck_max", "Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
+
+        m_ui.Label("Items: Medkit + Toolbox", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_medkit_full_heal_charges", "Medkit Full Heal Charges", &t.medkitFullHealCharges, 4.0F, 64.0F, "%.1f");
+        m_ui.SliderFloat("gp_medkit_heal_mult", "Medkit Heal Speed Mult", &t.medkitHealSpeedMultiplier, 0.5F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_toolbox_charges", "Toolbox Charges", &t.toolboxCharges, 1.0F, 120.0F, "%.1f");
+        m_ui.SliderFloat("gp_toolbox_drain", "Toolbox Drain / sec", &t.toolboxChargeDrainPerSecond, 0.05F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_toolbox_bonus", "Toolbox Repair Bonus", &t.toolboxRepairSpeedBonus, 0.0F, 3.0F, "%.2f");
+
+        m_ui.Label("Items: Flashlight + Map", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_flashlight_max_use", "Flashlight Max Use (s)", &t.flashlightMaxUseSeconds, 1.0F, 30.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_blind_build", "Flashlight Blind Build (s)", &t.flashlightBlindBuildSeconds, 0.1F, 6.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_blind_dur", "Flashlight Blind Duration (s)", &t.flashlightBlindDurationSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_range", "Flashlight Range", &t.flashlightBeamRange, 2.0F, 25.0F, "%.1f");
+        m_ui.SliderFloat("gp_flashlight_angle", "Flashlight Angle", &t.flashlightBeamAngleDegrees, 5.0F, 80.0F, "%.1f");
+        {
+            int blindStyle = glm::clamp(t.flashlightBlindStyle, 0, 1);
+            std::vector<std::string> blindStyles{"White", "Dark"};
+            if (m_ui.Dropdown("gp_flashlight_blind_style", "Flashlight Blind Style", &blindStyle, blindStyles))
+            {
+                t.flashlightBlindStyle = glm::clamp(blindStyle, 0, 1);
+            }
+        }
+        m_ui.SliderFloat("gp_map_channel", "Map Channel (s)", &t.mapChannelSeconds, 0.05F, 4.0F, "%.2f");
+        m_ui.SliderInt("gp_map_uses", "Map Uses", &t.mapUses, 0, 20);
+        m_ui.SliderFloat("gp_map_reveal_range", "Map Reveal Range (m)", &t.mapRevealRangeMeters, 4.0F, 120.0F, "%.1f");
+        m_ui.SliderFloat("gp_map_reveal_duration", "Map Reveal Duration (s)", &t.mapRevealDurationSeconds, 0.2F, 12.0F, "%.2f");
+
+        m_ui.Label("Killer Powers: Trapper + Wraith", m_ui.Theme().colorAccent);
+        m_ui.SliderInt("gp_trapper_start", "Trapper Start Carry", &t.trapperStartCarryTraps, 0, 16);
+        m_ui.SliderInt("gp_trapper_max", "Trapper Max Carry", &t.trapperMaxCarryTraps, 1, 16);
+        m_ui.SliderInt("gp_trapper_ground", "Trapper Ground Spawn", &t.trapperGroundSpawnTraps, 0, 48);
+        m_ui.SliderFloat("gp_trapper_set", "Trapper Set Time (s)", &t.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
+        m_ui.SliderFloat("gp_trapper_disarm", "Trapper Disarm Time (s)", &t.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_base", "Trap Escape Base Chance", &t.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_step", "Trap Escape Step", &t.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_max", "Trap Escape Max", &t.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
+        m_ui.SliderFloat("gp_trap_killer_stun", "Trap Killer Stun (s)", &t.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_cloak_speed", "Wraith Cloak Speed Mult", &t.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_cloak_trans", "Wraith Cloak Transition (s)", &t.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_uncloak_trans", "Wraith Uncloak Transition (s)", &t.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_haste", "Wraith Post-Uncloak Haste (s)", &t.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
 
         m_ui.Label("Map Generation", m_ui.Theme().colorAccent);
         m_ui.SliderFloat("gp_weight_tl", "Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
@@ -4757,15 +5045,25 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
     m_ui.Label(
         "Item: " + hudState.survivorItemId +
             " [" + hudState.survivorItemAddonA + ", " + hudState.survivorItemAddonB + "]"
-            " charges=" + std::to_string(hudState.survivorItemCharges),
+            " charges=" + std::to_string(hudState.survivorItemCharges) +
+            " uses=" + std::to_string(hudState.survivorItemUsesRemaining),
         hudState.survivorItemActive ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
     );
     m_ui.Label(
         "Power: " + hudState.killerPowerId +
             " [" + hudState.killerPowerAddonA + ", " + hudState.killerPowerAddonB + "]"
-            " traps=" + std::to_string(hudState.activeTrapCount),
+            " traps=" + std::to_string(hudState.activeTrapCount) +
+            " carry=" + std::to_string(hudState.carriedTrapCount),
         m_ui.Theme().colorTextMuted
     );
+    if (hudState.killerPowerId == "wraith_cloak")
+    {
+        m_ui.Label(
+            std::string("Wraith: ") + (hudState.wraithCloaked ? "CLOAKED" : "VISIBLE") +
+                " haste=" + std::to_string(hudState.wraithPostUncloakHasteSeconds),
+            hudState.wraithCloaked ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
+        );
+    }
     if (hudState.survivorStateName == "Trapped")
     {
         m_ui.Label(
@@ -4845,9 +5143,14 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
     m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
     m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
     m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
+    if (hudState.roleName == "Survivor")
+    {
+        m_ui.Label("RMB: Use Item | R: Drop Item | LMB: Pickup Item | E: Swap Item", m_ui.Theme().colorTextMuted);
+    }
     if (hudState.roleName == "Killer")
     {
         m_ui.Label("LMB click: Short | Hold LMB: Lunge", m_ui.Theme().colorTextMuted);
+        m_ui.Label("RMB: Power | E: Secondary Power Action", m_ui.Theme().colorTextMuted);
     }
     m_ui.Label("~ Console | F1/F2 Debug | F3 Render", m_ui.Theme().colorTextMuted);
     m_ui.EndPanel();
@@ -4865,69 +5168,170 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.EndPanel();
     }
 
-    const bool showBottomPanel = hudState.repairingGenerator || hudState.selfHealing || hudState.skillCheckActive ||
-                                 hudState.carryEscapeProgress > 0.0F || hudState.hookStage > 0;
-    if (!showBottomPanel)
+    if (hudState.roleName == "Survivor" && hudState.survivorItemId != "none")
     {
-        return;
-    }
-
-    const engine::ui::UiRect bottom{
-        (static_cast<float>(m_ui.ScreenWidth()) - 620.0F * scale) * 0.5F + m_hudLayout.bottomCenterOffset.x * scale,
-        static_cast<float>(m_ui.ScreenHeight()) - 240.0F * scale - m_hudLayout.bottomCenterOffset.y * scale,
-        620.0F * scale,
-        240.0F * scale,
-    };
-    m_ui.BeginPanel("hud_bottom_custom", bottom, true);
-
-    if (hudState.repairingGenerator)
-    {
-        m_ui.Label("Generator Repair", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_gen_progress", hudState.activeGeneratorProgress, std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%");
-    }
-    if (hudState.selfHealing)
-    {
-        m_ui.Label("Self Heal", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_heal_progress", hudState.selfHealProgress, std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%");
-    }
-    if (hudState.skillCheckActive)
-    {
-        m_ui.Label("Skill Check active: SPACE", m_ui.Theme().colorDanger);
-        m_ui.SkillCheckBar(
-            "hud_skillcheck_progress",
-            hudState.skillCheckNeedle,
-            hudState.skillCheckSuccessStart,
-            hudState.skillCheckSuccessEnd
-        );
-    }
-    if (hudState.carryEscapeProgress > 0.0F)
-    {
-        m_ui.Label("Wiggle Escape: Alternate A/D", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_wiggle_progress", hudState.carryEscapeProgress, std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%");
-    }
-    if (hudState.hookStage > 0)
-    {
-        m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorDanger);
-        m_ui.ProgressBar(
-            "hud_hook_progress",
-            hudState.hookStageProgress,
-            std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
-        );
-        if (hudState.hookStage == 1)
+        const engine::ui::UiRect itemPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 156.0F * scale,
+            300.0F * scale,
+            138.0F * scale,
+        };
+        m_ui.BeginPanel("hud_item_corner", itemPanel, true);
+        m_ui.Label("Item: " + hudState.survivorItemId, m_ui.Theme().colorAccent);
+        const std::string chargeText =
+            std::to_string(static_cast<int>(std::round(hudState.survivorItemCharges))) + " / " +
+            std::to_string(static_cast<int>(std::round(hudState.survivorItemMaxCharges)));
+        m_ui.ProgressBar("hud_item_charges", hudState.survivorItemCharge01, chargeText);
+        if (hudState.survivorItemUseProgress01 > 0.0F)
         {
-            const int attemptsLeft = std::max(0, hudState.hookEscapeAttemptsMax - hudState.hookEscapeAttemptsUsed);
-            m_ui.Label(
-                "E: Attempt self-unhook (" + std::to_string(static_cast<int>(hudState.hookEscapeChance * 100.0F)) + "%), attempts left: " +
-                    std::to_string(attemptsLeft),
-                m_ui.Theme().colorTextMuted
+            m_ui.ProgressBar(
+                "hud_item_use_progress",
+                hudState.survivorItemUseProgress01,
+                std::to_string(static_cast<int>(hudState.survivorItemUseProgress01 * 100.0F)) + "%"
             );
         }
-        else if (hudState.hookStage == 2)
+        if (hudState.survivorFlashlightAiming)
         {
-            m_ui.Label("Struggle: hit SPACE during skill checks", m_ui.Theme().colorTextMuted);
+            m_ui.Label("Flashlight aiming", m_ui.Theme().colorSuccess, 0.95F);
         }
+        m_ui.EndPanel();
     }
-    m_ui.EndPanel();
+
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "bear_trap")
+    {
+        const engine::ui::UiRect trapPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 132.0F * scale,
+            300.0F * scale,
+            112.0F * scale,
+        };
+        m_ui.BeginPanel("hud_trap_corner", trapPanel, true);
+        m_ui.Label(
+            "Traps: carried " + std::to_string(hudState.carriedTrapCount) + " | active " + std::to_string(hudState.activeTrapCount),
+            m_ui.Theme().colorAccent
+        );
+        if (hudState.trapSetProgress01 > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_trap_set_progress",
+                hudState.trapSetProgress01,
+                "Setting " + std::to_string(static_cast<int>(hudState.trapSetProgress01 * 100.0F)) + "%"
+            );
+        }
+        if (hudState.killerStunRemaining > 0.01F)
+        {
+            m_ui.Label(
+                "STUNNED: " + std::to_string(hudState.killerStunRemaining).substr(0, 4) + "s",
+                m_ui.Theme().colorDanger
+            );
+        }
+        m_ui.EndPanel();
+    }
+
+    if (hudState.trapIndicatorTtl > 0.0F && !hudState.trapIndicatorText.empty())
+    {
+        const engine::ui::UiRect trapIndicator{
+            (static_cast<float>(m_ui.ScreenWidth()) - 460.0F * scale) * 0.5F,
+            90.0F * scale,
+            460.0F * scale,
+            52.0F * scale,
+        };
+        m_ui.BeginPanel("hud_trap_indicator", trapIndicator, true);
+        m_ui.Label(
+            hudState.trapIndicatorText,
+            hudState.trapIndicatorDanger ? m_ui.Theme().colorDanger : m_ui.Theme().colorSuccess,
+            1.02F
+        );
+        m_ui.EndPanel();
+    }
+
+    if (hudState.roleName == "Survivor" && hudState.survivorFlashlightAiming)
+    {
+        const float cx = static_cast<float>(m_ui.ScreenWidth()) * 0.5F;
+        const float cy = static_cast<float>(m_ui.ScreenHeight()) * 0.5F;
+        const glm::vec4 color{1.0F, 0.95F, 0.55F, 0.92F};
+        m_ui.FillRect(engine::ui::UiRect{cx - 1.0F * scale, cy - 15.0F * scale, 2.0F * scale, 30.0F * scale}, color);
+        m_ui.FillRect(engine::ui::UiRect{cx - 15.0F * scale, cy - 1.0F * scale, 30.0F * scale, 2.0F * scale}, color);
+    }
+
+    const bool showBottomPanel = hudState.repairingGenerator || hudState.selfHealing || hudState.skillCheckActive ||
+                                 hudState.carryEscapeProgress > 0.0F || hudState.hookStage > 0;
+    if (showBottomPanel)
+    {
+        const engine::ui::UiRect bottom{
+            (static_cast<float>(m_ui.ScreenWidth()) - 620.0F * scale) * 0.5F + m_hudLayout.bottomCenterOffset.x * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 240.0F * scale - m_hudLayout.bottomCenterOffset.y * scale,
+            620.0F * scale,
+            240.0F * scale,
+        };
+        m_ui.BeginPanel("hud_bottom_custom", bottom, true);
+
+        if (hudState.repairingGenerator)
+        {
+            m_ui.Label("Generator Repair", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_gen_progress", hudState.activeGeneratorProgress, std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%");
+        }
+        if (hudState.selfHealing)
+        {
+            m_ui.Label("Self Heal", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_heal_progress", hudState.selfHealProgress, std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%");
+        }
+        if (hudState.skillCheckActive)
+        {
+            m_ui.Label("Skill Check active: SPACE", m_ui.Theme().colorDanger);
+            m_ui.SkillCheckBar(
+                "hud_skillcheck_progress",
+                hudState.skillCheckNeedle,
+                hudState.skillCheckSuccessStart,
+                hudState.skillCheckSuccessEnd
+            );
+        }
+        if (hudState.carryEscapeProgress > 0.0F)
+        {
+            m_ui.Label("Wiggle Escape: Alternate A/D", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_wiggle_progress", hudState.carryEscapeProgress, std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%");
+        }
+        if (hudState.hookStage > 0)
+        {
+            m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorDanger);
+            m_ui.ProgressBar(
+                "hud_hook_progress",
+                hudState.hookStageProgress,
+                std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
+            );
+            if (hudState.hookStage == 1)
+            {
+                const int attemptsLeft = std::max(0, hudState.hookEscapeAttemptsMax - hudState.hookEscapeAttemptsUsed);
+                m_ui.Label(
+                    "E: Attempt self-unhook (" + std::to_string(static_cast<int>(hudState.hookEscapeChance * 100.0F)) + "%), attempts left: " +
+                        std::to_string(attemptsLeft),
+                    m_ui.Theme().colorTextMuted
+                );
+            }
+            else if (hudState.hookStage == 2)
+            {
+                m_ui.Label("Struggle: hit SPACE during skill checks", m_ui.Theme().colorTextMuted);
+            }
+        }
+        m_ui.EndPanel();
+    }
+
+    if (hudState.roleName == "Killer" && hudState.killerBlindRemaining > 0.0F)
+    {
+        const float blind01 = glm::clamp(hudState.killerBlindRemaining / 2.0F, 0.0F, 1.0F);
+        const glm::vec4 overlayColor = hudState.killerBlindWhiteStyle
+            ? glm::vec4{1.0F, 1.0F, 1.0F, 0.82F * blind01}
+            : glm::vec4{0.0F, 0.0F, 0.0F, 0.78F * blind01};
+        m_ui.FillRect(
+            engine::ui::UiRect{
+                0.0F,
+                0.0F,
+                static_cast<float>(m_ui.ScreenWidth()),
+                static_cast<float>(m_ui.ScreenHeight()),
+            },
+            overlayColor
+        );
+    }
 
     // Draw TR debug overlay if enabled
     if (m_terrorAudioDebug && m_terrorAudioProfile.loaded)
@@ -5711,6 +6115,40 @@ void App::DrawSettingsUi(bool* closeSettings)
                 ImGui::SliderFloat("Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
                 ImGui::SliderFloat("Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
                 ImGui::SliderFloat("Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
+                ImGui::SliderFloat("Generator Base Seconds", &t.generatorRepairSecondsBase, 20.0F, 180.0F, "%.1f");
+                ImGui::Separator();
+                ImGui::TextUnformatted("Items");
+                ImGui::SliderFloat("Medkit Full Heal Charges", &t.medkitFullHealCharges, 4.0F, 64.0F, "%.1f");
+                ImGui::SliderFloat("Medkit Heal Speed Mult", &t.medkitHealSpeedMultiplier, 0.5F, 4.0F, "%.2f");
+                ImGui::SliderFloat("Toolbox Charges", &t.toolboxCharges, 1.0F, 120.0F, "%.1f");
+                ImGui::SliderFloat("Toolbox Drain / sec", &t.toolboxChargeDrainPerSecond, 0.05F, 8.0F, "%.2f");
+                ImGui::SliderFloat("Toolbox Repair Bonus", &t.toolboxRepairSpeedBonus, 0.0F, 3.0F, "%.2f");
+                ImGui::SliderFloat("Flashlight Max Use (s)", &t.flashlightMaxUseSeconds, 1.0F, 30.0F, "%.2f");
+                ImGui::SliderFloat("Flashlight Blind Build (s)", &t.flashlightBlindBuildSeconds, 0.1F, 6.0F, "%.2f");
+                ImGui::SliderFloat("Flashlight Blind Duration (s)", &t.flashlightBlindDurationSeconds, 0.1F, 8.0F, "%.2f");
+                ImGui::SliderFloat("Flashlight Beam Range", &t.flashlightBeamRange, 2.0F, 25.0F, "%.1f");
+                ImGui::SliderFloat("Flashlight Beam Angle", &t.flashlightBeamAngleDegrees, 5.0F, 80.0F, "%.1f");
+                const char* blindStyleItems[] = {"White", "Dark"};
+                ImGui::Combo("Flashlight Blind Style", &t.flashlightBlindStyle, blindStyleItems, 2);
+                ImGui::SliderFloat("Map Channel (s)", &t.mapChannelSeconds, 0.05F, 4.0F, "%.2f");
+                ImGui::SliderInt("Map Uses", &t.mapUses, 0, 20);
+                ImGui::SliderFloat("Map Reveal Range (m)", &t.mapRevealRangeMeters, 4.0F, 120.0F, "%.1f");
+                ImGui::SliderFloat("Map Reveal Duration (s)", &t.mapRevealDurationSeconds, 0.2F, 12.0F, "%.2f");
+                ImGui::Separator();
+                ImGui::TextUnformatted("Powers");
+                ImGui::SliderInt("Trapper Start Carry", &t.trapperStartCarryTraps, 0, 16);
+                ImGui::SliderInt("Trapper Max Carry", &t.trapperMaxCarryTraps, 1, 16);
+                ImGui::SliderInt("Trapper Ground Spawn", &t.trapperGroundSpawnTraps, 0, 48);
+                ImGui::SliderFloat("Trapper Set Time (s)", &t.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
+                ImGui::SliderFloat("Trapper Disarm Time (s)", &t.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
+                ImGui::SliderFloat("Trap Escape Base", &t.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
+                ImGui::SliderFloat("Trap Escape Step", &t.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
+                ImGui::SliderFloat("Trap Escape Max", &t.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
+                ImGui::SliderFloat("Trap Killer Stun (s)", &t.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
+                ImGui::SliderFloat("Wraith Cloak Speed Mult", &t.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
+                ImGui::SliderFloat("Wraith Cloak Transition (s)", &t.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+                ImGui::SliderFloat("Wraith Uncloak Transition (s)", &t.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+                ImGui::SliderFloat("Wraith Post-Uncloak Haste (s)", &t.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
                 ImGui::Separator();
                 ImGui::TextUnformatted("Map Generation Weights");
                 ImGui::TextUnformatted("  Classic Loops:");

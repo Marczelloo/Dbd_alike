@@ -1,0 +1,12 @@
+{
+  "asset_version": 1,
+  "description": "Repairs generators faster while charges remain.",
+  "display_name": "Toolbox",
+  "id": "toolbox",
+  "max_charges": 15.0,
+  "params": {
+    "charge_per_second": 1.0,
+    "repair_speed_bonus": 0.9
+  },
+  "use_mode": "hold"
+}
