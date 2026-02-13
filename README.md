@@ -859,6 +859,45 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 
 ---
 
+## Update: Modular Blender Asset Pipeline (Optimisation Phase)
+
+### What is new
+- New modular Blender generation stack in `tools/blender/scripts/`:
+  - `core/*` for config/scene/mesh/bake/export/validation helpers
+  - `generators/*` for asset-specific generators (`rock`, `crate`, `pillar`)
+  - `cli.py` as a single entry point (`list`, `generate`)
+- New config file: `config/assets.json`
+- New batch helper: `tools/blender/generate_batch.ps1`
+
+### Why this was added
+- Removes monolithic script coupling and enables incremental extension.
+- Introduces automatic regenerate/skip behavior based on config modification time.
+- Reduces initial high-poly rock generation pressure (uses lower subdivision baseline in modular generator).
+
+### Config schema (minimal)
+`config/assets.json`:
+- `defaults.texture_size` (int)
+- `defaults.bake_samples` (int)
+- `defaults.use_gpu` (bool)
+- `defaults.output_root` (string)
+- `assets.<assetId>.generator` (`rock|crate|pillar`)
+- `assets.<assetId>.variant` (string, optional)
+- `assets.<assetId>.seed` (int, optional)
+- `assets.<assetId>.scale` (`[x,y,z]`, optional)
+
+### Quick smoke test
+1. Run Blender CLI list mode and verify generators are listed.
+2. Run generate mode with `config/assets.json`.
+3. Verify outputs under `out/assets/`:
+   - `<asset>.blend`
+   - `<asset>.glb`
+4. Re-run generate; unchanged assets should print `SKIP ... up-to-date`.
+
+### Multiplayer impact
+- None (tooling-side change only, no runtime netcode behavior change).
+
+---
+
 ## Update: VFX System (Phase B)
 
 ### What is new

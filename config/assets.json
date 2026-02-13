@@ -1,0 +1,26 @@
+{
+  "defaults": {
+    "texture_size": 1024,
+    "bake_samples": 8,
+    "use_gpu": true,
+    "output_root": "out/assets"
+  },
+  "assets": {
+    "rock_moss_large": {
+      "generator": "rock",
+      "variant": "moss_large",
+      "seed": 42,
+      "scale": [1.4, 1.3, 1.2]
+    },
+    "crate_wood_a": {
+      "generator": "crate",
+      "seed": 7,
+      "scale": [1.0, 1.0, 1.0]
+    },
+    "pillar_stone_a": {
+      "generator": "pillar",
+      "seed": 11,
+      "scale": [1.0, 1.0, 1.2]
+    }
+  }
+}

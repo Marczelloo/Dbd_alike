@@ -161,3 +161,21 @@
 3. **Expected**: both peers show same trap/survivor trapped state and attempt/chance progression.
 4. Run `power_dump` and `item_dump` on host.
 5. **Expected**: values are coherent with HUD and observed behavior.
+
+## Blender Modular Pipeline Testing (2026-02-13)
+
+### Test 1: Generator discovery
+1. Run Blender with `tools/blender/scripts/cli.py -- list`.
+2. **Expected**: `rock`, `crate`, `pillar` listed.
+
+### Test 2: Config-driven generation
+1. Run Blender with `tools/blender/scripts/cli.py -- generate --config config/assets.json`.
+2. **Expected**: assets are generated into `out/assets` as `.blend` + `.glb`.
+
+### Test 3: Incremental skip
+1. Re-run the same generate command.
+2. **Expected**: unchanged assets print `SKIP <asset>: up-to-date`.
+
+### Test 4: Force regenerate
+1. Run generate with `--force`.
+2. **Expected**: all configured assets regenerate regardless of timestamps.

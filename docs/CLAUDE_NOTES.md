@@ -72,6 +72,27 @@ As of 2026-02-12, the following refactoring has been completed:
 
 - None currently
 
+## Update (2026-02-13): Performance branch progress
+
+### Completed runtime optimisations
+- Screen vignette migrated from multi-rect UI draw to fullscreen shader path.
+- Physics broadphase now uses spatial hash candidate filtering in collision/raycast/LOS.
+- Reduced per-frame allocations in `StaticBatcher` and FX billboard/trail paths.
+- Reduced repeated HUD state construction in app frame flow.
+
+### Completed tooling optimisation (Blender)
+- Added modular generation pipeline:
+  - `tools/blender/scripts/core/*`
+  - `tools/blender/scripts/generators/*`
+  - `tools/blender/scripts/cli.py`
+- Added JSON-driven generation config: `config/assets.json`.
+- Added batch entry script: `tools/blender/generate_batch.ps1`.
+
+### Next TODO
+- Hook existing legacy scripts (`make_*.py`) into modular CLI wrapper path.
+- Expand baking outputs (albedo/normal/roughness export in modular pipeline).
+- Add cache manifest (`.cache/manifest.json`) with per-asset hash keys.
+
 ## Audit: Items/Add-ons/Killer Powers (2026-02-12)
 
 ### Findings

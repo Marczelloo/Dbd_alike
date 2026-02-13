@@ -224,3 +224,22 @@ Trap trigger/escape logic runs in gameplay authority loop; trap state replicated
 ### Add-on Examples
 - `serrated_jaws`: hook modifier on trap escape (`bleed_multiplier`).
 - `tighter_springs`: stat modifiers (`escape_chance_step`, `max_escape_attempts`).
+
+## Blender Asset Generation: Modular CLI + Generator Registry (2026-02-13)
+
+### Decision
+Move toward a modular Blender pipeline with a single CLI entrypoint and generator registry, while keeping legacy scripts for compatibility.
+
+### Rationale
+1. **Scalability**: Adding a new asset type means adding one generator class instead of cloning large scripts.
+2. **Maintainability**: Shared concerns (scene setup, decimation, bake setup, export, validation) are centralized in `core/*`.
+3. **Incremental builds**: Timestamp-based skip avoids full regeneration on unchanged configs.
+4. **Hardware compatibility**: Bake setup attempts GPU backends then falls back to CPU safely.
+
+### Trade-offs
+- Pro: Faster iteration and clearer ownership of pipeline responsibilities.
+- Con: Initial migration period with both legacy and modular scripts coexisting.
+
+### Follow-up
+- Add hash-based cache manifest for stronger invalidation than mtime.
+- Expand modular baking path to output full texture sets and metadata.
