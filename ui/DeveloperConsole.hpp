@@ -69,6 +69,13 @@ struct ConsoleContext
     std::function<void(float)> setKillerLookLightAngle;
     std::function<void(float)> setKillerLookLightPitch;
     std::function<void(bool)> setKillerLookLightDebug;
+
+    // Profiler callbacks.
+    std::function<void()> profilerToggle;
+    std::function<void(bool)> profilerSetPinned;
+    std::function<void(bool)> profilerSetCompact;
+    std::function<void(int)> profilerBenchmark;
+    std::function<void()> profilerBenchmarkStop;
 };
 
 class DeveloperConsole

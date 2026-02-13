@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "engine/core/App.hpp"
+#include "engine/core/Profiler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -568,6 +569,9 @@ bool App::Run()
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
+        auto& profiler = engine::core::Profiler::Instance();
+        profiler.BeginFrame();
+
         const double frameStart = glfwGetTime();
 
         m_window.PollEvents();
@@ -703,6 +707,7 @@ bool App::Run()
 
         if (inGame)
         {
+            PROFILE_SCOPE("Update");
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
             m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
@@ -720,7 +725,9 @@ bool App::Run()
         }
         m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
 
-        m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
+        {
+            PROFILE_SCOPE("Render");
+            m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
         glm::mat4 viewProjection{1.0F};
         if (inGame)
         {
@@ -761,6 +768,7 @@ bool App::Run()
             m_renderer.SetCameraWorldPosition(glm::vec3{0.0F, 2.0F, 0.0F});
         }
         m_renderer.EndFrame(viewProjection);
+        } // end PROFILE_SCOPE("Render")
 
         bool shouldQuit = false;
         bool closePauseMenu = false;
@@ -1185,9 +1193,31 @@ bool App::Run()
             m_audio.StopAll();
         };
 
+        // Profiler callbacks.
+        context.profilerToggle = [this]() {
+            m_profilerOverlay.Toggle();
+        };
+        context.profilerSetPinned = [this](bool pinned) {
+            m_profilerOverlay.SetPinned(pinned);
+        };
+        context.profilerSetCompact = [this](bool compact) {
+            m_profilerOverlay.SetCompactMode(compact);
+        };
+        context.profilerBenchmark = [](int frames) {
+            engine::core::Profiler::Instance().StartBenchmark(frames);
+        };
+        context.profilerBenchmarkStop = []() {
+            engine::core::Profiler::Instance().StopBenchmark();
+        };
+
         m_console.Render(context, currentFps, hudState);
 
+        // Profiler overlay (rendered in ImGui pass).
+        m_profilerOverlay.Draw(profiler);
+
         m_window.SwapBuffers();
+
+        profiler.EndFrame();
 
         const double frameEnd = glfwGetTime();
         const double frameDelta = frameEnd - frameStart;

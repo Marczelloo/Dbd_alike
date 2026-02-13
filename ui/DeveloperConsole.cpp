@@ -659,7 +659,9 @@ std::string CommandCategoryForUsage(const std::string& usage)
     }
     if (command == "set_vsync" || command == "set_fps" || command == "set_tick" || command == "set_resolution" ||
         command == "toggle_fullscreen" || command == "render_mode" || command == "audio_play" ||
-        command == "audio_loop" || command == "audio_stop_all")
+        command == "audio_loop" || command == "audio_stop_all" ||
+        command == "perf" || command == "perf_pin" || command == "perf_compact" ||
+        command == "benchmark" || command == "benchmark_stop")
     {
         return "System";
     }
@@ -900,6 +902,48 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             {
                 context.audioStopAll();
                 LogSuccess("All audio stopped");
+            }
+        });
+
+        // ─── Profiler commands ───
+        RegisterCommand("perf", "Toggle performance profiler overlay", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.profilerToggle) {
+                context.profilerToggle();
+                LogSuccess("Profiler toggled");
+            }
+        });
+
+        RegisterCommand("perf_pin on|off", "Pin/unpin profiler to game window", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerSetPinned && tokens.size() >= 2) {
+                const bool pinned = tokens[1] == "on" || tokens[1] == "1";
+                context.profilerSetPinned(pinned);
+                LogSuccess(pinned ? "Profiler pinned" : "Profiler unpinned");
+            }
+        });
+
+        RegisterCommand("perf_compact on|off", "Toggle compact profiler bar", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerSetCompact && tokens.size() >= 2) {
+                const bool compact = tokens[1] == "on" || tokens[1] == "1";
+                context.profilerSetCompact(compact);
+                LogSuccess(compact ? "Compact mode ON" : "Compact mode OFF");
+            }
+        });
+
+        RegisterCommand("benchmark [frames]", "Run automated performance benchmark (default 600 frames)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerBenchmark) {
+                int frames = 600;
+                if (tokens.size() >= 2) {
+                    try { frames = std::stoi(tokens[1]); } catch (...) {}
+                }
+                context.profilerBenchmark(frames);
+                LogSuccess("Benchmark started (" + std::to_string(frames) + " frames)");
+            }
+        });
+
+        RegisterCommand("benchmark_stop", "Stop running benchmark", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.profilerBenchmarkStop) {
+                context.profilerBenchmarkStop();
+                LogSuccess("Benchmark stopped");
             }
         });
 
