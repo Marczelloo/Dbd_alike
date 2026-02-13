@@ -1209,6 +1209,8 @@ glm::mat4 GameplaySystems::BuildViewProjection(float aspectRatio) const
 HudState GameplaySystems::BuildHudState() const
 {
     HudState hud;
+    hud.survivorStates.reserve(1);
+    hud.debugActors.reserve(2);
     hud.mapName = m_activeMapName;
     hud.roleName = m_controlledRole == ControlledRole::Survivor ? "Survivor" : "Killer";
     hud.cameraModeName = CameraModeToName(ResolveCameraMode());
@@ -1569,6 +1571,7 @@ HudState GameplaySystems::BuildHudState() const
         // Populate perk debug info for both roles
         const auto populatePerkDebug = [&](engine::scene::Role role, std::vector<HudState::ActivePerkDebug>& outDebug, float& outSpeedMod) {
             const auto& activePerkStates = m_perkSystem.GetActivePerks(role);
+            outDebug.reserve(activePerkStates.size());
             for (const auto& state : activePerkStates)
             {
                 const auto* perk = m_perkSystem.GetPerk(state.perkId);
@@ -1614,11 +1617,6 @@ HudState GameplaySystems::BuildHudState() const
     };
     pushDebugLabel(m_survivor, "Player1", false);
     pushDebugLabel(m_killer, "Player2", true);
-
-    // Phase B2/B3: Scratch marks and blood pools debug info
-    hud.scratchActiveCount = GetActiveScratchCount();
-    hud.bloodActiveCount = GetActiveBloodPoolCount();
-    hud.scratchSpawnInterval = m_scratchNextInterval;
 
     // Phase B4: Killer look light debug info
     hud.killerLightEnabled = m_killerLookLight.enabled;
