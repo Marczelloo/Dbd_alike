@@ -985,6 +985,56 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
         });
 
+        // Threading commands
+        RegisterCommand("job_stats", "Show job system statistics", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.jobStats)
+            {
+                LogError("job_stats not available");
+                return;
+            }
+            LogInfo(context.jobStats());
+        });
+
+        RegisterCommand("job_enable", "Enable/disable job system", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.jobEnabled)
+            {
+                LogError("job_enable not available");
+                return;
+            }
+            bool enable = true;
+            if (tokens.size() > 1)
+            {
+                enable = (tokens[1] == "1" || tokens[1] == "true" || tokens[1] == "on");
+            }
+            context.jobEnabled(enable);
+            LogSuccess(std::string("Job system ") + (enable ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("job_test", "Run parallel job test", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.testParallel)
+            {
+                LogError("job_test not available");
+                return;
+            }
+            int iterations = 10000;
+            if (tokens.size() > 1)
+            {
+                iterations = std::stoi(tokens[1]);
+            }
+            LogInfo("Running parallel test with " + std::to_string(iterations) + " iterations...");
+            context.testParallel(iterations);
+            LogSuccess("Parallel test complete");
+        });
+
+        RegisterCommand("asset_stats", "Show async asset loader statistics", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.assetLoaderStats)
+            {
+                LogError("asset_stats not available");
+                return;
+            }
+            LogInfo(context.assetLoaderStats());
+        });
+
         RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() < 2)
             {

@@ -981,3 +981,75 @@ Current low-LOD fallback:
 - benchmark high-poly meshes: full mesh → oriented box proxy
 
 This reduces geometry cost near frustum edges (camera turns / edge-of-screen cases) without aggressive popping.
+
+---
+
+## Update: Multithreading System (Job System)
+
+### What is new
+- **JobSystem**: Thread pool with N workers (auto-detected from CPU cores - 1)
+- **RenderThread**: Command buffer for async render data preparation
+- **AsyncAssetLoader**: Background asset loading using JobSystem
+
+### Architecture
+The game now uses a job-based multithreading system:
+
+1. **JobSystem** (`engine/core/JobSystem.hpp`)
+   - Thread pool with worker threads
+   - Priority-based job queue (High/Normal/Low)
+   - `ParallelFor` for data-parallel tasks
+   - `JobCounter` for synchronization
+
+2. **RenderThread** (`engine/render/RenderThread.hpp`)
+   - Command buffer for render data
+   - Double-buffered frame data
+   - Allows async preparation of render commands
+
+3. **AsyncAssetLoader** (`engine/assets/AsyncAssetLoader.hpp`)
+   - Background file loading
+   - Uses JobSystem for parallel loading
+   - Callback-based completion notification
+
+### Console Commands (Threading)
+- `job_stats` - Show job system statistics (workers, pending jobs, completed)
+- `job_enable on|off` - Enable/disable job system processing
+- `job_test <iterations>` - Run parallel test (default: 10000 iterations)
+- `asset_stats` - Show async asset loader statistics
+
+### Usage Example
+```cpp
+// Schedule a job
+engine::core::JobSystem::Instance().Schedule([]() {
+    // Background work
+}, engine::core::JobPriority::Normal, "my_job");
+
+// Parallel for loop
+engine::core::JobSystem::Instance().ParallelFor(count, batchSize, [](size_t i) {
+    processItem(i);
+});
+
+// Async asset loading
+engine::assets::AsyncAssetLoader::Instance().LoadAsync(
+    "textures/character.png",
+    engine::assets::AssetType::Texture,
+    [](const engine::assets::AssetLoadResult& result) {
+        if (result.state == engine::assets::AssetState::Loaded) {
+            // Use loaded asset
+        }
+    }
+);
+```
+
+### Performance Impact
+- Parallel work distributed across all available CPU cores
+- 4 background tasks per frame while in-game (demonstrates worker thread utilization)
+- Render command building can happen on worker threads
+- Asset loading no longer blocks the main thread
+- Maintains deterministic gameplay (fixed timestep physics on main thread)
+
+### Verification
+1. Run the game and start a solo session
+2. Open Task Manager → Details → asym_horror.exe
+3. Right-click → Set affinity → Observe multiple cores are active
+4. Check Profiler overlay (F1) → Systems tab → Threading section
+5. Use `job_stats` console command to see worker activity

@@ -1,4 +1,5 @@
 #include "engine/core/Profiler.hpp"
+#include "engine/core/JobSystem.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -165,6 +166,16 @@ void Profiler::EndFrame()
     {
         m_ramUpdateCounter = 0;
         m_stats.systemRamBytes = GetProcessRamBytes();
+    }
+
+    // Update JobSystem stats.
+    if (JobSystem::Instance().IsInitialized())
+    {
+        auto jobStats = JobSystem::Instance().GetStats();
+        m_stats.jobWorkersTotal = jobStats.totalWorkers;
+        m_stats.jobWorkersActive = jobStats.activeWorkers;
+        m_stats.jobPending = jobStats.pendingJobs;
+        m_stats.jobCompleted = jobStats.completedJobs;
     }
 
     // Benchmark tracking.

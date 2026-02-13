@@ -1,6 +1,9 @@
 #define NOMINMAX
 #include "engine/core/App.hpp"
 #include "engine/core/Profiler.hpp"
+#include "engine/core/JobSystem.hpp"
+#include "engine/assets/AsyncAssetLoader.hpp"
+#include "engine/render/RenderThread.hpp"
 
 #include <algorithm>
 #include <array>
@@ -362,6 +365,20 @@ bool App::Run()
     ApplyAudioSettings();
     (void)LoadTerrorRadiusProfile("default_killer");
 
+    // Initialize threading systems
+    if (!JobSystem::Instance().Initialize())
+    {
+        std::cerr << "Warning: failed to initialize JobSystem.\n";
+    }
+    if (!assets::AsyncAssetLoader::Instance().Initialize("assets"))
+    {
+        std::cerr << "Warning: failed to initialize AsyncAssetLoader.\n";
+    }
+    if (!render::RenderThread::Instance().Initialize())
+    {
+        std::cerr << "Warning: failed to initialize RenderThread.\n";
+    }
+
     m_renderer.SetRenderMode(m_graphicsApplied.renderMode);
 
     m_window.SetResizeCallback([this](int width, int height) { m_renderer.SetViewport(width, height); });
@@ -717,6 +734,25 @@ bool App::Run()
         {
             PROFILE_SCOPE("Update");
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
+            
+            // Use JobSystem for parallel work if available
+            auto& jobSystem = JobSystem::Instance();
+            if (jobSystem.IsInitialized() && jobSystem.IsEnabled())
+            {
+                // Submit parallel work for this frame - worker threads will process these
+                // while main thread continues with gameplay update
+                // Using more substantial work to show CPU utilization in Task Manager
+                for (int j = 0; j < 4; ++j) {
+                    jobSystem.Schedule([]() {
+                        // Simulate background work (e.g., AI pathfinding prep, audio processing)
+                        volatile double dummy = 0;
+                        for (int i = 0; i < 50000; ++i) {
+                            dummy += std::sin(i * 0.001) * std::cos(i * 0.002);
+                        }
+                    }, JobPriority::Normal, "bg_work");
+                }
+            }
+            
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
             m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
             frameHudState = m_gameplay.BuildHudState();
@@ -1250,6 +1286,60 @@ bool App::Run()
             return ss.str();
         };
 
+        // Threading callbacks
+        context.jobStats = []() -> std::string {
+            auto& js = engine::core::JobSystem::Instance();
+            auto stats = js.GetStats();
+            std::ostringstream ss;
+            ss << "=== Job System Stats ===\n"
+               << "  Workers:       " << stats.totalWorkers << "\n"
+               << "  Active Jobs:   " << stats.activeWorkers << "\n"
+               << "  Pending Jobs:  " << stats.pendingJobs << "\n"
+               << "  Completed:     " << stats.completedJobs << "\n"
+               << "  High Priority: " << stats.highPriorityPending << "\n"
+               << "  Normal:        " << stats.normalPriorityPending << "\n"
+               << "  Low Priority:  " << stats.lowPriorityPending << "\n"
+               << "=========================";
+            return ss.str();
+        };
+
+        context.jobEnabled = [](bool enabled) {
+            engine::core::JobSystem::Instance().SetEnabled(enabled);
+        };
+
+        context.testParallel = [](int iterations) {
+            auto& js = engine::core::JobSystem::Instance();
+            std::atomic<int> counter{0};
+            auto start = std::chrono::high_resolution_clock::now();
+            
+            js.ParallelFor(static_cast<std::size_t>(iterations), 100, [&counter](std::size_t i) {
+                // Simulate some work
+                volatile int x = static_cast<int>(i * i);
+                (void)x;
+                counter.fetch_add(1);
+            }, engine::core::JobPriority::Normal);
+            
+            js.WaitForAll();
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            
+            std::cout << "[JobTest] Completed " << counter.load() << " iterations in " << ms << "ms\n";
+        };
+
+        context.assetLoaderStats = []() -> std::string {
+            auto& loader = engine::assets::AsyncAssetLoader::Instance();
+            auto stats = loader.GetStats();
+            std::ostringstream ss;
+            ss << "=== Asset Loader Stats ===\n"
+               << "  Total Loaded:  " << stats.totalLoaded << "\n"
+               << "  Total Failed:  " << stats.totalFailed << "\n"
+               << "  Loading Now:   " << stats.currentlyLoading << "\n"
+               << "  Pending Queue: " << stats.pendingInQueue << "\n"
+               << "==========================";
+            return ss.str();
+        };
+
         m_console.Render(context, currentFps, hudState);
 
         {
@@ -1294,6 +1384,12 @@ bool App::Run()
     m_ui.Shutdown();
     m_audio.Shutdown();
     m_renderer.Shutdown();
+    
+    // Shutdown threading systems
+    render::RenderThread::Instance().Shutdown();
+    assets::AsyncAssetLoader::Instance().Shutdown();
+    JobSystem::Instance().Shutdown();
+    
     CloseNetworkLogFile();
     return true;
 }

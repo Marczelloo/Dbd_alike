@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <array>
 #include <condition_variable>
 #include <functional>
 #include <mutex>

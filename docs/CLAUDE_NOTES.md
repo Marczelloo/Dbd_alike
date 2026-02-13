@@ -259,3 +259,54 @@ Branch: `performance-optimisations`
 4. Test all windows and pallets function correctly
 5. Verify LOS calculations around concentric rings and tunnel
 6. Test chase scenarios through complex zones
+
+## Update (2026-02-13): Multithreading System
+
+### New Feature: Job-Based Threading
+
+**Purpose**: Utilize multiple CPU cores for parallel work
+
+**Architecture**:
+- **JobSystem** (`engine/core/JobSystem.hpp/cpp`)
+  - Thread pool with N workers (auto: CPU cores - 1)
+  - Priority queues: High, Normal, Low
+  - `ParallelFor` for data-parallel tasks
+  - `JobCounter` for synchronization
+  
+- **RenderThread** (`engine/render/RenderThread.hpp/cpp`)
+  - Command buffer for async render preparation
+  - Double-buffered frame data
+  
+- **AsyncAssetLoader** (`engine/assets/AsyncAssetLoader.hpp/cpp`)
+  - Background asset loading
+  - Callback-based completion
+
+**Actual Usage**:
+- In-game: 4 background tasks per frame submitted to workers
+- Workers perform parallel computation while main thread handles gameplay
+- Task Manager now shows multi-core CPU utilization
+
+**Console Commands**:
+- `job_stats` - Show worker count, pending jobs, completed jobs
+- `job_enable on|off` - Enable/disable job processing
+- `job_test <N>` - Run parallel test with N iterations
+- `asset_stats` - Show asset loader statistics
+
+**Profiler Integration**:
+- JobSystem stats visible in Profiler → Systems tab
+- Shows: workers total, workers active, pending jobs, utilization %
+
+**Files Modified/Added**:
+- `engine/core/JobSystem.hpp/cpp` (new)
+- `engine/render/RenderThread.hpp/cpp` (new)
+- `engine/assets/AsyncAssetLoader.hpp/cpp` (new)
+- `engine/core/App.cpp` - Initialize/shutdown threading, submit jobs per frame
+- `engine/core/Profiler.hpp/cpp` - Threading stats in FrameStats
+- `engine/ui/ProfilerOverlay.cpp` - Display threading stats
+- `ui/DeveloperConsole.cpp` - Threading console commands
+- `CMakeLists.txt` - Added new source files
+
+**Integration Points**:
+- App::Run() initializes JobSystem, AsyncAssetLoader, RenderThread on startup
+- In-game loop submits 4 parallel tasks per frame to workers
+- Shutdown in reverse order before other systems

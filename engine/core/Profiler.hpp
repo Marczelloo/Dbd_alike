@@ -142,6 +142,13 @@ struct FrameStats
     float appTotalMs = 0.0F;
     float inputMs = 0.0F;
     float networkMs = 0.0F;
+
+    // Threading stats.
+    std::size_t jobWorkersTotal = 0;
+    std::size_t jobWorkersActive = 0;
+    std::size_t jobPending = 0;
+    std::size_t jobCompleted = 0;
+    float jobWaitTimeMs = 0.0F;
 };
 
 /// Lightweight CPU profiler with optional GPU timer queries.

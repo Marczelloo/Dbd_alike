@@ -81,6 +81,12 @@ struct ConsoleContext
     // Automated perf test callbacks.
     std::function<void(const std::string&, int)> perfTest; // (mapName, frames)
     std::function<std::string()> perfReport;               // returns last benchmark report
+
+    // Threading callbacks
+    std::function<std::string()> jobStats;                 // returns job system stats
+    std::function<void(bool)> jobEnabled;                  // enable/disable job system
+    std::function<void(int)> testParallel;                 // run parallel test with N iterations
+    std::function<std::string()> assetLoaderStats;         // returns async asset loader stats
 };
 
 class DeveloperConsole

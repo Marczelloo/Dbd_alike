@@ -576,6 +576,18 @@ void ProfilerOverlay::DrawSystemTimings([[maybe_unused]] engine::core::Profiler&
     const std::size_t gpuMem = stats.solidVboBytes + stats.texturedVboBytes + stats.lineVboBytes;
     ImGui::Text("  GPU VBO: %.2f MB", static_cast<float>(gpuMem) / (1024.0F * 1024.0F));
     ImGui::Text("  System RAM: %.1f MB", static_cast<float>(stats.systemRamBytes) / (1024.0F * 1024.0F));
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6F, 0.8F, 1.0F, 1.0F), "Threading (JobSystem):");
+    ImGui::Text("  Workers: %zu / %zu active", stats.jobWorkersActive, stats.jobWorkersTotal);
+    ImGui::Text("  Pending jobs: %zu", stats.jobPending);
+    ImGui::Text("  Completed jobs: %zu", stats.jobCompleted);
+    float utilization = (stats.jobWorkersTotal > 0) ? (static_cast<float>(stats.jobWorkersActive) / static_cast<float>(stats.jobWorkersTotal) * 100.0F) : 0.0F;
+    ImVec4 utilColor = (utilization > 50.0F) ? ImVec4(0.3F, 1.0F, 0.3F, 1.0F) :
+                       (utilization > 0.0F) ? ImVec4(1.0F, 1.0F, 0.3F, 1.0F) :
+                                              ImVec4(0.5F, 0.5F, 0.5F, 1.0F);
+    ImGui::SameLine();
+    ImGui::TextColored(utilColor, "(%.0f%% utilization)", utilization);
 #endif
 }
 
