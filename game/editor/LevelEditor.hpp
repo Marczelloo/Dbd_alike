@@ -397,6 +397,21 @@ private:
         std::size_t surfaceIndex,
         const engine::assets::MeshSurfaceData& surface
     ) const;
+    [[nodiscard]] float ComputeMeshAssetUniformScale(
+        const engine::assets::MeshData& meshData,
+        const glm::vec3& targetHalfExtents
+    ) const;
+    [[nodiscard]] bool DrawModelAssetInstance(
+        engine::render::Renderer& renderer,
+        const std::string& meshAsset,
+        const glm::vec3& drawPosition,
+        const glm::vec3& drawRotation,
+        const glm::vec3& drawScale,
+        const glm::vec3& targetHalfExtents,
+        const glm::vec3& color,
+        const engine::render::MaterialParams& material,
+        std::string* outLoadError
+    ) const;
     void ClearMeshAlbedoTextureCache() const;
     void PlaceImportedAssetAtHovered(const std::string& relativeAssetPath);
     void InstantiatePrefabAtHovered(const std::string& prefabId);

@@ -174,6 +174,8 @@ void Profiler::EndFrame()
         auto jobStats = JobSystem::Instance().GetStats();
         m_stats.jobWorkersTotal = jobStats.totalWorkers;
         m_stats.jobWorkersActive = jobStats.activeWorkers;
+        m_stats.jobFrameWorkerUtilizationPct = jobStats.frameWorkerUtilizationPct;
+        m_stats.jobFrameAverageActiveWorkers = jobStats.frameAverageActiveWorkers;
         m_stats.jobPending = jobStats.pendingJobs;
         m_stats.jobCompleted = jobStats.completedJobs;
     }

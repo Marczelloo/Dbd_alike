@@ -4130,6 +4130,101 @@ unsigned int LevelEditor::GetOrCreateMeshSurfaceAlbedoTexture(
 #endif
 }
 
+float LevelEditor::ComputeMeshAssetUniformScale(
+    const engine::assets::MeshData& meshData,
+    const glm::vec3& targetHalfExtents
+) const
+{
+    const glm::vec3 meshSize = glm::max(glm::vec3{0.0001F}, meshData.boundsMax - meshData.boundsMin);
+    const glm::vec3 targetSize = glm::max(glm::vec3{0.05F}, targetHalfExtents * 2.0F);
+    return glm::max(
+        0.0001F,
+        glm::min(targetSize.x / meshSize.x, glm::min(targetSize.y / meshSize.y, targetSize.z / meshSize.z)));
+}
+
+bool LevelEditor::DrawModelAssetInstance(
+    engine::render::Renderer& renderer,
+    const std::string& meshAsset,
+    const glm::vec3& drawPosition,
+    const glm::vec3& drawRotation,
+    const glm::vec3& drawScale,
+    const glm::vec3& targetHalfExtents,
+    const glm::vec3& color,
+    const engine::render::MaterialParams& material,
+    std::string* outLoadError
+) const
+{
+    if (meshAsset.empty())
+    {
+        if (outLoadError != nullptr)
+        {
+            *outLoadError = "Missing mesh asset path";
+        }
+        return false;
+    }
+
+    std::string loadError;
+    const std::filesystem::path absolute = m_assetRegistry.AbsolutePath(meshAsset);
+    const engine::assets::MeshData* meshData = m_meshLibrary.LoadMesh(absolute, &loadError);
+    if (meshData == nullptr || !meshData->loaded)
+    {
+        if (outLoadError != nullptr)
+        {
+            *outLoadError = loadError;
+        }
+        return false;
+    }
+
+    const float uniformScale = ComputeMeshAssetUniformScale(*meshData, targetHalfExtents);
+    const glm::vec3 modelScale = glm::vec3{uniformScale} * drawScale;
+
+    if (!meshData->surfaces.empty())
+    {
+        for (std::size_t surfaceIndex = 0; surfaceIndex < meshData->surfaces.size(); ++surfaceIndex)
+        {
+            const auto& surface = meshData->surfaces[surfaceIndex];
+            const unsigned int albedoTexture = GetOrCreateMeshSurfaceAlbedoTexture(meshAsset, surfaceIndex, surface);
+            if (albedoTexture != 0)
+            {
+                renderer.DrawTexturedMesh(
+                    surface.geometry,
+                    drawPosition,
+                    drawRotation,
+                    modelScale,
+                    color,
+                    material,
+                    albedoTexture);
+            }
+            else
+            {
+                renderer.DrawMesh(
+                    surface.geometry,
+                    drawPosition,
+                    drawRotation,
+                    modelScale,
+                    color,
+                    material);
+            }
+        }
+    }
+    else
+    {
+        renderer.DrawMesh(
+            meshData->geometry,
+            drawPosition,
+            drawRotation,
+            modelScale,
+            color,
+            material);
+    }
+
+    if (outLoadError != nullptr)
+    {
+        outLoadError->clear();
+    }
+    return true;
+}
+
 void LevelEditor::ClearMeshAlbedoTextureCache() const
 {
 #if BUILD_WITH_IMGUI
@@ -10775,58 +10870,18 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
         if (prop.type == PropType::MeshAsset && !prop.meshAsset.empty())
         {
             std::string loadError;
-            const std::filesystem::path absolute = m_assetRegistry.AbsolutePath(prop.meshAsset);
-            const engine::assets::MeshData* meshData = m_meshLibrary.LoadMesh(absolute, &loadError);
-            if (meshData != nullptr && meshData->loaded)
-            {
-                const glm::vec3 meshSize = glm::max(glm::vec3{0.0001F}, meshData->boundsMax - meshData->boundsMin);
-                const glm::vec3 targetSize = glm::max(glm::vec3{0.05F}, prop.halfExtents * 2.0F);
-                const float uniformScale = glm::max(
-                    0.0001F,
-                    glm::min(
-                        targetSize.x / meshSize.x,
-                        glm::min(targetSize.y / meshSize.y, targetSize.z / meshSize.z)));
-                if (!meshData->surfaces.empty())
-                {
-                    for (std::size_t surfaceIndex = 0; surfaceIndex < meshData->surfaces.size(); ++surfaceIndex)
-                    {
-                        const auto& surface = meshData->surfaces[surfaceIndex];
-                        const unsigned int albedoTexture = GetOrCreateMeshSurfaceAlbedoTexture(prop.meshAsset, surfaceIndex, surface);
-                        if (albedoTexture != 0)
-                        {
-                            renderer.DrawTexturedMesh(
-                                surface.geometry,
-                                drawPosition,
-                                drawRotation,
-                                glm::vec3{uniformScale} * drawScale,
-                                color,
-                                materialParams,
-                                albedoTexture);
-                        }
-                        else
-                        {
-                            renderer.DrawMesh(
-                                surface.geometry,
-                                drawPosition,
-                                drawRotation,
-                                glm::vec3{uniformScale} * drawScale,
-                                color,
-                                materialParams);
-                        }
-                    }
-                }
-                else
-                {
-                    renderer.DrawMesh(
-                        meshData->geometry,
-                        drawPosition,
-                        drawRotation,
-                        glm::vec3{uniformScale} * drawScale,
-                        color,
-                        materialParams);
-                }
-            }
-            else if (m_debugView && !loadError.empty())
+            if (!DrawModelAssetInstance(
+                    renderer,
+                    prop.meshAsset,
+                    drawPosition,
+                    drawRotation,
+                    drawScale,
+                    prop.halfExtents,
+                    color,
+                    materialParams,
+                    &loadError) &&
+                m_debugView &&
+                !loadError.empty())
             {
                 renderer.DrawOverlayLine(
                     drawPosition,

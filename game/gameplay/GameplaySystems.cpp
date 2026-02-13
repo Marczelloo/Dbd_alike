@@ -2,6 +2,7 @@
 #include "game/gameplay/SpawnSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"
 #include "engine/scene/Components.hpp"
+#include "engine/core/JobSystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,7 +32,7 @@ namespace
 {
 constexpr float kGravity = -20.0F;
 constexpr float kPi = 3.1415926535F;
-constexpr float kPovLodBufferScale = 1.10F; // 10% frustum edge buffer for low-LOD fallback
+constexpr float kPovLodBufferScale = 1.10F; // Dynamic actor edge buffer for low-LOD fallback
 
 engine::scene::Entity SpawnActor(
     engine::scene::World& world,
@@ -3542,6 +3543,7 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
             {
                 case maps::HighPolyMeshSpawn::Type::IcoSphere:
                     mesh.geometry = GenerateIcoSphere(meshSpawn.detailLevel);
+                    mesh.mediumLodGeometry = GenerateIcoSphere(std::max(1, meshSpawn.detailLevel - 2));
                     break;
                 case maps::HighPolyMeshSpawn::Type::Torus:
                     mesh.geometry = GenerateTorus(
@@ -3549,12 +3551,26 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
                         16 + meshSpawn.detailLevel * 8, 
                         8 + meshSpawn.detailLevel * 4
                     );
+                    mesh.mediumLodGeometry = GenerateTorus(
+                        1.0F,
+                        0.4F,
+                        std::max(10, 10 + meshSpawn.detailLevel * 3),
+                        std::max(6, 6 + meshSpawn.detailLevel * 2)
+                    );
                     break;
                 case maps::HighPolyMeshSpawn::Type::GridPlane:
                     mesh.geometry = GenerateGridPlane(2 << meshSpawn.detailLevel, 2 << meshSpawn.detailLevel);
+                    mesh.mediumLodGeometry = GenerateGridPlane(
+                        2 << std::max(2, meshSpawn.detailLevel - 2),
+                        2 << std::max(2, meshSpawn.detailLevel - 2)
+                    );
                     break;
                 case maps::HighPolyMeshSpawn::Type::SpiralStair:
                     mesh.geometry = GenerateSpiralStair(32 + meshSpawn.detailLevel * 8, 16);
+                    mesh.mediumLodGeometry = GenerateSpiralStair(
+                        std::max(18, 16 + meshSpawn.detailLevel * 3),
+                        12
+                    );
                     break;
             }
             
@@ -7226,22 +7242,83 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
         return m_frustum.IntersectsAABB(mins, maxs);
     };
 
-    auto isVisibleWithPovBuffer = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
-        const glm::vec3 expandedHalf = halfExtents * kPovLodBufferScale;
-        const glm::vec3 mins = center - expandedHalf;
-        const glm::vec3 maxs = center + expandedHalf;
-        return m_frustum.IntersectsAABB(mins, maxs);
-    };
+    // Parallel culling - determine which meshes are visible
+    const std::size_t meshCount = m_highPolyMeshes.size();
+    std::vector<std::size_t> visibleMeshes;
+    visibleMeshes.reserve(meshCount);
 
-    for (const auto& mesh : m_highPolyMeshes)
+    // Use JobSystem for parallel culling if available
+    auto& jobSystem = engine::core::JobSystem::Instance();
+    if (jobSystem.IsInitialized() && jobSystem.IsEnabled() && meshCount > 256)
     {
-        const bool visibleFull = isVisible(mesh.position, mesh.halfExtents);
-        if (!visibleFull && !isVisibleWithPovBuffer(mesh.position, mesh.halfExtents))
+        // Parallel culling using workers
+        // Pre-allocate results
+        std::vector<std::int8_t> visibilityFlags(meshCount, 0);
+        engine::core::JobCounter cullCounter;
+        
+        jobSystem.ParallelFor(meshCount, 64, [&](std::size_t idx) {
+            const auto& mesh = m_highPolyMeshes[idx];
+            if (isVisible(mesh.position, mesh.halfExtents))
+            {
+                visibilityFlags[idx] = 1;
+            }
+        }, engine::core::JobPriority::High, &cullCounter);
+        
+        jobSystem.WaitForCounter(cullCounter);
+        
+        // Collect visible mesh indices
+        for (std::size_t i = 0; i < meshCount; ++i)
         {
-            continue;
+            if (visibilityFlags[i] == 1)
+            {
+                visibleMeshes.push_back(i);
+            }
         }
+    }
+    else
+    {
+        // Sequential culling (fallback for small mesh counts or disabled JobSystem)
+        for (std::size_t i = 0; i < meshCount; ++i)
+        {
+            const auto& mesh = m_highPolyMeshes[i];
+            if (isVisible(mesh.position, mesh.halfExtents))
+            {
+                visibleMeshes.push_back(i);
+            }
+        }
+    }
 
-        if (visibleFull)
+    if (visibleMeshes.empty())
+    {
+        return;
+    }
+
+    constexpr float kHighPolyFullDetailDistance = 72.0F;
+    constexpr float kHighPolyFullDetailDistanceSq = kHighPolyFullDetailDistance * kHighPolyFullDetailDistance;
+    constexpr float kHighPolyMediumDetailDistance = 140.0F;
+    constexpr float kHighPolyMediumDetailDistanceSq = kHighPolyMediumDetailDistance * kHighPolyMediumDetailDistance;
+    constexpr std::size_t kMaxFullDetailMeshes = 8;
+
+    std::vector<std::pair<std::size_t, float>> sortedVisible;
+    sortedVisible.reserve(visibleMeshes.size());
+    for (const std::size_t idx : visibleMeshes)
+    {
+        const auto& mesh = m_highPolyMeshes[idx];
+        const glm::vec3 toCamera = mesh.position - m_cameraPosition;
+        const float distanceSq = glm::dot(toCamera, toCamera);
+        sortedVisible.emplace_back(idx, distanceSq);
+    }
+    std::sort(sortedVisible.begin(), sortedVisible.end(), [](const auto& a, const auto& b) {
+        return a.second < b.second;
+    });
+
+    // Render visible meshes (must be on main thread for OpenGL)
+    std::size_t fullDetailDraws = 0;
+    for (const auto& [idx, distanceSq] : sortedVisible)
+    {
+        const auto& mesh = m_highPolyMeshes[idx];
+
+        if (distanceSq <= kHighPolyFullDetailDistanceSq && fullDetailDraws < kMaxFullDetailMeshes)
         {
             renderer.DrawMesh(
                 mesh.geometry,
@@ -7251,6 +7328,18 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
                 mesh.color,
                 engine::render::MaterialParams{0.55F, 0.0F, 0.0F, false}
             );
+            ++fullDetailDraws;
+        }
+        else if (distanceSq <= kHighPolyMediumDetailDistanceSq && !mesh.mediumLodGeometry.positions.empty())
+        {
+            renderer.DrawMesh(
+                mesh.mediumLodGeometry,
+                mesh.position,
+                mesh.rotation,
+                mesh.scale,
+                mesh.color * 0.96F,
+                engine::render::MaterialParams{0.65F, 0.0F, 0.0F, false}
+            );
         }
         else
         {
@@ -7258,8 +7347,8 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
                 mesh.position,
                 mesh.halfExtents,
                 mesh.rotation,
-                mesh.color * 0.85F,
-                engine::render::MaterialParams{0.9F, 0.0F, 0.0F, false}
+                mesh.color * 0.9F,
+                engine::render::MaterialParams{0.85F, 0.0F, 0.0F, false}
             );
         }
     }

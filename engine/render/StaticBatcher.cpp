@@ -1,7 +1,9 @@
 #include "engine/render/StaticBatcher.hpp"
+#include "engine/core/JobSystem.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 
 #include <glad/glad.h>
 
@@ -153,13 +155,48 @@ void StaticBatcher::Render(
     m_cachedFirsts.reserve(m_chunks.size());
     m_cachedCounts.reserve(m_chunks.size());
 
-    for (const auto& chunk : m_chunks)
+    // Use parallel culling for large chunk counts
+    const std::size_t chunkCount = m_chunks.size();
+    auto& jobSystem = engine::core::JobSystem::Instance();
+    
+    if (jobSystem.IsInitialized() && jobSystem.IsEnabled() && chunkCount > 256)
     {
-        if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+        // Parallel culling
+        std::vector<std::int8_t> visibleFlags(chunkCount, 0);
+        engine::core::JobCounter cullCounter;
+        
+        jobSystem.ParallelFor(chunkCount, 64, [&frustum, &visibleFlags, this](std::size_t idx) {
+            const auto& chunk = m_chunks[idx];
+            if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+            {
+                visibleFlags[idx] = 1;
+            }
+        }, engine::core::JobPriority::High, &cullCounter);
+        
+        jobSystem.WaitForCounter(cullCounter);
+        
+        // Collect visible chunks
+        for (std::size_t i = 0; i < chunkCount; ++i)
         {
-            m_cachedFirsts.push_back(static_cast<GLint>(chunk.firstVertex));
-            m_cachedCounts.push_back(static_cast<GLsizei>(chunk.vertexCount));
-            m_visibleCount += chunk.vertexCount;
+            if (visibleFlags[i])
+            {
+                m_cachedFirsts.push_back(static_cast<GLint>(m_chunks[i].firstVertex));
+                m_cachedCounts.push_back(static_cast<GLsizei>(m_chunks[i].vertexCount));
+                m_visibleCount += m_chunks[i].vertexCount;
+            }
+        }
+    }
+    else
+    {
+        // Sequential culling (fallback)
+        for (const auto& chunk : m_chunks)
+        {
+            if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+            {
+                m_cachedFirsts.push_back(static_cast<GLint>(chunk.firstVertex));
+                m_cachedCounts.push_back(static_cast<GLsizei>(chunk.vertexCount));
+                m_visibleCount += chunk.vertexCount;
+            }
         }
     }
 

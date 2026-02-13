@@ -1171,6 +1171,7 @@ private:
     struct HighPolyMesh
     {
         engine::render::MeshGeometry geometry;
+        engine::render::MeshGeometry mediumLodGeometry;
         glm::vec3 position{0.0F};
         glm::vec3 rotation{0.0F};
         glm::vec3 scale{1.0F};

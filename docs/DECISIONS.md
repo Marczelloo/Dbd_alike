@@ -218,6 +218,34 @@ Trap trigger/escape logic runs in gameplay authority loop; trap state replicated
 
 ### Rationale
 1. **Correctness**: Avoids divergent escape outcomes between peers.
+
+## Profiler Threading Metrics: Frame-Averaged Utilization (2026-02-14)
+
+### Decision
+Keep instantaneous worker count for debugging, but treat frame-averaged utilization as the primary threading metric in profiler UI.
+
+### Rationale
+1. **Snapshot bias**: End-of-frame sampling often reports near-zero active workers even during heavy parallel work.
+2. **Operator clarity**: Frame-average metrics better match user-observed behavior and benchmark results.
+3. **Low overhead**: Cumulative busy-time accounting per worker job is simple and cheap.
+
+### Trade-offs
+- Pro: Much more trustworthy threading telemetry.
+- Con: Adds tiny timing bookkeeping around each job execution.
+
+## High-Poly Benchmark Visibility Policy (2026-02-14)
+
+### Decision
+Use strict frustum culling for high-poly benchmark meshes (no edge-buffer fallback), with 3 distance tiers and capped full-detail draw count.
+
+### Rationale
+1. **Off-screen cost control**: Edge fallback was still spending CPU/GPU budget when object not visible.
+2. **Near-camera quality**: Raised full-detail range prevents overly aggressive detail drop.
+3. **Scalability**: Full-detail cap (nearest-first) avoids catastrophic frame spikes in dense clusters.
+
+### Trade-offs
+- Pro: Better worst-case FPS stability in stress scenes.
+- Con: Potentially more visible LOD transitions at extreme camera sweeps (mitigated by medium LOD tier).
 2. **Debuggability**: Host can inspect trap states (`power_dump`, HUD debug fields).
 3. **Future ready**: Can later move to dedicated net messages if packet budget needs optimization.
 
@@ -266,3 +294,31 @@ Use 15 distinct testing zones with clear purposes instead of a single heterogene
 - Pro: Clear test boundaries, easy to isolate problems
 - Pro: Good visual benchmark with varied geometry complexity
 - Con: Not representative of actual gameplay maps (intentionally extreme)
+
+## Threading: Scoped Waits via JobCounter (2026-02-13)
+
+### Decision
+Use per-task-group `JobCounter` waits (e.g. culling pass) instead of global `JobSystem::WaitForAll()` in frame-critical paths.
+
+### Rationale
+1. **Isolation**: Frame culling no longer blocks on unrelated async jobs (asset loader, debug jobs, etc.).
+2. **Latency**: Reduces long-tail stalls and frame time spikes under queue contention.
+3. **Determinism**: Wait scope is explicit and tied to the exact jobs created by that subsystem.
+
+### Trade-offs
+- Pro: Better frame pacing and less cross-system interference.
+- Con: Slightly more bookkeeping (`JobCounter` creation/passing) per parallel pass.
+
+## High-Poly Render LOD Proxy (2026-02-13)
+
+### Decision
+For benchmark high-poly meshes, render full geometry only within a near distance threshold; use oriented-box proxy farther away.
+
+### Rationale
+1. **CPU reduction**: Avoids per-frame CPU vertex transform/push for distant heavy meshes.
+2. **GPU reduction**: Cuts fragment/triangle load in high-coverage scenes.
+3. **Visual stability**: Maintains clear scene silhouette with cheap proxy geometry.
+
+### Trade-offs
+- Pro: Significant perf gain on stress map and camera sweeps.
+- Con: Distant geometry fidelity is intentionally reduced.

@@ -48,7 +48,6 @@ void ProfilerOverlay::Draw([[maybe_unused]] engine::core::Profiler& profiler)
 
     // Use cached data if available, otherwise live data.
     const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
-    const auto& sections = m_hasCachedData ? m_cachedSections : profiler.Sections();
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     if (m_pinned)
@@ -579,15 +578,15 @@ void ProfilerOverlay::DrawSystemTimings([[maybe_unused]] engine::core::Profiler&
 
     ImGui::Separator();
     ImGui::TextColored(ImVec4(0.6F, 0.8F, 1.0F, 1.0F), "Threading (JobSystem):");
-    ImGui::Text("  Workers: %zu / %zu active", stats.jobWorkersActive, stats.jobWorkersTotal);
+    ImGui::Text("  Workers (snapshot): %zu / %zu active", stats.jobWorkersActive, stats.jobWorkersTotal);
+    ImGui::Text("  Avg active (frame): %.2f", stats.jobFrameAverageActiveWorkers);
     ImGui::Text("  Pending jobs: %zu", stats.jobPending);
     ImGui::Text("  Completed jobs: %zu", stats.jobCompleted);
-    float utilization = (stats.jobWorkersTotal > 0) ? (static_cast<float>(stats.jobWorkersActive) / static_cast<float>(stats.jobWorkersTotal) * 100.0F) : 0.0F;
-    ImVec4 utilColor = (utilization > 50.0F) ? ImVec4(0.3F, 1.0F, 0.3F, 1.0F) :
-                       (utilization > 0.0F) ? ImVec4(1.0F, 1.0F, 0.3F, 1.0F) :
+    const float utilization = stats.jobFrameWorkerUtilizationPct;
+    ImVec4 utilColor = (utilization > 70.0F) ? ImVec4(0.3F, 1.0F, 0.3F, 1.0F) :
+                       (utilization > 15.0F) ? ImVec4(1.0F, 1.0F, 0.3F, 1.0F) :
                                               ImVec4(0.5F, 0.5F, 0.5F, 1.0F);
-    ImGui::SameLine();
-    ImGui::TextColored(utilColor, "(%.0f%% utilization)", utilization);
+    ImGui::TextColored(utilColor, "  Worker utilization (frame): %.1f%%", utilization);
 #endif
 }
 

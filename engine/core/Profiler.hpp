@@ -146,6 +146,8 @@ struct FrameStats
     // Threading stats.
     std::size_t jobWorkersTotal = 0;
     std::size_t jobWorkersActive = 0;
+    float jobFrameWorkerUtilizationPct = 0.0F;
+    float jobFrameAverageActiveWorkers = 0.0F;
     std::size_t jobPending = 0;
     std::size_t jobCompleted = 0;
     float jobWaitTimeMs = 0.0F;

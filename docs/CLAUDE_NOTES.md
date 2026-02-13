@@ -93,6 +93,30 @@ As of 2026-02-12, the following refactoring has been completed:
 - Expand baking outputs (albedo/normal/roughness export in modular pipeline).
 - Add cache manifest (`.cache/manifest.json`) with per-asset hash keys.
 
+## Update (2026-02-14): Profiler + High-Poly + Editor API follow-up
+
+### Completed
+- **Profiler threading metrics corrected**
+  - Added frame-averaged worker utilization (`frameWorkerUtilizationPct`) and average active workers (`frameAverageActiveWorkers`) in `JobSystem::GetStats()`.
+  - Profiler overlay now shows snapshot workers separately from frame-average metrics to avoid false "threading idle" reads.
+
+- **High-poly benchmark rendering stabilized**
+  - Removed high-poly edge-buffer fallback draws when meshes are outside frustum.
+  - Added medium LOD geometry generation per high-poly spawn type.
+  - Raised near full-detail distance and capped number of full-detail meshes rendered per frame (nearest-first).
+  - Result: significantly lower off-screen high-poly cost and less aggressive detail collapse.
+
+- **Model draw API unified for editor modes**
+  - Added shared helper `DrawModelAssetInstance(...)` used by `PropType::MeshAsset` rendering.
+  - Map/loop editor preview now uses one mesh-asset draw path (uniform scale + textured surface fallback behavior aligned).
+
+### File hotspots
+- `engine/core/JobSystem.hpp/.cpp`
+- `engine/core/Profiler.hpp/.cpp`
+- `engine/ui/ProfilerOverlay.cpp`
+- `game/gameplay/GameplaySystems.hpp/.cpp`
+- `game/editor/LevelEditor.hpp/.cpp`
+
 ## Update (2026-02-14): Deep Rendering Optimization Pass (34+ items)
 
 Branch: `performance-optimisations`
@@ -281,10 +305,26 @@ Branch: `performance-optimisations`
   - Background asset loading
   - Callback-based completion
 
-**Actual Usage**:
-- In-game: 4 background tasks per frame submitted to workers
-- Workers perform parallel computation while main thread handles gameplay
-- Task Manager now shows multi-core CPU utilization
+**Actual Usage (per frame)**:
+1. **No synthetic background workload** in the main game loop.
+2. **Parallel culling**: HighPolyMesh culling uses `ParallelFor` only for large sets (>256 meshes).
+3. **Static batch culling**: `StaticBatcher::Render` uses `ParallelFor` only for large sets (>256 chunks).
+4. **Frame-local synchronization**: culling waits use dedicated `JobCounter` objects (no global `WaitForAll()` stall against unrelated jobs).
+
+### Regression fix (2026-02-13): CPU spike + FPS drop on benchmark map
+
+Root cause:
+- Test-only per-frame `bg_work` jobs were still scheduled from `App::Run()`.
+- `WaitForAll()` in render culling could block on unrelated jobs in shared queues.
+- `ParallelFor` captured callable by reference, unsafe for async execution.
+
+Fixes:
+- Removed `bg_work` scheduling from game loop.
+- Added counter-aware scheduling and scoped wait (`WaitForCounter`) for culling passes.
+- Reworked `JobCounter` to atomic wait/notify (no spin/yield loop).
+- Fixed `ParallelFor` callable lifetime (`shared_ptr` capture) and added sequential fallback for small workloads.
+- Added high-poly distance LOD fallback (full mesh near camera, oriented-box proxy farther away).
+- Merged contiguous textured batches with same texture in renderer.
 
 **Console Commands**:
 - `job_stats` - Show worker count, pending jobs, completed jobs
@@ -300,13 +340,15 @@ Branch: `performance-optimisations`
 - `engine/core/JobSystem.hpp/cpp` (new)
 - `engine/render/RenderThread.hpp/cpp` (new)
 - `engine/assets/AsyncAssetLoader.hpp/cpp` (new)
-- `engine/core/App.cpp` - Initialize/shutdown threading, submit jobs per frame
+- `engine/core/App.cpp` - Initialize/shutdown, submit jobs per frame
 - `engine/core/Profiler.hpp/cpp` - Threading stats in FrameStats
 - `engine/ui/ProfilerOverlay.cpp` - Display threading stats
+- `engine/render/StaticBatcher.cpp` - Parallel culling
+- `game/gameplay/GameplaySystems.cpp` - Parallel high-poly mesh culling
 - `ui/DeveloperConsole.cpp` - Threading console commands
 - `CMakeLists.txt` - Added new source files
 
-**Integration Points**:
-- App::Run() initializes JobSystem, AsyncAssetLoader, RenderThread on startup
-- In-game loop submits 4 parallel tasks per frame to workers
-- Shutdown in reverse order before other systems
+**Known Limitations**:
+- OpenGL context is single-threaded (all GPU submit on main thread)
+- Vertex buffer building (Renderer::DrawMesh) is still sequential
+- Full parallel rendering would require Vulkan/DX12 or thread-local GL contexts

@@ -1107,11 +1107,19 @@ void Renderer::DrawTexturedMesh(
     const std::size_t endVertex = m_texturedVertices.size();
     if (endVertex > firstVertex)
     {
-        m_texturedBatches.push_back(TexturedBatch{
-            textureId,
-            firstVertex,
-            endVertex - firstVertex,
-        });
+        const std::size_t addedVertices = endVertex - firstVertex;
+        if (!m_texturedBatches.empty())
+        {
+            TexturedBatch& lastBatch = m_texturedBatches.back();
+            const bool contiguous = (lastBatch.firstVertex + lastBatch.vertexCount) == firstVertex;
+            if (lastBatch.textureId == textureId && contiguous)
+            {
+                lastBatch.vertexCount += addedVertices;
+                return;
+            }
+        }
+
+        m_texturedBatches.push_back(TexturedBatch{textureId, firstVertex, addedVertices});
     }
 }
 

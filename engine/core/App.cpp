@@ -735,24 +735,6 @@ bool App::Run()
             PROFILE_SCOPE("Update");
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
             
-            // Use JobSystem for parallel work if available
-            auto& jobSystem = JobSystem::Instance();
-            if (jobSystem.IsInitialized() && jobSystem.IsEnabled())
-            {
-                // Submit parallel work for this frame - worker threads will process these
-                // while main thread continues with gameplay update
-                // Using more substantial work to show CPU utilization in Task Manager
-                for (int j = 0; j < 4; ++j) {
-                    jobSystem.Schedule([]() {
-                        // Simulate background work (e.g., AI pathfinding prep, audio processing)
-                        volatile double dummy = 0;
-                        for (int i = 0; i < 50000; ++i) {
-                            dummy += std::sin(i * 0.001) * std::cos(i * 0.002);
-                        }
-                    }, JobPriority::Normal, "bg_work");
-                }
-            }
-            
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
             m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
             frameHudState = m_gameplay.BuildHudState();

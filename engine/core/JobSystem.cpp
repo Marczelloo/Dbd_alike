@@ -28,6 +28,10 @@ bool JobSystem::Initialize(std::size_t workerCount)
     m_activeJobs = 0;
     m_completedJobs = 0;
     m_nextJobId = 1;
+    m_busyWorkerTimeNs = 0;
+    m_statsLastSampleBusyNs = 0;
+    m_statsLastSampleTimeNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
     m_workers.reserve(workerCount);
     for (std::size_t i = 0; i < workerCount; ++i)
@@ -74,7 +78,7 @@ void JobSystem::Shutdown()
     std::cout << "[JobSystem] Shutdown complete\n";
 }
 
-JobId JobSystem::Schedule(JobFunction job, JobPriority priority, std::string_view name)
+JobId JobSystem::Schedule(JobFunction job, JobPriority priority, std::string_view name, JobCounter* counter)
 {
     if (!m_initialized || !m_enabled || !job)
     {
@@ -87,9 +91,14 @@ JobId JobSystem::Schedule(JobFunction job, JobPriority priority, std::string_vie
     j.function = std::move(job);
     j.name = std::string(name);
     j.priority = priority;
+    j.counter = counter;
 
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
+        if (j.counter != nullptr)
+        {
+            j.counter->Increment();
+        }
         m_queues[static_cast<std::size_t>(priority)].jobs.push(std::move(j));
     }
 
@@ -97,14 +106,13 @@ JobId JobSystem::Schedule(JobFunction job, JobPriority priority, std::string_vie
     return id;
 }
 
-void JobSystem::ScheduleBatch(std::vector<JobFunction> jobs, JobPriority priority)
+void JobSystem::ScheduleBatch(std::vector<JobFunction> jobs, JobPriority priority, JobCounter* counter)
 {
     if (!m_initialized || !m_enabled || jobs.empty())
     {
         return;
     }
 
-    const std::size_t count = jobs.size();
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         for (auto& job : jobs)
@@ -112,6 +120,11 @@ void JobSystem::ScheduleBatch(std::vector<JobFunction> jobs, JobPriority priorit
             Job j;
             j.function = std::move(job);
             j.priority = priority;
+            j.counter = counter;
+            if (j.counter != nullptr)
+            {
+                j.counter->Increment();
+            }
             m_queues[static_cast<std::size_t>(priority)].jobs.push(std::move(j));
         }
     }
@@ -138,10 +151,7 @@ void JobSystem::WaitForAll()
 
 void JobSystem::WaitForCounter(JobCounter& counter)
 {
-    while (!counter.IsZero())
-    {
-        std::this_thread::yield();
-    }
+    counter.Wait();
 }
 
 JobStats JobSystem::GetStats() const
@@ -152,7 +162,6 @@ JobStats JobSystem::GetStats() const
 
     std::lock_guard<std::mutex> lock(m_queueMutex);
 
-    std::size_t active = 0;
     for (const auto& queue : m_queues)
     {
         stats.pendingJobs += queue.jobs.size();
@@ -162,6 +171,26 @@ JobStats JobSystem::GetStats() const
     stats.lowPriorityPending = m_queues[static_cast<std::size_t>(JobPriority::Low)].jobs.size();
 
     stats.activeWorkers = std::min(m_activeJobs.load(), stats.totalWorkers);
+
+    const std::uint64_t nowNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    const std::uint64_t busyNowNs = m_busyWorkerTimeNs.load(std::memory_order_relaxed);
+    const std::uint64_t prevSampleNs = m_statsLastSampleTimeNs.exchange(nowNs, std::memory_order_acq_rel);
+    const std::uint64_t prevBusyNs = m_statsLastSampleBusyNs.exchange(busyNowNs, std::memory_order_acq_rel);
+
+    if (stats.totalWorkers > 0 && nowNs > prevSampleNs && busyNowNs >= prevBusyNs)
+    {
+        const std::uint64_t elapsedNs = nowNs - prevSampleNs;
+        const std::uint64_t busyDeltaNs = busyNowNs - prevBusyNs;
+        const double capacityNs = static_cast<double>(elapsedNs) * static_cast<double>(stats.totalWorkers);
+        if (capacityNs > 0.0)
+        {
+            const double utilization = (static_cast<double>(busyDeltaNs) / capacityNs) * 100.0;
+            stats.frameWorkerUtilizationPct = static_cast<float>(std::clamp(utilization, 0.0, 100.0));
+            stats.frameAverageActiveWorkers = static_cast<float>(static_cast<double>(busyDeltaNs) / static_cast<double>(elapsedNs));
+        }
+    }
+
     return stats;
 }
 
@@ -241,6 +270,7 @@ void JobSystem::WorkerThread(std::size_t index)
         if (job.function)
         {
             ++m_activeJobs;
+            const auto busyStart = std::chrono::steady_clock::now();
 
             try
             {
@@ -255,7 +285,18 @@ void JobSystem::WorkerThread(std::size_t index)
                 std::cerr << "[JobSystem] Job '" << job.name << "' threw unknown exception\n";
             }
 
+            const auto busyEnd = std::chrono::steady_clock::now();
+            const auto busyNs = std::chrono::duration_cast<std::chrono::nanoseconds>(busyEnd - busyStart).count();
+            if (busyNs > 0)
+            {
+                m_busyWorkerTimeNs.fetch_add(static_cast<std::uint64_t>(busyNs), std::memory_order_relaxed);
+            }
+
             --m_activeJobs;
+            if (job.counter != nullptr)
+            {
+                job.counter->Decrement();
+            }
             ++m_completedJobs;
             m_completeCondition.notify_all();
         }

@@ -280,6 +280,10 @@ Loop library supports:
 7. `Save Current` -> creates/updates `assets/maps/<name>.json`.
 8. `Playtest Current Map` to run gameplay scene using saved map.
 
+Mesh asset rendering note (Map + Loop editor runtime preview):
+- `PropType::MeshAsset` now uses one shared model draw path (`DrawModelAssetInstance`) for both editor modes.
+- Surface albedo textures and fallback mesh draw are handled by the same helper for consistent visuals.
+
 Placement rules:
 - loop footprints cannot overlap
 - placement must stay in map bounds
@@ -968,19 +972,22 @@ Console commands:
 
 ---
 
-## Update: POV Edge Low-LOD Optimization
+## Update: Visibility / LOD Optimization (Current)
 
-Render path now uses a 3-zone visibility policy for dynamic actors and benchmark high-poly meshes:
+Render path now uses:
 
-- **Inside camera frustum** → full quality render
-- **Outside frustum but inside +10% edge buffer** → lower LOD fallback
-- **Outside buffer** → culled
+- **Dynamic actors**: 3-zone policy
+  - inside frustum → full capsule
+  - outside frustum but inside +10% edge buffer → low proxy box
+  - outside buffer → culled
+- **Benchmark high-poly meshes**: strict frustum culling + distance tiers
+  - outside frustum → fully culled (no edge-buffer fallback)
+  - visible + near → full geometry
+  - visible + mid-range → medium LOD geometry
+  - visible + far → oriented-box proxy
+  - full-detail draws are capped per frame (nearest meshes first)
 
-Current low-LOD fallback:
-- actors: capsule → simplified box proxy
-- benchmark high-poly meshes: full mesh → oriented box proxy
-
-This reduces geometry cost near frustum edges (camera turns / edge-of-screen cases) without aggressive popping.
+This prevents out-of-view high-poly cost while keeping nearby quality high.
 
 ---
 
@@ -1042,14 +1049,31 @@ engine::assets::AsyncAssetLoader::Instance().LoadAsync(
 
 ### Performance Impact
 - Parallel work distributed across all available CPU cores
-- 4 background tasks per frame while in-game (demonstrates worker thread utilization)
-- Render command building can happen on worker threads
+- No synthetic per-frame CPU burn jobs; worker threads execute only real scheduled work
+- Parallel culling: HighPolyMesh (for >256 meshes), StaticBatcher (for >256 chunks)
+- Frame culling waits are scoped to local job groups via `JobCounter` (no global `WaitForAll()` stalls)
 - Asset loading no longer blocks the main thread
 - Maintains deterministic gameplay (fixed timestep physics on main thread)
+
+### 2026-02-13 Regression Fix (CPU 80% -> normal)
+- Removed test-only background workload from in-game frame loop.
+- `ParallelFor` now captures callable safely (no dangling references) and falls back to sequential mode for tiny workloads.
+- `JobCounter` wait path uses atomic wait/notify (no spin-yield busy loop).
+- High-poly rendering now uses strict frustum culling + distance tiers (full / medium / proxy).
+- Textured draw batches with adjacent same texture are merged to reduce draw calls.
+- Profiler threading now reports frame-averaged worker utilization and average active workers (snapshot value kept only as instantaneous reference).
+
+### Limitations
+- OpenGL context is single-threaded (GPU submit on main thread only)
+- Vertex buffer building (Renderer::DrawMesh) remains sequential
+- For full parallel rendering, consider Vulkan/DX12 migration
 
 ### Verification
 1. Run the game and start a solo session
 2. Open Task Manager → Details → asym_horror.exe
 3. Right-click → Set affinity → Observe multiple cores are active
 4. Check Profiler overlay (F1) → Systems tab → Threading section
+  - `Workers (snapshot)` = instantaneous sample (can be low between frames)
+  - `Avg active (frame)` + `Worker utilization (frame)` = reliable load indicators
 5. Use `job_stats` console command to see worker activity
+6. Run benchmark map with high-poly meshes to see parallel culling
