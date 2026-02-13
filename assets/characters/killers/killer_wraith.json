@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Wraith",
+  "id": "killer_wraith",
+  "model_path": "assets/meshes/killer_wraith.glb",
+  "power_id": "wraith_cloak"
+}

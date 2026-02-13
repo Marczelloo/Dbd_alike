@@ -839,6 +839,11 @@ void UiSystem::Label(const std::string& text, float fontScale, float width)
     Label(text, m_theme.colorText, fontScale, width);
 }
 
+void UiSystem::FillRect(const UiRect& rect, const glm::vec4& color)
+{
+    DrawRect(rect, color);
+}
+
 bool UiSystem::Button(const std::string& id, const std::string& label, bool enabled, const glm::vec4* overrideColor, float width)
 {
     const UiRect rect = AllocateRect(36.0F, width);

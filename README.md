@@ -320,13 +320,17 @@ Placement rules:
   - `Shift` sprint
   - `Ctrl` crouch
   - `E` interact (vault/pallet/heal/repair)
+  - `RMB` use equipped item
+  - `R` drop equipped item
+  - `LMB` pick up nearby ground item
   - `Space` skill check
 - Killer:
   - `WASD` move
   - `Mouse` look
   - `LMB click` short swing
   - `Hold LMB` lunge (instant start + acceleration while held)
-  - `E` interact (pickup/break/hook)
+  - `RMB` use killer power
+  - `E` secondary power action / interact (pickup/reset trap, break/hook)
 - Global:
   - `~` console
   - `F1` debug HUD
@@ -614,6 +618,69 @@ Map assets now include authored light instances used by both editor viewport and
   - light shading is visible in `Filled` viewport mode
   - `Auto Lit Preview` in editor forces `Filled` when lights are active
 
+## Update: Loadouts (Items/Add-ons/Powers) + Bear Trap
+
+New data-driven gameplay catalog is now available:
+
+- `assets/items/*.json`
+- `assets/addons/*.json`
+- `assets/powers/*.json`
+- `assets/characters/survivors/*.json`
+- `assets/characters/killers/*.json`
+
+Default assets are auto-generated on startup if missing.
+
+### Survivor Item Loadout
+
+- 1 item max + up to 2 add-ons.
+- Base items implemented:
+  - `medkit`
+  - `toolbox`
+  - `flashlight`
+  - `map`
+
+### Killer Power Loadout
+
+- 1 power max + up to 2 add-ons.
+- Implemented power:
+  - `bear_trap`
+- Example power add-ons:
+  - `serrated_jaws`
+  - `tighter_springs`
+
+### Character Roster
+
+- Survivors and killers are selected by character IDs from JSON assets.
+- Survivors share gameplay rules; killers can define `power_id`.
+- Main menu now includes character and loadout selectors (custom UI).
+
+### Multiplayer Replication
+
+- Snapshot now includes:
+  - selected survivor/killer character IDs
+  - survivor item/power loadout IDs
+  - survivor item runtime (charges/active)
+  - bear trap state list (position/state/escape data)
+
+### New Console Commands
+
+- `item_set <id|none>`
+- `item_addon_a <id|none>`
+- `item_addon_b <id|none>`
+- `power_set <id|none>`
+- `power_addon_a <id|none>`
+- `power_addon_b <id|none>`
+- `addon_set_a <id|none>` (alias for current role)
+- `addon_set_b <id|none>` (alias for current role)
+- `item_dump`
+- `power_dump`
+- `set_survivor <characterId>`
+- `set_killer <characterId>`
+- `item_respawn_near [radius]`
+- `trap_spawn [count]`
+- `trap_clear`
+- `trap_debug on|off`
+
 ## Update: FX System MVP (VFX + Gameplay Hooks)
 
 Nowy moduł `engine/fx` dodaje data-driven system efektów:
@@ -674,4 +741,170 @@ HUD/debug udostępnia:
 - uderz survivor -> hit FX
 - zrzuć/rozwal paletę -> dust FX
 - zrób vault -> vault FX
+
+## Update: Audio System + Terror Radius
+
+### What is new
+- `engine/audio/AudioSystem`: miniaudio-based audio backend
+- Bus system: Master, Music, Sfx, Ui, Ambience
+- 3D spatial audio with distance attenuation
+- Terror radius layered audio crossfade based on distance
+- Audio settings UI in Settings menu
+- Config persistence: `config/audio.json`
+
+### Audio Assets (required for terror radius)
+Place audio files in `assets/audio/`:
+
+| Filename | Purpose |
+|----------|---------|
+| `tr_far.wav` | Distant terror sound (low ambience) |
+| `tr_mid.wav` | Mid-range tension |
+| `tr_close.wav` | Close proximity heartbeat/intensity |
+| `tr_chase.wav` | Chase music (only during active chase) |
+
+Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
+
+### Terror Radius Profile (DBD-like Stepped Bands)
+- **Audio routing** (Phase B1):
+  - **Survivor hears**: TR bands (far/mid/close) + chase override rules
+  - **Killer hears**: ONLY chase music when actively chasing
+  - Debug overlay shows: `localRole`, `tr_enabled`, `chase_enabled_for_killer`
+- Profile: `assets/terror_radius/default_killer.json`
+- Profile: `assets/terror_radius/default_killer.json`
+- **Stepped bands** (NOT gradient):
+  - **OUTSIDE** (distance > radius): All layers silent
+  - **FAR** (0.66R < dist <= R): tr_far ON, others OFF
+  - **MID** (0.33R < dist <= 0.66R): tr_mid ON, others OFF
+  - **CLOSE** (0 <= dist <= 0.33R): tr_close ON, others OFF
+- **Chase override**: When chase active, tr_chase ON, tr_close SUPPRESSED
+- Smoothing: 0.15-0.35s crossfade on transitions only
+- Base radius: 32m (configurable via `tr_radius <meters>`)
+- Layer files: `tr_far.wav`, `tr_mid.wav`, `tr_close.wav`, `tr_chase.wav`
+
+### Chase System (DBD-like)
+- **Start conditions**: Survivor sprinting + distance <= 12m + LOS + in center FOV (+-35deg)
+- **End conditions**: Distance >= 18m OR lost LOS > 8s OR lost center FOV > 8s
+- Killer FOV: 87deg total (half 43.5deg)
+- Center FOV: +-35deg from killer forward
+- **Chase can persist indefinitely** if LOS/center-FOV keeps being reacquired
+
+### Bloodlust System (DBD-like)
+- **Tier 1**: At 15s in chase -> 120% speed multiplier
+- **Tier 2**: At 25s in chase -> 125% speed multiplier
+- **Tier 3**: At 35s in chase -> 130% speed multiplier
+- **Reset triggers** (immediate): Hit survivor, stunned by pallet, break pallet, chase ends
+
+### Console Commands (Audio/Chase/Bloodlust)
+- `audio_play <clip> [bus]` - Play one-shot (bus: music|sfx|ui|ambience)
+- `audio_loop <clip> [bus]` - Play looping clip
+- `audio_stop_all` - Stop all audio
+- `tr_debug on|off` - Toggle terror radius audio debug
+- `tr_vis on|off` - Toggle terror radius visualization (F5)
+- `tr_set <meters>` - Set terror radius distance
+- `tr_radius <m>` - Alias for tr_set
+- `tr_dump` - Print TR state, band, per-layer volumes
+- `chase_force on|off` - Force chase state
+- `set_chase on|off` - Alias for chase_force
+- `chase_dump` - Print chase state, timers, conditions
+- `bloodlust_reset` - Reset bloodlust to tier 0
+- `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
+- `bloodlust_dump` - Print bloodlust state and speed info
+---
+## Phase B Fixes (2026-02)
+
+### Fixes Applied:
+1. **Blood Pools** — Now spawn on **Injured OR Downed** (was only Downed)
+2. **TR Audio Routing** — Killer never hears TR bands, Survivor-only
+3. **Killer Look Light** — Debug visualization, survivor-only rendering, config commands
+4. **Scratch Marks** — Thinner multi-segment streaks, faster spawn rate (0.08-0.15s)
+
+### B1: Audio Routing
+**Bug**: Killer heard TR bands after role switch
+**Fix**: TR audio now checks local role every frame
+**Result**: TAB role switch → Killer instantly hears silence
+
+### B3: Blood Pools
+**Bug**: Only spawned when Downed, not Injured
+**Fix**: Spawn condition now `Injured || Downed`
+**Visibility**: Killer-only, debug overlay support
+
+### B4: Killer Look Light
+**Bug**: Barely visible, no debug mode
+**Fix**: Light now disabled for killer view, cone debug visualization
+**Commands**: `killer_light on|off`, `killer_light_range <m>` (0-100m)
+
+### B2: Scratch Marks
+**Fix**: Thinner 3-segment streaks, faster spawn (0.08-0.15s interval)
+**Visibility**: Killer-only (debug mode shows to survivor too)
+
+- `scratch_debug on|off` - Toggle scratch marks debug overlay
+- `scratch_profile <name>` - Load scratch profile (future)
+- `blood_debug on|off` - Toggle blood pools debug overlay
+- `blood_profile <name>` - Load blood profile (future)
+- `killer_light on|off` - Toggle killer look light
+- `killer_light_range <m>` - Set killer light range (0–100m)
+- `killer_light_debug on|off` - Toggle killer light debug overlay
+
+
+### Audio Test Checklist
+1. Place audio files in `assets/audio/`
+2. Run game, open console with `~`
+3. Test: `audio_play tr_far music`
+4. Test: `audio_loop tr_close music`
+5. Start solo session, move killer near survivor
+6. Observe stepped audio transitions (FAR->MID->CLOSE)
+7. Test `tr_dump` for band/volume info
+8. Test chase: start chase, verify tr_chase ON, tr_close SUPPRESSED
 4. W MP (Host/Join) sprawdź, że FX hosta pojawiają się też u klienta.
+
+---
+
+## Update: VFX System (Phase B)
+
+### What is new
+- **Scratch Marks** (DBD-like): Visual trail when survivor sprints
+- **Blood Pools**: Spawn when survivor is injured/downed
+- **Killer Look Light**: Spotlight cone for killer
+
+### Scratch Marks (Phase B2)
+- **Behavior**: Spawns behind survivor when sprinting
+- **Visibility**: Killer-only (DBD-like); survivors cannot see own marks
+- **Spawn interval**: 0.15–0.25s (data-driven)
+- **Lifetime**: 30s default, fades over time
+- **Pooled**: Ring buffer cap (default 64 marks)
+
+Config: `assets/vfx/scratch_profiles/default.json` (future: from JSON)
+
+Console commands:
+- `scratch_debug on|off` - Toggle debug overlay
+- `scratch_profile <name>` - Load profile (future)
+
+### Blood Pools (Phase B3)
+- **Behavior**: Spawns under injured/downed survivor
+- **Visibility**: Killer-only (DBD-like)
+- **Spawn interval**: 2s default (data-driven)
+- **Lifetime**: 120s default, fades quadratically
+- **Pooled**: Ring buffer cap (default 32 pools)
+
+Config: `assets/vfx/blood_profiles/default.json` (future: from JSON)
+
+Console commands:
+- `blood_debug on|off` - Toggle debug overlay
+- `blood_profile <name>` - Load profile (future)
+
+### Killer Look Light (Phase B4)
+- **Behavior**: Spotlight cone aligned with killer's forward
+- **Range**: 14m default (configurable)
+- **Angle**: 28° outer cone, 16° inner full-brightness
+- **Color**: Reddish tint (1.0, 0.15, 0.1)
+
+Console commands:
+- `killer_light on|off` - Toggle killer look light
+- `killer_light_range <m>` - Set light range (0–100m)
+- `killer_light_debug on|off` - Toggle debug overlay
+
+### VFX Test Checklist
+1. Sprint as survivor, switch to killer → verify scratch marks visible
+2. Get injured, move around → verify blood pools spawn
+3. Use `killer_light on|off` to verify spotlight appears/disappears
+4. Use debug overlays to confirm counts and values

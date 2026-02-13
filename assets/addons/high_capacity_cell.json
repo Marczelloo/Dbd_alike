@@ -1,0 +1,20 @@
+{
+  "applies_to": {
+    "ids": [
+      "flashlight"
+    ],
+    "kind": "item"
+  },
+  "asset_version": 1,
+  "description": "Flashlight add-on: additional battery charges.",
+  "display_name": "High Capacity Cell",
+  "hooks": [],
+  "id": "high_capacity_cell",
+  "modifiers": [
+    {
+      "op": "add",
+      "stat": "max_charges",
+      "value": 10.0
+    }
+  ]
+}

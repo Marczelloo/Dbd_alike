@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <array>
 #include <string>
@@ -53,6 +54,33 @@ public:
         FxEnv
     };
 
+    enum class LayoutRegion
+    {
+        Top = 0,
+        Left = 1,
+        Center = 2,
+        Right = 3,
+        BottomLeft = 4,
+        BottomRight = 5,
+    };
+
+    enum class DockPanel
+    {
+        ToolSettings = 0,
+        LoopLibrary = 1,
+        LoopEditor = 2,
+        MapLibrary = 3,
+        LoopPalette = 4,
+        Prefabs = 5,
+        MapEditor = 6,
+        Inspector = 7,
+        ContentBrowser = 8,
+        MaterialsEnvironment = 9,
+        FxEditor = 10,
+        Outliner = 11,
+        Count = 12,
+    };
+
     void Initialize();
     void Enter(Mode mode);
 
@@ -76,6 +104,7 @@ public:
     void SetDebugViewEnabled(bool enabled) { m_debugView = enabled; }
     [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
     [[nodiscard]] bool EditorLightingEnabled() const { return m_materialLabLightingEnabled; }
+    [[nodiscard]] std::string SceneDump() const;
 
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
     [[nodiscard]] Mode CurrentMode() const { return m_mode; }
@@ -106,6 +135,27 @@ private:
         int index = -1;
     };
 
+    struct MeshModelVertex
+    {
+        glm::vec3 position{0.0F};
+        bool deleted = false;
+    };
+
+    struct MeshModelFace
+    {
+        std::array<int, 4> indices{0, 0, 0, 0};
+        int vertexCount = 4;
+        bool deleted = false;
+
+        MeshModelFace() = default;
+        MeshModelFace(const std::array<int, 4>& inIndices, bool inDeleted = false, int inVertexCount = 4)
+            : indices(inIndices)
+            , vertexCount(std::clamp(inVertexCount, 3, 4))
+            , deleted(inDeleted)
+        {
+        }
+    };
+
     struct HistoryState
     {
         Mode mode = Mode::MapEditor;
@@ -119,6 +169,21 @@ private:
         int pendingPlacementRotation = 0;
         int paletteLoopIndex = -1;
         PropType selectedPropType = PropType::Rock;
+        std::vector<MeshModelVertex> meshModelVertices;
+        std::vector<MeshModelFace> meshModelFaces;
+        int meshModelSelectedFace = -1;
+        int meshModelSelectedVertex = -1;
+        int meshModelSelectedEdge = -1;
+        std::vector<int> meshModelFaceSelection;
+        std::vector<int> meshModelVertexSelection;
+        std::vector<int> meshModelLoopSelectionEdges;
+        std::vector<int> meshModelRingSelectionEdges;
+        glm::vec3 meshModelPosition{0.0F, 1.1F, 0.0F};
+        glm::vec3 meshModelScale{1.0F, 1.0F, 1.0F};
+        std::string meshActiveObjectName{"mesh_object"};
+        bool meshModelSceneEditEnabled = true;
+        int meshEditMode = 0;
+        int meshObjectMode = 1;
     };
 
     struct ClipboardState
@@ -131,6 +196,112 @@ private:
         int pasteCount = 0;
     };
 
+    enum class ModalConstraintMode
+    {
+        None,
+        Axis,
+        Plane
+    };
+
+    enum class TransformOrientation
+    {
+        Global,
+        Local
+    };
+
+    enum class NumericInputMode
+    {
+        Absolute,
+        Multiply,
+        Divide
+    };
+
+    enum class SelectionCombineMode
+    {
+        Replace,
+        Add,
+        Subtract,
+        Intersect
+    };
+
+    enum class SnapType
+    {
+        Increment = 0,
+        Vertex = 1,
+        Edge = 2,
+        Face = 3,
+    };
+
+    struct SceneLoopElementTransform
+    {
+        int index = -1;
+        glm::vec3 position{0.0F};
+        glm::vec3 halfExtents{1.0F};
+        glm::vec3 rotationEuler{0.0F};
+    };
+
+    struct ScenePropTransform
+    {
+        int index = -1;
+        glm::vec3 position{0.0F};
+        glm::vec3 halfExtents{1.0F};
+        glm::vec3 rotationEuler{0.0F};
+    };
+
+    struct ScenePlacementTransform
+    {
+        int index = -1;
+        int tileX = 0;
+        int tileY = 0;
+        int rotationDegrees = 0;
+    };
+
+    struct MeshVertexTransform
+    {
+        int index = -1;
+        glm::vec3 position{0.0F};
+    };
+
+    struct ModalTransformState
+    {
+        bool active = false;
+        bool meshSelection = false;
+        GizmoMode tool = GizmoMode::Translate;
+        ModalConstraintMode constraintMode = ModalConstraintMode::None;
+        GizmoAxis constraintAxis = GizmoAxis::None;
+        TransformOrientation orientation = TransformOrientation::Global;
+        glm::vec2 startMouse{0.0F};
+        glm::vec2 lastMouse{0.0F};
+        glm::vec3 pivotWorld{0.0F};
+        glm::vec3 viewRight{1.0F, 0.0F, 0.0F};
+        glm::vec3 viewUp{0.0F, 1.0F, 0.0F};
+        std::string numericInput;
+        bool numericNegative = false;
+        NumericInputMode numericMode = NumericInputMode::Absolute;
+        float previewTranslateMagnitude = 0.0F;
+        float previewRotateDegrees = 0.0F;
+        float previewScaleFactor = 1.0F;
+        glm::vec3 previewWorldDelta{0.0F};
+        std::vector<SceneLoopElementTransform> loopElements;
+        std::vector<ScenePropTransform> props;
+        std::vector<ScenePlacementTransform> placements;
+        std::vector<MeshVertexTransform> meshVertices;
+    };
+
+    struct BoxSelectionState
+    {
+        bool active = false;
+        bool dragging = false;
+        glm::vec2 start{0.0F};
+        glm::vec2 end{0.0F};
+    };
+
+    struct LassoSelectionState
+    {
+        bool active = false;
+        std::vector<glm::vec2> points;
+    };
+
     void RefreshLibraries();
     void CreateNewLoop(const std::string& suggestedName = "new_loop");
     void CreateNewMap(const std::string& suggestedName = "new_map");
@@ -138,6 +309,8 @@ private:
     [[nodiscard]] glm::vec3 CameraForward() const;
     [[nodiscard]] glm::vec3 CameraUp() const;
     [[nodiscard]] glm::vec3 CameraRight() const;
+    [[nodiscard]] glm::vec3 CameraFocusPivot() const;
+    void FocusCameraOnSelection();
     void HandleCamera(float deltaSeconds, const engine::platform::Input& input, bool controlsEnabled);
     void HandleEditorHotkeys(const engine::platform::Input& input, bool controlsEnabled);
     void UpdateHoveredTile(const engine::platform::Input& input, int framebufferWidth, int framebufferHeight);
@@ -170,6 +343,22 @@ private:
     void UpdateAxisDrag(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
     void StopAxisDrag();
     void ApplyGizmoInput(const engine::platform::Input& input, float deltaSeconds);
+    [[nodiscard]] bool HasSceneSelection() const;
+    [[nodiscard]] bool HasMeshSelection() const;
+    void BeginModalTransform(GizmoMode tool, const engine::platform::Input& input, bool pushHistory = true);
+    void UpdateModalTransform(const engine::platform::Input& input, float deltaSeconds);
+    void ConfirmModalTransform();
+    void CancelModalTransform();
+    void UpdateModalConstraint(const engine::platform::Input& input);
+    [[nodiscard]] glm::vec3 ApplyModalAxisConstraint(const glm::vec3& worldDelta) const;
+    [[nodiscard]] glm::vec3 ModalRotationAxis() const;
+    [[nodiscard]] glm::vec3 ModalConstraintAxisDirection() const;
+    [[nodiscard]] float ApplyModalNumericMode(float baseValue, const std::optional<float>& numericOverride) const;
+    [[nodiscard]] std::optional<float> ConsumeModalNumericInput(const engine::platform::Input& input);
+    void ApplyBoxSelection(SelectionCombineMode mode);
+    void ApplyLassoSelection(SelectionCombineMode mode);
+    [[nodiscard]] bool WorldToScreenPoint(const glm::vec3& world, glm::vec2* outScreen) const;
+    [[nodiscard]] std::vector<int> CollectModalMeshVertexSelection() const;
 
     [[nodiscard]] glm::ivec2 RotatedFootprint(const LoopAsset& loop, int rotationDegrees) const;
     [[nodiscard]] bool CanPlaceLoopAt(int tileX, int tileY, int rotationDegrees, int ignoredPlacement) const;
@@ -244,6 +433,7 @@ private:
     void MoveMeshSelection(const glm::vec3& delta);
     [[nodiscard]] bool PickMeshModelInScene(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
     [[nodiscard]] bool RaycastMeshModel(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, int* outFaceIndex, glm::vec3* outHitPoint) const;
+    [[nodiscard]] bool BuildActiveMeshLocalBasis(glm::mat3* outBasis) const;
     void UpdateMeshHover(const glm::vec3& rayOrigin, const glm::vec3& rayDirection);
     [[nodiscard]] bool BuildKnifePreviewSegments(
         const glm::vec3& lineStartWorld,
@@ -269,6 +459,22 @@ private:
 
     [[nodiscard]] glm::vec3 TileCenter(int tileX, int tileY) const;
     [[nodiscard]] std::string SelectedLabel() const;
+    void ResetEditorLayout();
+    void LoadEditorLayout();
+    void SaveEditorLayout() const;
+    [[nodiscard]] std::filesystem::path EditorLayoutPath() const;
+    [[nodiscard]] const char* DockPanelTitle(DockPanel panel) const;
+    void SetMeshObjectEditMode(bool editMode, const char* reason);
+    void ToggleMeshObjectEditMode(const char* reason);
+    void QueueMeshPrimitiveSpawn(int primitiveTypeRaw);
+    void SpawnQueuedMeshPrimitive(const engine::platform::Input& input);
+    void SpawnMeshPrimitiveNow(int primitiveTypeRaw, const glm::vec3& position, const char* sourceLabel);
+    [[nodiscard]] glm::vec3 ComputeMeshSpawnPosition(int spawnModeRaw, const engine::platform::Input& input) const;
+    void UpdateMeshCursorFromMouse(const engine::platform::Input& input, int framebufferWidth, int framebufferHeight);
+    [[nodiscard]] const char* MeshSpawnModeToText(int spawnModeRaw) const;
+    [[nodiscard]] const char* MeshPrimitiveToText(int primitiveTypeRaw) const;
+    void TryActivateMeshFromCurrentSelection();
+    void BuildMeshModelFromProp(const PropInstance& prop);
 
     Mode m_mode = Mode::MapEditor;
     GizmoMode m_gizmoMode = GizmoMode::Translate;
@@ -319,6 +525,8 @@ private:
     float m_cameraPitch = -0.72F;
     float m_cameraSpeed = 20.0F;
     bool m_topDownView = false;
+    glm::vec3 m_cameraOrbitTarget{0.0F, 0.0F, 0.0F};
+    bool m_cameraOrbitTargetValid = false;
 
     bool m_gridSnap = true;
     float m_gridStep = 1.0F;
@@ -391,31 +599,12 @@ private:
     bool m_fxDirty = false;
     int m_selectedFxEmitterIndex = -1;
 
-    struct MeshModelVertex
-    {
-        glm::vec3 position{0.0F};
-        bool deleted = false;
-    };
-
-    struct MeshModelFace
-    {
-        std::array<int, 4> indices{0, 0, 0, 0};
-        int vertexCount = 4;
-        bool deleted = false;
-
-        MeshModelFace() = default;
-        MeshModelFace(const std::array<int, 4>& inIndices, bool inDeleted = false, int inVertexCount = 4)
-            : indices(inIndices)
-            , vertexCount(std::clamp(inVertexCount, 3, 4))
-            , deleted(inDeleted)
-        {
-        }
-    };
-
     std::vector<MeshModelVertex> m_meshModelVertices;
     std::vector<MeshModelFace> m_meshModelFaces;
     int m_meshModelSelectedFace = -1;
     int m_meshModelSelectedVertex = -1;
+    std::vector<int> m_meshModelFaceSelection;
+    std::vector<int> m_meshModelVertexSelection;
     int m_meshModelHoveredFace = -1;
     int m_meshModelHoveredVertex = -1;
     float m_meshModelExtrudeDistance = 0.6F;
@@ -442,6 +631,36 @@ private:
         Vertex
     };
     MeshEditMode m_meshEditMode = MeshEditMode::Face;
+    enum class MeshObjectMode
+    {
+        Object,
+        Edit
+    };
+    MeshObjectMode m_meshObjectMode = MeshObjectMode::Edit;
+    enum class MeshSpawnMode
+    {
+        Cursor = 0,
+        CameraRaycast = 1,
+        ClickPlace = 2
+    };
+    enum class MeshPrimitiveType
+    {
+        None = 0,
+        Cube = 1,
+        Sphere = 2,
+        Plane = 3,
+        Cylinder = 4,
+        Cone = 5,
+        Capsule = 6
+    };
+    MeshSpawnMode m_meshSpawnMode = MeshSpawnMode::Cursor;
+    MeshPrimitiveType m_pendingMeshPrimitive = MeshPrimitiveType::None;
+    MeshPrimitiveType m_clickPlacePrimitive = MeshPrimitiveType::None;
+    bool m_meshClickPlacementPending = false;
+    glm::vec3 m_meshCursorPosition{0.0F, 1.1F, 0.0F};
+    glm::vec3 m_meshClickPreviewPosition{0.0F, 1.1F, 0.0F};
+    std::string m_meshActiveObjectName = "mesh_object";
+    int m_meshObjectCounter = 1;
     bool m_meshModelSceneEditEnabled = true;
     bool m_meshModelShowGizmo = true;
     enum class MeshBatchEdgeOperation
@@ -502,5 +721,28 @@ private:
 
     bool m_sceneViewportHovered = false;
     bool m_sceneViewportFocused = false;
+    glm::vec2 m_sceneViewportRectMin{0.0F};
+    glm::vec2 m_sceneViewportRectMax{0.0F};
+    float m_layoutTopHeightRatio = 0.13F;
+    float m_layoutBottomHeightRatio = 0.24F;
+    float m_layoutLeftWidthRatio = 0.23F;
+    float m_layoutRightWidthRatio = 0.26F;
+    float m_layoutBottomSplitRatio = 0.52F;
+    bool m_layoutNeedsSave = false;
+    std::array<LayoutRegion, static_cast<std::size_t>(DockPanel::Count)> m_panelRegion{};
+    std::array<bool, static_cast<std::size_t>(DockPanel::Count)> m_panelVisible{};
+    ModalTransformState m_modalTransform{};
+    BoxSelectionState m_boxSelection{};
+    LassoSelectionState m_lassoSelection{};
+    bool m_blenderLayoutPreset = true;
+    bool m_showShortcutGuide = false;
+    bool m_showEditorManual = false;
+    bool m_showToolbar = true;
+    bool m_showStatusBar = true;
+    TransformOrientation m_transformOrientationUi = TransformOrientation::Global;
+    SnapType m_snapType = SnapType::Increment;
+    int m_lastFramebufferWidth = 1;
+    int m_lastFramebufferHeight = 1;
+    SelectionCombineMode m_selectionCombineMode = SelectionCombineMode::Replace;
 };
 } // namespace game::editor

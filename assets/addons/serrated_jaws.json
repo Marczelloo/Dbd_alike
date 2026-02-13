@@ -1,0 +1,21 @@
+{
+  "applies_to": {
+    "ids": [
+      "bear_trap"
+    ],
+    "kind": "power"
+  },
+  "asset_version": 1,
+  "description": "Bear trap add-on: escaped survivor receives stronger bleed feedback.",
+  "display_name": "Serrated Jaws",
+  "hooks": [
+    {
+      "hook": "trap_escape",
+      "key": "bleed_multiplier",
+      "op": "mul",
+      "value": 1.399999976158142
+    }
+  ],
+  "id": "serrated_jaws",
+  "modifiers": []
+}

@@ -102,6 +102,7 @@ public:
 
     void Label(const std::string& text, const glm::vec4& color, float fontScale = 1.0F, float width = -1.0F);
     void Label(const std::string& text, float fontScale = 1.0F, float width = -1.0F);
+    void FillRect(const UiRect& rect, const glm::vec4& color);
 
     bool Button(const std::string& id, const std::string& label, bool enabled = true, const glm::vec4* overrideColor = nullptr, float width = -1.0F);
     bool Checkbox(const std::string& id, const std::string& label, bool* value, float width = -1.0F);

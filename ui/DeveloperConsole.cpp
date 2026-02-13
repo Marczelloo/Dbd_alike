@@ -658,15 +658,21 @@ std::string CommandCategoryForUsage(const std::string& usage)
         return "Network";
     }
     if (command == "set_vsync" || command == "set_fps" || command == "set_tick" || command == "set_resolution" ||
-        command == "toggle_fullscreen" || command == "render_mode")
+        command == "toggle_fullscreen" || command == "render_mode" || command == "audio_play" ||
+        command == "audio_loop" || command == "audio_stop_all")
     {
         return "System";
     }
     if (command == "toggle_collision" || command == "toggle_debug_draw" || command == "physics_debug" ||
         command == "noclip" || command == "tr_vis" || command == "tr_set" || command == "set_chase" ||
         command == "cam_mode" || command == "control_role" || command == "set_role" ||
+        command == "trap_spawn" || command == "trap_clear" || command == "trap_debug" ||
+        command == "item_respawn_near" || command == "item_ids" || command == "items" || command == "list_items" ||
+        command == "power_ids" || command == "powers" || command == "list_powers" ||
+        command == "item_spawn" || command == "spawn_item" || command == "spawn_item_here" ||
+        command == "item_dump" || command == "power_dump" || command == "set_survivor" || command == "set_killer" ||
         command == "fx_spawn" || command == "fx_stop_all" || command == "fx_list" ||
-        command == "player_dump")
+        command == "player_dump" || command == "scene_dump")
     {
         return "Debug";
     }
@@ -867,6 +873,36 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
         });
 
+        RegisterCommand("audio_play <clip> [bus]", "Play one-shot audio clip (bus: music|sfx|ui|ambience)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() < 2 || context.audioPlay == nullptr)
+            {
+                AddLog("Usage: audio_play <clip> [bus]");
+                return;
+            }
+            const std::string bus = tokens.size() >= 3 ? tokens[2] : "sfx";
+            context.audioPlay(tokens[1], bus, false);
+            AddLog("Audio one-shot requested: " + tokens[1] + " (" + bus + ")");
+        });
+
+        RegisterCommand("audio_loop <clip> [bus]", "Play looping audio clip (bus: music|sfx|ui|ambience)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() < 2 || context.audioPlay == nullptr)
+            {
+                AddLog("Usage: audio_loop <clip> [bus]");
+                return;
+            }
+            const std::string bus = tokens.size() >= 3 ? tokens[2] : "music";
+            context.audioPlay(tokens[1], bus, true);
+            AddLog("Audio loop requested: " + tokens[1] + " (" + bus + ")");
+        });
+
+        RegisterCommand("audio_stop_all", "Stop all active audio loops/sounds", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.audioStopAll)
+            {
+                context.audioStopAll();
+                AddLog("All audio stopped.");
+            }
+        });
+
         RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() < 2)
             {
@@ -1039,10 +1075,10 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess("Survivor healed");
         });
 
-        RegisterCommand("survivor_state healthy|injured|downed|carried|hooked|dead", "Force survivor FSM state (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("survivor_state healthy|injured|downed|trapped|carried|hooked|dead", "Force survivor FSM state (debug)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
-                LogError("Usage: survivor_state healthy|injured|downed|carried|hooked|dead");
+                LogError("Usage: survivor_state healthy|injured|downed|trapped|carried|hooked|dead");
                 return;
             }
 
@@ -1300,6 +1336,51 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                 context.setTerrorRadiusMeters(meters);
             }
             LogSuccess("Terror radius set to " + std::to_string(meters) + "m");
+        });
+
+        RegisterCommand("tr_debug on|off", "Toggle terror radius audio debug mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() != 2 || context.setTerrorAudioDebug == nullptr)
+            {
+                AddLog("Usage: tr_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+            context.setTerrorAudioDebug(enabled);
+            AddLog(std::string("Terror radius audio debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("tr_dump", "Print terror radius state, band, per-layer volumes", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.terrorRadiusDump == nullptr)
+            {
+                AddLog("Terror radius dump not available.");
+                return;
+            }
+            AddLog(context.terrorRadiusDump());
+        });
+
+        // Alias for tr_set
+        RegisterCommand("tr_radius <m>", "Set terror radius (alias for tr_set)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (tokens.size() != 2)
+            {
+                AddLog("Usage: tr_radius <meters>");
+                return;
+            }
+
+            const float meters = std::max(1.0F, ParseFloatOr(32.0F, tokens[1]));
+            if (context.gameplay != nullptr)
+            {
+                context.gameplay->SetTerrorRadius(meters);
+            }
+            if (context.setTerrorRadiusMeters)
+            {
+                context.setTerrorRadiusMeters(meters);
+            }
+            AddLog("Terror radius set to " + std::to_string(meters) + " m");
         });
 
         RegisterCommand("regen_loops [seed]", "Regenerate loop layout on main map (optional deterministic seed)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -1669,6 +1750,24 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             AddLog("Unknown perks subcommand. Use: perks list | perks equip | perks clear");
         });
 
+        RegisterCommand("chase_force on|off", "Force chase state on/off", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: chase_force on|off");
+                return;
+            }
+
+            bool enabled = true;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+
+            context.gameplay->SetForcedChase(enabled);
+            AddLog(std::string("Forced chase ") + (enabled ? "enabled." : "disabled."));
+        });
+
         RegisterCommand("set_chase on|off", "Force chase state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -1685,6 +1784,213 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
 
             context.gameplay->SetForcedChase(enabled);
             LogSuccess(std::string("Forced chase ") + (enabled ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("chase_dump", "Print chase state debug info", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const auto hudState = context.gameplay->BuildHudState();
+            AddLog("=== Chase State ===");
+            AddLog(std::string("Active: ") + (hudState.chaseActive ? "YES" : "NO"));
+            AddLog("Distance: " + std::to_string(hudState.chaseDistance) + " m");
+            AddLog(std::string("Line of Sight: ") + (hudState.lineOfSight ? "YES" : "NO"));
+            AddLog(std::string("In Center FOV: ") + (hudState.inCenterFOV ? "YES" : "NO"));
+            AddLog(std::string("Survivor Sprinting: ") + (hudState.survivorSprinting ? "YES" : "NO"));
+            AddLog("Time in Chase: " + std::to_string(hudState.timeInChase) + " s");
+            AddLog("Time Since LOS: " + std::to_string(hudState.timeSinceLOS) + " s");
+            AddLog("Time Since Center FOV: " + std::to_string(hudState.timeSinceCenterFOV) + " s");
+        });
+
+        RegisterCommand("bloodlust_reset", "Reset bloodlust to tier 0", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            context.gameplay->ResetBloodlust();
+            AddLog("Bloodlust reset to tier 0");
+        });
+
+        RegisterCommand("bloodlust_set <0|1|2|3>", "Set bloodlust tier directly", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: bloodlust_set <0|1|2|3>");
+                return;
+            }
+            const int tier = ParseIntOr(0, tokens[1]);
+            if (tier < 0 || tier > 3)
+            {
+                AddLog("Tier must be between 0 and 3");
+                return;
+            }
+            context.gameplay->SetBloodlustTier(tier);
+            AddLog("Bloodlust tier set to " + std::to_string(tier));
+        });
+
+        RegisterCommand("bloodlust_dump", "Print bloodlust state and speed info", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const auto hudState = context.gameplay->BuildHudState();
+            AddLog("=== Bloodlust State ===");
+            AddLog("Tier: " + std::to_string(hudState.bloodlustTier));
+            AddLog("Speed Multiplier: " + std::to_string(hudState.bloodlustSpeedMultiplier));
+            AddLog("Killer Base Speed: " + std::to_string(hudState.killerBaseSpeed) + " m/s");
+            AddLog("Killer Current Speed: " + std::to_string(hudState.killerCurrentSpeed) + " m/s");
+        });
+
+        // Phase B2: Scratch marks debug
+        RegisterCommand("scratch_debug on|off", "Toggle scratch marks debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: scratch_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetScratchDebug(enabled);
+            AddLog(std::string("Scratch debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("scratch_profile <name>", "Load scratch profile (future: from JSON)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const std::string profile = tokens.size() > 1 ? tokens[1] : "default";
+            context.gameplay->SetScratchProfile(profile);
+            AddLog("Scratch profile set to: " + profile);
+        });
+
+        // Phase B3: Blood pools debug
+        RegisterCommand("blood_debug on|off", "Toggle blood pools debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: blood_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetBloodDebug(enabled);
+            AddLog(std::string("Blood debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("blood_profile <name>", "Load blood pool profile (future: from JSON)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                AddLog("Gameplay system not available.");
+                return;
+            }
+            const std::string profile = tokens.size() > 1 ? tokens[1] : "default";
+            context.gameplay->SetBloodProfile(profile);
+            AddLog("Blood profile set to: " + profile);
+        });
+
+        // Phase B4: Killer look light commands
+        RegisterCommand("killer_light on|off", "Toggle killer look light", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetKillerLookLightEnabled(enabled);
+            AddLog(std::string("Killer light ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("killer_light_range <m>", "Set killer light range", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_range <meters>");
+                return;
+            }
+            const float range = ParseFloatOr(0.0F, tokens[1]);
+            if (range <= 0.0F || range > 100.0F)
+            {
+                AddLog("Range must be between 0 and 100");
+                return;
+            }
+            context.gameplay->SetKillerLookLightRange(range);
+            AddLog("Killer light range set to " + std::to_string(range) + " m");
+        });
+
+        RegisterCommand("killer_light_debug on|off", "Toggle killer light debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_debug on|off");
+                return;
+            }
+            const bool enabled = (tokens[1] == "on" || tokens[1] == "1");
+            context.gameplay->SetKillerLookLightDebug(enabled);
+            AddLog(std::string("Killer light debug ") + (enabled ? "enabled." : "disabled."));
+        });
+
+        RegisterCommand("killer_light_intensity <float>", "Set killer light intensity", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_intensity <value>");
+                return;
+            }
+            const float intensity = ParseFloatOr(1.1F, tokens[1]);
+            if (intensity < 0.0F || intensity > 20.0F)
+            {
+                AddLog("Intensity must be between 0 and 20");
+                return;
+            }
+            context.gameplay->SetKillerLookLightIntensity(intensity);
+            AddLog("Killer light intensity set to " + std::to_string(intensity));
+        });
+
+        RegisterCommand("killer_light_angle <deg>", "Set killer light cone angle", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_angle <degrees>");
+                return;
+            }
+            const float angle = ParseFloatOr(16.0F, tokens[1]);
+            if (angle < 1.0F || angle > 90.0F)
+            {
+                AddLog("Angle must be between 1 and 90");
+                return;
+            }
+            context.gameplay->SetKillerLookLightAngle(angle);
+            AddLog("Killer light angle set to " + std::to_string(angle) + " degrees");
+        });
+
+        RegisterCommand("killer_light_outer <deg>", "Set killer light outer cone angle", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_outer <degrees>");
+                return;
+            }
+            const float angle = ParseFloatOr(28.0F, tokens[1]);
+            if (angle < 2.0F || angle > 90.0F)
+            {
+                AddLog("Outer angle must be between 2 and 90");
+                return;
+            }
+            context.gameplay->SetKillerLookLightOuterAngle(angle);
+            AddLog("Killer light outer angle set to " + std::to_string(angle) + " degrees");
+        });
+
+        RegisterCommand("killer_light_pitch <deg>", "Set killer light pitch (downward angle, 0=horizontal, 90=down)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: killer_light_pitch <degrees>");
+                return;
+            }
+            const float pitch = ParseFloatOr(35.0F, tokens[1]);
+            if (pitch < 0.0F || pitch > 90.0F)
+            {
+                AddLog("Pitch must be between 0 and 90 degrees");
+                return;
+            }
+            context.gameplay->SetKillerLookLightPitch(pitch);
+            AddLog("Killer light pitch set to " + std::to_string(pitch) + " degrees");
         });
 
         RegisterCommand("cam_mode survivor|killer|role", "Force camera mode (3rd/1st/role-based)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -1751,6 +2057,372 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             {
                 AddLog(context.playerDump());
             }
+        });
+
+        RegisterCommand("scene_dump", "Print current scene entities summary", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.sceneDump)
+            {
+                AddLog(context.sceneDump());
+            }
+        });
+
+        RegisterCommand("item_set <id|none>", "Set survivor item loadout item id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_set <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string itemId = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(itemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB))
+            {
+                AddLog("item_set failed (invalid id/addon mismatch).");
+                return;
+            }
+            AddLog("item_set OK: " + (itemId.empty() ? "none" : itemId));
+        });
+
+        RegisterCommand("power_set <id|none>", "Set killer power id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_set <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string powerId = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(powerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB))
+            {
+                AddLog("power_set failed (invalid id/addon mismatch).");
+                return;
+            }
+            AddLog("power_set OK: " + (powerId.empty() ? "none" : powerId));
+        });
+
+        RegisterCommand("item_addon_a <id|none>", "Set survivor item addon A", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_addon_a <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonA = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, addonA, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB))
+            {
+                AddLog("item_addon_a failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("item_addon_a OK: " + (addonA.empty() ? "none" : addonA));
+        });
+
+        RegisterCommand("item_addon_b <id|none>", "Set survivor item addon B", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: item_addon_b <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonB = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, addonB))
+            {
+                AddLog("item_addon_b failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("item_addon_b OK: " + (addonB.empty() ? "none" : addonB));
+        });
+
+        RegisterCommand("power_addon_a <id|none>", "Set killer power addon A", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_addon_a <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonA = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, addonA, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB))
+            {
+                AddLog("power_addon_a failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("power_addon_a OK: " + (addonA.empty() ? "none" : addonA));
+        });
+
+        RegisterCommand("power_addon_b <id|none>", "Set killer power addon B", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: power_addon_b <id|none>");
+                return;
+            }
+            auto hud = context.gameplay->BuildHudState();
+            const std::string addonB = tokens[1] == "none" ? "" : tokens[1];
+            if (!context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, addonB))
+            {
+                AddLog("power_addon_b failed (invalid id/mismatch).");
+                return;
+            }
+            AddLog("power_addon_b OK: " + (addonB.empty() ? "none" : addonB));
+        });
+
+        RegisterCommand("addon_set_a <id|none>", "Alias: set addon A for current role (survivor item / killer power)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: addon_set_a <id|none>");
+                return;
+            }
+            const auto hud = context.gameplay->BuildHudState();
+            const std::string addonId = tokens[1] == "none" ? "" : tokens[1];
+            bool ok = false;
+            if (hud.roleName == "Killer")
+            {
+                ok = context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, addonId, hud.killerPowerAddonB == "none" ? "" : hud.killerPowerAddonB);
+            }
+            else
+            {
+                ok = context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, addonId, hud.survivorItemAddonB == "none" ? "" : hud.survivorItemAddonB);
+            }
+            AddLog(ok ? "addon_set_a OK" : "addon_set_a failed");
+        });
+
+        RegisterCommand("addon_set_b <id|none>", "Alias: set addon B for current role (survivor item / killer power)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: addon_set_b <id|none>");
+                return;
+            }
+            const auto hud = context.gameplay->BuildHudState();
+            const std::string addonId = tokens[1] == "none" ? "" : tokens[1];
+            bool ok = false;
+            if (hud.roleName == "Killer")
+            {
+                ok = context.gameplay->SetKillerPowerLoadout(hud.killerPowerId == "none" ? "" : hud.killerPowerId, hud.killerPowerAddonA == "none" ? "" : hud.killerPowerAddonA, addonId);
+            }
+            else
+            {
+                ok = context.gameplay->SetSurvivorItemLoadout(hud.survivorItemId == "none" ? "" : hud.survivorItemId, hud.survivorItemAddonA == "none" ? "" : hud.survivorItemAddonA, addonId);
+            }
+            AddLog(ok ? "addon_set_b OK" : "addon_set_b failed");
+        });
+
+        RegisterCommand("item_dump", "Print survivor item loadout and runtime state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay)
+            {
+                AddLog(context.gameplay->ItemDump());
+            }
+        });
+
+        const auto printItemIds = [this](const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return false;
+            }
+            const auto ids = context.gameplay->ListItemIds();
+            if (ids.empty())
+            {
+                AddLog("No items found.");
+                return false;
+            }
+            AddLog("Item IDs:");
+            for (const auto& id : ids)
+            {
+                AddLog(" - " + id);
+            }
+            AddLog("Use: item_spawn <id> [charges], item_set <id>, item_respawn_near [radius]");
+            return true;
+        };
+
+        const auto printPowerIds = [this](const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return false;
+            }
+            const auto ids = context.gameplay->ListPowerIds();
+            if (ids.empty())
+            {
+                AddLog("No killer powers found.");
+                return false;
+            }
+            AddLog("Killer Power IDs:");
+            for (const auto& id : ids)
+            {
+                AddLog(" - " + id);
+            }
+            AddLog("Use: power_set <id>, set_killer <characterId>");
+            return true;
+        };
+
+        RegisterCommand("item_ids", "List all item IDs for item_set/item_spawn", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("items", "Alias for item_ids", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("list_items", "Alias for item_ids", [printItemIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printItemIds(context);
+        });
+
+        RegisterCommand("power_ids", "List all killer power IDs for power_set", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("powers", "Alias for power_ids", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("list_powers", "Alias for power_ids", [printPowerIds](const std::vector<std::string>&, const ConsoleContext& context) {
+            (void)printPowerIds(context);
+        });
+
+        RegisterCommand("item_spawn <id> [charges]", "Spawn one ground item near controlled player", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: item_spawn <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("item_spawn failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("item_spawn OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
+        RegisterCommand("spawn_item <id> [charges]", "Alias for item_spawn", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: spawn_item <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("spawn_item failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("spawn_item OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
+        RegisterCommand("spawn_item_here <id> [charges]", "Alias for item_spawn", [this, printItemIds](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                AddLog("Usage: spawn_item_here <id> [charges]");
+                return;
+            }
+            const std::string itemId = tokens[1];
+            float charges = -1.0F;
+            if (tokens.size() >= 3)
+            {
+                charges = ParseFloatOr(-1.0F, tokens[2]);
+            }
+            const bool ok = context.gameplay->SpawnGroundItemDebug(itemId, charges);
+            if (!ok)
+            {
+                AddLog("spawn_item_here failed. Valid IDs:");
+                (void)printItemIds(context);
+                return;
+            }
+            AddLog("spawn_item_here OK: " + itemId + (charges >= 0.0F ? (" charges=" + std::to_string(charges)) : ""));
+        });
+
+        RegisterCommand("power_dump", "Print killer power loadout and trap summary", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay)
+            {
+                AddLog(context.gameplay->PowerDump());
+            }
+        });
+
+        RegisterCommand("set_survivor <id>", "Select survivor character id", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: set_survivor <id>");
+                return;
+            }
+            if (!context.gameplay->SetSelectedSurvivorCharacter(tokens[1]))
+            {
+                AddLog("set_survivor failed: unknown id");
+                return;
+            }
+            AddLog("set_survivor OK: " + tokens[1]);
+        });
+
+        RegisterCommand("set_killer <id>", "Select killer character id (updates power_id)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: set_killer <id>");
+                return;
+            }
+            if (!context.gameplay->SetSelectedKillerCharacter(tokens[1]))
+            {
+                AddLog("set_killer failed: unknown id");
+                return;
+            }
+            AddLog("set_killer OK: " + tokens[1]);
+        });
+
+        RegisterCommand("trap_spawn [count]", "Spawn bear trap(s) at killer forward", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay != nullptr)
+            {
+                int count = 1;
+                if (tokens.size() >= 2)
+                {
+                    count = std::max(1, ParseIntOr(1, tokens[1]));
+                }
+                context.gameplay->TrapSpawnDebug(count);
+                AddLog("trap_spawn requested: " + std::to_string(count));
+            }
+        });
+
+        RegisterCommand("item_respawn_near [radius]", "Respawn medkit/toolbox/flashlight/map around local player", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            float radius = 3.0F;
+            if (tokens.size() >= 2)
+            {
+                radius = std::max(0.5F, ParseFloatOr(3.0F, tokens[1]));
+            }
+            const bool ok = context.gameplay->RespawnItemsNearPlayer(radius);
+            AddLog(ok ? ("item_respawn_near OK radius=" + std::to_string(radius)) : "item_respawn_near failed");
+        });
+
+        RegisterCommand("trap_clear", "Clear all bear traps", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay != nullptr)
+            {
+                context.gameplay->TrapClearDebug();
+                AddLog("trap_clear requested.");
+            }
+        });
+
+        RegisterCommand("trap_debug on|off", "Toggle trap debug draw helpers", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                AddLog("Usage: trap_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                AddLog("Expected on|off.");
+                return;
+            }
+            context.gameplay->SetTrapDebug(enabled);
+            AddLog(std::string("trap_debug ") + (enabled ? "ON" : "OFF"));
         });
 
         RegisterCommand("render_mode wireframe|filled", "Set render mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -2161,6 +2833,10 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                 ImGui::Text("Move: %s", hudState.movementStateName.c_str());
                 ImGui::Text("Camera: %s", hudState.cameraModeName.c_str());
                 ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
+                if (hudState.roleName == "Killer" && hudState.bloodlustTier > 0)
+                {
+                    ImGui::Text("Bloodlust: T%d (%.0f%% speed)", hudState.bloodlustTier, hudState.bloodlustSpeedMultiplier * 100.0F);
+                }
                 ImGui::Text("Render: %s", hudState.renderModeName.c_str());
                 ImGui::Text("Attack: %s", hudState.killerAttackStateName.c_str());
                 if (hudState.roleName == "Killer")
@@ -2279,8 +2955,21 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
             ImGui::Text("Speed: %.2f", hudState.playerSpeed);
             ImGui::Text("Grounded: %s", hudState.grounded ? "true" : "false");
             ImGui::Text("Chase: %s", hudState.chaseActive ? "ON" : "OFF");
-            ImGui::Text("Distance: %.2f", hudState.chaseDistance);
-            ImGui::Text("LOS: %s", hudState.lineOfSight ? "true" : "false");
+            ImGui::Text("Distance: %.2f m", hudState.chaseDistance);
+            ImGui::Text("LOS: %s | CenterFOV: %s", hudState.lineOfSight ? "true" : "false", hudState.inCenterFOV ? "true" : "false");
+            ImGui::Text("Sprinting: %s", hudState.survivorSprinting ? "true" : "false");
+            if (hudState.chaseActive)
+            {
+                ImGui::Text("Chase Time: %.1fs", hudState.timeInChase);
+            }
+            if (!hudState.lineOfSight)
+            {
+                ImGui::Text("Since LOS: %.1fs", hudState.timeSinceLOS);
+            }
+            if (!hudState.inCenterFOV)
+            {
+                ImGui::Text("Since CtrFOV: %.1fs", hudState.timeSinceCenterFOV);
+            }
             ImGui::Text("MoveState: %s", hudState.movementStateName.c_str());
             ImGui::Text("KillerAttack: %s", hudState.killerAttackStateName.c_str());
             ImGui::Text("LungeCharge: %.0f%%", hudState.lungeCharge01 * 100.0F);

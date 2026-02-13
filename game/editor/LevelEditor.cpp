@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,7 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/trigonometric.hpp>
+#include <nlohmann/json.hpp>
 
 #if BUILD_WITH_IMGUI
 #include <glad/glad.h>
@@ -39,6 +41,7 @@
 
 namespace game::editor
 {
+using json = nlohmann::json;
 namespace
 {
 float ClampPitch(float value)
@@ -409,6 +412,30 @@ const char* AssetKindToText(engine::assets::AssetKind kind)
         case engine::assets::AssetKind::Map: return "Map";
         default: return "Unknown";
     }
+}
+
+bool PointInPolygon2D(const std::vector<glm::vec2>& polygon, const glm::vec2& point)
+{
+    if (polygon.size() < 3U)
+    {
+        return false;
+    }
+    bool inside = false;
+    std::size_t j = polygon.size() - 1U;
+    for (std::size_t i = 0; i < polygon.size(); ++i)
+    {
+        const glm::vec2& pi = polygon[i];
+        const glm::vec2& pj = polygon[j];
+        const bool intersect =
+            ((pi.y > point.y) != (pj.y > point.y)) &&
+            (point.x < (pj.x - pi.x) * (point.y - pi.y) / glm::max(1.0e-6F, (pj.y - pi.y)) + pi.x);
+        if (intersect)
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    return inside;
 }
 
 #if BUILD_WITH_IMGUI
@@ -1005,6 +1032,153 @@ engine::render::MaterialParams ToRenderMaterialParams(const MaterialAsset* mater
 }
 } // namespace
 
+const char* LevelEditor::DockPanelTitle(DockPanel panel) const
+{
+    switch (panel)
+    {
+        case DockPanel::ToolSettings: return "Tool Settings";
+        case DockPanel::LoopLibrary: return "Loop Library";
+        case DockPanel::LoopEditor: return "Loop Editor";
+        case DockPanel::MapLibrary: return "Map Library";
+        case DockPanel::LoopPalette: return "Loop Palette";
+        case DockPanel::Prefabs: return "Prefabs";
+        case DockPanel::MapEditor: return "Map Editor";
+        case DockPanel::Inspector: return "Inspector";
+        case DockPanel::ContentBrowser: return "Content Browser";
+        case DockPanel::MaterialsEnvironment: return "Materials & Environment";
+        case DockPanel::FxEditor: return "FX Editor";
+        case DockPanel::Outliner: return "Outliner";
+        case DockPanel::Count: break;
+    }
+    return "Panel";
+}
+
+std::filesystem::path LevelEditor::EditorLayoutPath() const
+{
+    return std::filesystem::path("config") / "editor_layout.json";
+}
+
+void LevelEditor::ResetEditorLayout()
+{
+    m_layoutTopHeightRatio = 0.13F;
+    m_layoutBottomHeightRatio = 0.24F;
+    m_layoutLeftWidthRatio = 0.23F;
+    m_layoutRightWidthRatio = 0.26F;
+    m_layoutBottomSplitRatio = 0.52F;
+
+    m_panelRegion.fill(LayoutRegion::Right);
+    m_panelRegion[static_cast<std::size_t>(DockPanel::ToolSettings)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::LoopLibrary)] = LayoutRegion::Left;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::LoopEditor)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::MapLibrary)] = LayoutRegion::Left;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::LoopPalette)] = LayoutRegion::Left;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::Prefabs)] = LayoutRegion::Left;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::MapEditor)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::Inspector)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::ContentBrowser)] = LayoutRegion::Left;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::MaterialsEnvironment)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::FxEditor)] = LayoutRegion::Right;
+    m_panelRegion[static_cast<std::size_t>(DockPanel::Outliner)] = LayoutRegion::BottomLeft;
+    m_panelVisible.fill(true);
+    m_showToolbar = true;
+    m_showStatusBar = true;
+}
+
+void LevelEditor::LoadEditorLayout()
+{
+    ResetEditorLayout();
+    std::ifstream file(EditorLayoutPath());
+    if (!file.is_open())
+    {
+        return;
+    }
+    try
+    {
+        json data;
+        file >> data;
+        m_layoutTopHeightRatio = glm::clamp(data.value("top_height_ratio", m_layoutTopHeightRatio), 0.06F, 0.2F);
+        m_layoutBottomHeightRatio = glm::clamp(data.value("bottom_height_ratio", m_layoutBottomHeightRatio), 0.12F, 0.45F);
+        m_layoutLeftWidthRatio = glm::clamp(data.value("left_width_ratio", m_layoutLeftWidthRatio), 0.12F, 0.45F);
+        m_layoutRightWidthRatio = glm::clamp(data.value("right_width_ratio", m_layoutRightWidthRatio), 0.14F, 0.5F);
+        m_layoutBottomSplitRatio = glm::clamp(data.value("bottom_split_ratio", m_layoutBottomSplitRatio), 0.2F, 0.8F);
+
+        if (data.contains("panel_region") && data["panel_region"].is_object())
+        {
+            const json& regions = data["panel_region"];
+            for (int panel = 0; panel < static_cast<int>(DockPanel::Count); ++panel)
+            {
+                const DockPanel panelId = static_cast<DockPanel>(panel);
+                const std::string key = DockPanelTitle(panelId);
+                if (!regions.contains(key) || !regions[key].is_string())
+                {
+                    continue;
+                }
+                const std::string value = regions[key].get<std::string>();
+                LayoutRegion region = LayoutRegion::Right;
+                if (value == "left")
+                {
+                    region = LayoutRegion::Left;
+                }
+                else if (value == "bottom_left")
+                {
+                    region = LayoutRegion::BottomLeft;
+                }
+                m_panelRegion[static_cast<std::size_t>(panelId)] = region;
+            }
+        }
+        if (data.contains("panel_visible") && data["panel_visible"].is_object())
+        {
+            const json& visible = data["panel_visible"];
+            for (int panel = 0; panel < static_cast<int>(DockPanel::Count); ++panel)
+            {
+                const DockPanel panelId = static_cast<DockPanel>(panel);
+                const std::string key = DockPanelTitle(panelId);
+                if (visible.contains(key) && visible[key].is_boolean())
+                {
+                    m_panelVisible[static_cast<std::size_t>(panelId)] = visible[key].get<bool>();
+                }
+            }
+        }
+        m_showToolbar = data.value("show_toolbar", m_showToolbar);
+        m_showStatusBar = data.value("show_status_bar", m_showStatusBar);
+    }
+    catch (...)
+    {
+        ResetEditorLayout();
+    }
+}
+
+void LevelEditor::SaveEditorLayout() const
+{
+    std::error_code ec;
+    std::filesystem::create_directories(EditorLayoutPath().parent_path(), ec);
+    json data;
+    data["top_height_ratio"] = m_layoutTopHeightRatio;
+    data["bottom_height_ratio"] = m_layoutBottomHeightRatio;
+    data["left_width_ratio"] = m_layoutLeftWidthRatio;
+    data["right_width_ratio"] = m_layoutRightWidthRatio;
+    data["bottom_split_ratio"] = m_layoutBottomSplitRatio;
+    json regions = json::object();
+    json visible = json::object();
+    for (int panel = 0; panel < static_cast<int>(DockPanel::Count); ++panel)
+    {
+        const DockPanel panelId = static_cast<DockPanel>(panel);
+        const LayoutRegion region = m_panelRegion[static_cast<std::size_t>(panelId)];
+        const char* regionName = region == LayoutRegion::Left ? "left" : (region == LayoutRegion::BottomLeft ? "bottom_left" : "right");
+        regions[DockPanelTitle(panelId)] = regionName;
+        visible[DockPanelTitle(panelId)] = m_panelVisible[static_cast<std::size_t>(panelId)];
+    }
+    data["panel_region"] = regions;
+    data["panel_visible"] = visible;
+    data["show_toolbar"] = m_showToolbar;
+    data["show_status_bar"] = m_showStatusBar;
+    std::ofstream file(EditorLayoutPath());
+    if (file.is_open())
+    {
+        file << data.dump(2);
+    }
+}
+
 void LevelEditor::Initialize()
 {
     LevelAssetIO::EnsureAssetDirectories();
@@ -1055,6 +1229,7 @@ void LevelEditor::Initialize()
     m_fxDirty = false;
     ClearContentPreviewCache();
     ClearMeshAlbedoTextureCache();
+    LoadEditorLayout();
     ResetMeshModelerToCube();
     m_undoStack.clear();
     m_redoStack.clear();
@@ -1094,9 +1269,280 @@ void LevelEditor::Enter(Mode mode)
         m_cameraSpeed = 12.0F;
         m_debugView = false;
     }
+    m_cameraOrbitTarget = CameraFocusPivot();
+    m_cameraOrbitTargetValid = true;
 
     m_contentNeedsRefresh = true;
     m_statusLine = std::string{"Entered "} + ModeToText(mode);
+}
+
+void LevelEditor::SetMeshObjectEditMode(bool editMode, const char* reason)
+{
+    if (editMode && m_mode != Mode::LoopEditor)
+    {
+        m_mode = Mode::LoopEditor;
+    }
+    m_meshObjectMode = editMode ? MeshObjectMode::Edit : MeshObjectMode::Object;
+    m_meshModelSceneEditEnabled = editMode;
+    if (editMode)
+    {
+        TryActivateMeshFromCurrentSelection();
+        // Mesh edit mode should operate on active mesh object only.
+        m_selection = Selection{};
+        m_selectedLoopElements.clear();
+        m_selectedMapPlacements.clear();
+        m_selectedProps.clear();
+        m_selectedLightIndex = -1;
+        FocusCameraOnSelection();
+    }
+    if (reason != nullptr && reason[0] != '\0')
+    {
+        m_statusLine = std::string(editMode ? "EDIT MODE" : "OBJECT MODE") + " (" + reason + ")";
+    }
+    else
+    {
+        m_statusLine = editMode ? "EDIT MODE" : "OBJECT MODE";
+    }
+    std::cout << "[EDITOR] mode_switch object_mode=" << (editMode ? "edit" : "object")
+              << " reason=" << (reason != nullptr ? reason : "n/a") << "\n";
+}
+
+void LevelEditor::ToggleMeshObjectEditMode(const char* reason)
+{
+    SetMeshObjectEditMode(!m_meshModelSceneEditEnabled, reason);
+}
+
+const char* LevelEditor::MeshPrimitiveToText(int primitiveTypeRaw) const
+{
+    const MeshPrimitiveType primitive = static_cast<MeshPrimitiveType>(std::clamp(primitiveTypeRaw, 0, 6));
+    switch (primitive)
+    {
+        case MeshPrimitiveType::Cube: return "Cube";
+        case MeshPrimitiveType::Sphere: return "Sphere";
+        case MeshPrimitiveType::Plane: return "Plane";
+        case MeshPrimitiveType::Cylinder: return "Cylinder";
+        case MeshPrimitiveType::Cone: return "Cone";
+        case MeshPrimitiveType::Capsule: return "Capsule";
+        default: break;
+    }
+    return "None";
+}
+
+const char* LevelEditor::MeshSpawnModeToText(int spawnModeRaw) const
+{
+    const MeshSpawnMode mode = static_cast<MeshSpawnMode>(std::clamp(spawnModeRaw, 0, 2));
+    switch (mode)
+    {
+        case MeshSpawnMode::Cursor: return "Cursor";
+        case MeshSpawnMode::CameraRaycast: return "Camera Raycast";
+        case MeshSpawnMode::ClickPlace: return "Click Place";
+        default: break;
+    }
+    return "Cursor";
+}
+
+void LevelEditor::QueueMeshPrimitiveSpawn(int primitiveTypeRaw)
+{
+    const MeshPrimitiveType primitive = static_cast<MeshPrimitiveType>(std::clamp(primitiveTypeRaw, 0, 6));
+    if (primitive == MeshPrimitiveType::None)
+    {
+        return;
+    }
+
+    if (m_meshSpawnMode == MeshSpawnMode::ClickPlace)
+    {
+        m_clickPlacePrimitive = primitive;
+        m_meshClickPlacementPending = true;
+        m_statusLine = std::string("Click-to-place: ") + MeshPrimitiveToText(static_cast<int>(primitive)) + " (LMB confirm, Esc cancel)";
+        return;
+    }
+
+    m_pendingMeshPrimitive = primitive;
+}
+
+glm::vec3 LevelEditor::ComputeMeshSpawnPosition(int spawnModeRaw, const engine::platform::Input& input) const
+{
+    const MeshSpawnMode mode = static_cast<MeshSpawnMode>(std::clamp(spawnModeRaw, 0, 2));
+    if (mode == MeshSpawnMode::Cursor)
+    {
+        return m_meshCursorPosition;
+    }
+
+    glm::vec3 rayOrigin = m_cameraPosition;
+    glm::vec3 rayDirection = CameraForward();
+    if (mode == MeshSpawnMode::ClickPlace)
+    {
+        glm::vec3 mouseOrigin{0.0F};
+        glm::vec3 mouseDirection{0.0F};
+        if (BuildMouseRay(input, m_lastFramebufferWidth, m_lastFramebufferHeight, &mouseOrigin, &mouseDirection))
+        {
+            rayOrigin = mouseOrigin;
+            rayDirection = mouseDirection;
+        }
+    }
+
+    glm::vec3 hit{0.0F};
+    if (RayIntersectGround(rayOrigin, rayDirection, 0.0F, &hit))
+    {
+        return hit + glm::vec3{0.0F, 0.8F, 0.0F};
+    }
+    return m_cameraPosition + CameraForward() * 8.0F + glm::vec3{0.0F, 0.8F, 0.0F};
+}
+
+void LevelEditor::SpawnMeshPrimitiveNow(int primitiveTypeRaw, const glm::vec3& position, const char* sourceLabel)
+{
+    const MeshPrimitiveType primitive = static_cast<MeshPrimitiveType>(std::clamp(primitiveTypeRaw, 0, 6));
+    if (primitive == MeshPrimitiveType::None)
+    {
+        return;
+    }
+
+    PushHistorySnapshot();
+
+    switch (primitive)
+    {
+        case MeshPrimitiveType::Cube:
+            ResetMeshModelerToCube();
+            break;
+        case MeshPrimitiveType::Sphere:
+            ResetMeshModelerToSphere(m_meshPrimitiveSphereLatSegments, m_meshPrimitiveSphereLonSegments, m_meshPrimitiveRadius);
+            break;
+        case MeshPrimitiveType::Plane:
+            ResetMeshModelerToSquare();
+            break;
+        case MeshPrimitiveType::Cylinder:
+            // MVP cylinder: capsule generator with near-flat caps.
+            ResetMeshModelerToCapsule(m_meshPrimitiveCapsuleSegments, 3, 1, m_meshPrimitiveRadius, m_meshPrimitiveHeight);
+            break;
+        case MeshPrimitiveType::Cone:
+            ResetMeshModelerToCircle(std::max(6, m_meshPrimitiveCircleSegments), m_meshPrimitiveRadius);
+            if (m_meshModelSelectedFace >= 0)
+            {
+                MeshModelerExtrudeFace(m_meshModelSelectedFace, std::max(0.2F, m_meshPrimitiveHeight * 0.8F));
+            }
+            break;
+        case MeshPrimitiveType::Capsule:
+            ResetMeshModelerToCapsule(
+                m_meshPrimitiveCapsuleSegments,
+                m_meshPrimitiveCapsuleHemiRings,
+                m_meshPrimitiveCapsuleCylinderRings,
+                m_meshPrimitiveRadius,
+                m_meshPrimitiveHeight
+            );
+            break;
+        default:
+            break;
+    }
+
+    m_meshModelPosition = position;
+    m_meshActiveObjectName = "mesh_" + std::to_string(m_meshObjectCounter++);
+    SetMeshObjectEditMode(false, sourceLabel != nullptr ? sourceLabel : "spawn");
+    FocusCameraOnSelection();
+    std::ostringstream oss;
+    oss << "Spawned " << MeshPrimitiveToText(static_cast<int>(primitive))
+        << " at (" << position.x << ", " << position.y << ", " << position.z << ")";
+    m_statusLine = oss.str();
+    std::cout << "[EDITOR] mesh_spawn primitive=" << MeshPrimitiveToText(static_cast<int>(primitive))
+              << " source=" << (sourceLabel != nullptr ? sourceLabel : "n/a")
+              << " pos=" << position.x << "," << position.y << "," << position.z << "\n";
+}
+
+void LevelEditor::SpawnQueuedMeshPrimitive(const engine::platform::Input& input)
+{
+    if (m_pendingMeshPrimitive == MeshPrimitiveType::None)
+    {
+        return;
+    }
+
+    const glm::vec3 spawn = ComputeMeshSpawnPosition(static_cast<int>(m_meshSpawnMode), input);
+    SpawnMeshPrimitiveNow(static_cast<int>(m_pendingMeshPrimitive), spawn, "quick add");
+    m_pendingMeshPrimitive = MeshPrimitiveType::None;
+}
+
+void LevelEditor::UpdateMeshCursorFromMouse(
+    const engine::platform::Input& input,
+    int framebufferWidth,
+    int framebufferHeight
+)
+{
+    glm::vec3 rayOrigin{0.0F};
+    glm::vec3 rayDirection{0.0F};
+    if (!BuildMouseRay(input, framebufferWidth, framebufferHeight, &rayOrigin, &rayDirection))
+    {
+        return;
+    }
+
+    glm::vec3 hit{0.0F};
+    if (RayIntersectGround(rayOrigin, rayDirection, 0.0F, &hit))
+    {
+        m_meshCursorPosition = hit + glm::vec3{0.0F, 0.8F, 0.0F};
+        std::ostringstream oss;
+        oss << "3D Cursor set to (" << m_meshCursorPosition.x << ", " << m_meshCursorPosition.y << ", "
+            << m_meshCursorPosition.z << ")";
+        m_statusLine = oss.str();
+    }
+}
+
+void LevelEditor::BuildMeshModelFromProp(const PropInstance& prop)
+{
+    // Build editable mesh proxy from selected scene prop.
+    switch (prop.type)
+    {
+        case PropType::Rock:
+            ResetMeshModelerToSphere(
+                std::max(10, m_meshPrimitiveSphereLatSegments),
+                std::max(14, m_meshPrimitiveSphereLonSegments),
+                std::max(0.15F, std::max(prop.halfExtents.x, std::max(prop.halfExtents.y, prop.halfExtents.z)))
+            );
+            break;
+        case PropType::Platform:
+            ResetMeshModelerToSquare();
+            break;
+        case PropType::Tree:
+            ResetMeshModelerToCapsule(
+                std::max(8, m_meshPrimitiveCapsuleSegments),
+                std::max(4, m_meshPrimitiveCapsuleHemiRings),
+                std::max(2, m_meshPrimitiveCapsuleCylinderRings),
+                std::max(0.1F, prop.halfExtents.x),
+                std::max(0.4F, prop.halfExtents.y * 2.0F)
+            );
+            break;
+        case PropType::Obstacle:
+        case PropType::MeshAsset:
+        default:
+            ResetMeshModelerToCube();
+            break;
+    }
+
+    m_meshModelScale = glm::max(glm::vec3{0.25F}, prop.halfExtents * 2.0F);
+    if (m_uiWorkspace == UiWorkspace::Mesh)
+    {
+        // Dedicated modeling workspace should isolate active object at editor origin.
+        m_meshModelPosition = glm::vec3{0.0F, std::max(0.8F, m_meshModelScale.y * 0.5F), 0.0F};
+    }
+    else
+    {
+        m_meshModelPosition = prop.position;
+    }
+    m_meshActiveObjectName = prop.name.empty() ? "mesh_object" : prop.name;
+}
+
+void LevelEditor::TryActivateMeshFromCurrentSelection()
+{
+    if (m_selection.kind == SelectionKind::Prop &&
+        m_selection.index >= 0 &&
+        m_selection.index < static_cast<int>(m_map.props.size()))
+    {
+        BuildMeshModelFromProp(m_map.props[static_cast<std::size_t>(m_selection.index)]);
+        return;
+    }
+
+    // Fallback to default editable mesh if topology got cleared.
+    if (m_meshModelVertices.empty() || m_meshModelFaces.empty())
+    {
+        ResetMeshModelerToCube();
+        m_meshActiveObjectName = "mesh_object";
+    }
 }
 
 void LevelEditor::QueueExternalDroppedFiles(const std::vector<std::string>& absolutePaths)
@@ -1162,6 +1608,38 @@ glm::vec3 LevelEditor::CameraRight() const
         right = glm::vec3{1.0F, 0.0F, 0.0F};
     }
     return glm::normalize(right);
+}
+
+glm::vec3 LevelEditor::CameraFocusPivot() const
+{
+    if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
+    {
+        return MeshModelSelectionPivot();
+    }
+
+    const glm::vec3 selectionPivot = SelectionPivot();
+    if (m_selection.kind != SelectionKind::None)
+    {
+        return selectionPivot;
+    }
+
+    if (m_mode == Mode::MapEditor)
+    {
+        return glm::vec3{0.0F, 0.0F, 0.0F};
+    }
+    return m_meshModelPosition;
+}
+
+void LevelEditor::FocusCameraOnSelection()
+{
+    const glm::vec3 pivot = CameraFocusPivot();
+    const float currentDistance = glm::length(m_cameraPosition - pivot);
+    const float desiredDistance = glm::clamp(currentDistance > 1.0e-3F ? currentDistance : 16.0F, 2.0F, 180.0F);
+    const glm::vec3 forward = CameraForward();
+    m_cameraPosition = pivot - forward * desiredDistance;
+    m_cameraOrbitTarget = pivot;
+    m_cameraOrbitTargetValid = true;
+    m_statusLine = "Framed selection";
 }
 
 void LevelEditor::RefreshLibraries()
@@ -1247,6 +1725,21 @@ LevelEditor::HistoryState LevelEditor::CaptureHistoryState() const
     state.pendingPlacementRotation = m_pendingPlacementRotation;
     state.paletteLoopIndex = m_paletteLoopIndex;
     state.selectedPropType = m_selectedPropType;
+    state.meshModelVertices = m_meshModelVertices;
+    state.meshModelFaces = m_meshModelFaces;
+    state.meshModelSelectedFace = m_meshModelSelectedFace;
+    state.meshModelSelectedVertex = m_meshModelSelectedVertex;
+    state.meshModelSelectedEdge = m_meshModelSelectedEdge;
+    state.meshModelFaceSelection = m_meshModelFaceSelection;
+    state.meshModelVertexSelection = m_meshModelVertexSelection;
+    state.meshModelLoopSelectionEdges = m_meshModelLoopSelectionEdges;
+    state.meshModelRingSelectionEdges = m_meshModelRingSelectionEdges;
+    state.meshModelPosition = m_meshModelPosition;
+    state.meshModelScale = m_meshModelScale;
+    state.meshActiveObjectName = m_meshActiveObjectName;
+    state.meshModelSceneEditEnabled = m_meshModelSceneEditEnabled;
+    state.meshEditMode = static_cast<int>(m_meshEditMode);
+    state.meshObjectMode = static_cast<int>(m_meshObjectMode);
     return state;
 }
 
@@ -1264,6 +1757,21 @@ void LevelEditor::RestoreHistoryState(const HistoryState& state)
     m_pendingPlacementRotation = state.pendingPlacementRotation;
     m_paletteLoopIndex = state.paletteLoopIndex;
     m_selectedPropType = state.selectedPropType;
+    m_meshModelVertices = state.meshModelVertices;
+    m_meshModelFaces = state.meshModelFaces;
+    m_meshModelSelectedFace = state.meshModelSelectedFace;
+    m_meshModelSelectedVertex = state.meshModelSelectedVertex;
+    m_meshModelSelectedEdge = state.meshModelSelectedEdge;
+    m_meshModelFaceSelection = state.meshModelFaceSelection;
+    m_meshModelVertexSelection = state.meshModelVertexSelection;
+    m_meshModelLoopSelectionEdges = state.meshModelLoopSelectionEdges;
+    m_meshModelRingSelectionEdges = state.meshModelRingSelectionEdges;
+    m_meshModelPosition = state.meshModelPosition;
+    m_meshModelScale = state.meshModelScale;
+    m_meshActiveObjectName = state.meshActiveObjectName;
+    m_meshModelSceneEditEnabled = state.meshModelSceneEditEnabled;
+    m_meshEditMode = static_cast<MeshEditMode>(std::clamp(state.meshEditMode, 0, 2));
+    m_meshObjectMode = static_cast<MeshObjectMode>(std::clamp(state.meshObjectMode, 0, 1));
     m_historyApplying = false;
 }
 
@@ -1474,41 +1982,93 @@ void LevelEditor::HandleCamera(float deltaSeconds, const engine::platform::Input
         return;
     }
 
-    const bool lookActive = input.IsMouseDown(GLFW_MOUSE_BUTTON_RIGHT);
-    if (lookActive)
+    const glm::vec2 mousePos = input.MousePosition();
+    const bool mouseInSceneRect =
+        mousePos.x >= m_sceneViewportRectMin.x && mousePos.x <= m_sceneViewportRectMax.x &&
+        mousePos.y >= m_sceneViewportRectMin.y && mousePos.y <= m_sceneViewportRectMax.y;
+    const bool sceneMouseActive = mouseInSceneRect && (m_sceneViewportHovered || m_sceneViewportFocused);
+    const bool sceneKeyboardActive = sceneMouseActive || m_sceneViewportFocused;
+
+#if BUILD_WITH_IMGUI
+    if ((ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse) && !sceneKeyboardActive)
     {
-        const glm::vec2 mouseDelta = input.MouseDelta();
+        return;
+    }
+#endif
+
+    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    const bool ctrlDown = input.IsKeyDown(GLFW_KEY_LEFT_CONTROL) || input.IsKeyDown(GLFW_KEY_RIGHT_CONTROL);
+    const bool hasTransformSelection = HasSceneSelection() || HasMeshSelection();
+    const bool shiftRmbCursorAction = (m_mode == Mode::LoopEditor) && shiftDown;
+    const bool lookActive =
+        input.IsMouseDown(GLFW_MOUSE_BUTTON_RIGHT) && !ctrlDown && !m_lassoSelection.active && !shiftRmbCursorAction;
+    const bool orbitActive = input.IsMouseDown(GLFW_MOUSE_BUTTON_MIDDLE);
+    const glm::vec2 mouseDelta = input.MouseDelta();
+    if (orbitActive)
+    {
+        if (!m_cameraOrbitTargetValid)
+        {
+            m_cameraOrbitTarget = CameraFocusPivot();
+            m_cameraOrbitTargetValid = true;
+        }
+
+        if (shiftDown)
+        {
+            const glm::vec3 right = CameraRight();
+            const glm::vec3 up = CameraUp();
+            const float distance = glm::max(1.0F, glm::length(m_cameraPosition - m_cameraOrbitTarget));
+            const float panScale = glm::max(0.015F, distance * 0.0018F);
+            const glm::vec3 panOffset = (-right * mouseDelta.x + up * mouseDelta.y) * panScale;
+            m_cameraPosition += panOffset;
+            m_cameraOrbitTarget += panOffset;
+        }
+        else
+        {
+            const float distance = glm::max(1.0F, glm::length(m_cameraPosition - m_cameraOrbitTarget));
+            m_cameraYaw += mouseDelta.x * 0.0038F;
+            m_cameraPitch = ClampPitch(m_cameraPitch - mouseDelta.y * 0.0038F);
+            const glm::vec3 forward = CameraForward();
+            m_cameraPosition = m_cameraOrbitTarget - forward * distance;
+        }
+    }
+    else if (lookActive)
+    {
         m_cameraYaw += mouseDelta.x * 0.0025F;
         m_cameraPitch = ClampPitch(m_cameraPitch - mouseDelta.y * 0.0025F);
     }
 
     glm::vec3 movement{0.0F};
-    const glm::vec3 forward = m_topDownView ? glm::vec3{0.0F, 0.0F, -1.0F} : glm::normalize(glm::vec3{CameraForward().x, 0.0F, CameraForward().z});
-    const glm::vec3 right = m_topDownView ? glm::vec3{1.0F, 0.0F, 0.0F} : CameraRight();
+    const bool cameraMoveEnabled = sceneMouseActive && (lookActive || orbitActive);
+    if (cameraMoveEnabled)
+    {
+        const glm::vec3 forward =
+            m_topDownView ? glm::vec3{0.0F, 0.0F, -1.0F} : glm::normalize(glm::vec3{CameraForward().x, 0.0F, CameraForward().z});
+        const glm::vec3 right = m_topDownView ? glm::vec3{1.0F, 0.0F, 0.0F} : CameraRight();
 
-    if (input.IsKeyDown(GLFW_KEY_W))
-    {
-        movement += forward;
-    }
-    if (input.IsKeyDown(GLFW_KEY_S))
-    {
-        movement -= forward;
-    }
-    if (input.IsKeyDown(GLFW_KEY_D))
-    {
-        movement += right;
-    }
-    if (input.IsKeyDown(GLFW_KEY_A))
-    {
-        movement -= right;
-    }
-    if (input.IsKeyDown(GLFW_KEY_E))
-    {
-        movement += glm::vec3{0.0F, 1.0F, 0.0F};
-    }
-    if (input.IsKeyDown(GLFW_KEY_Q))
-    {
-        movement -= glm::vec3{0.0F, 1.0F, 0.0F};
+        if (input.IsKeyDown(GLFW_KEY_W))
+        {
+            movement += forward;
+        }
+        if (input.IsKeyDown(GLFW_KEY_S) && !(hasTransformSelection && input.IsKeyPressed(GLFW_KEY_S)))
+        {
+            movement -= forward;
+        }
+        if (input.IsKeyDown(GLFW_KEY_D))
+        {
+            movement += right;
+        }
+        if (input.IsKeyDown(GLFW_KEY_A))
+        {
+            movement -= right;
+        }
+        if (input.IsKeyDown(GLFW_KEY_E))
+        {
+            movement += glm::vec3{0.0F, 1.0F, 0.0F};
+        }
+        if (input.IsKeyDown(GLFW_KEY_Q))
+        {
+            movement -= glm::vec3{0.0F, 1.0F, 0.0F};
+        }
     }
 
     if (glm::length(movement) > 1.0e-5F)
@@ -1517,11 +2077,42 @@ void LevelEditor::HandleCamera(float deltaSeconds, const engine::platform::Input
     }
 
     float speed = m_cameraSpeed;
-    if (input.IsKeyDown(GLFW_KEY_LEFT_SHIFT))
+    if (shiftDown)
     {
         speed *= 2.2F;
     }
-    m_cameraPosition += movement * speed * deltaSeconds;
+    const glm::vec3 moveDelta = movement * speed * deltaSeconds;
+    m_cameraPosition += moveDelta;
+    if (glm::length(moveDelta) > 1.0e-6F && m_cameraOrbitTargetValid)
+    {
+        m_cameraOrbitTarget += moveDelta;
+    }
+
+#if BUILD_WITH_IMGUI
+    float wheel = 0.0F;
+    if ((!ImGui::GetIO().WantCaptureMouse) || sceneMouseActive)
+    {
+        wheel = ImGui::GetIO().MouseWheel;
+    }
+    if (std::abs(wheel) > 1.0e-5F)
+    {
+        if (!m_cameraOrbitTargetValid)
+        {
+            m_cameraOrbitTarget = CameraFocusPivot();
+            m_cameraOrbitTargetValid = true;
+        }
+        glm::vec3 offset = m_cameraPosition - m_cameraOrbitTarget;
+        float distance = glm::length(offset);
+        if (distance < 1.0e-4F)
+        {
+            offset = -CameraForward();
+            distance = 1.0F;
+        }
+        const float zoomStep = glm::max(0.2F, distance * 0.12F);
+        const float nextDistance = glm::clamp(distance - wheel * zoomStep, 0.4F, 800.0F);
+        m_cameraPosition = m_cameraOrbitTarget + glm::normalize(offset) * nextDistance;
+    }
+#endif
 }
 
 void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool controlsEnabled)
@@ -1531,26 +2122,147 @@ void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool
         return;
     }
 
+    const glm::vec2 mousePos = input.MousePosition();
+    const bool mouseInSceneRect =
+        mousePos.x >= m_sceneViewportRectMin.x && mousePos.x <= m_sceneViewportRectMax.x &&
+        mousePos.y >= m_sceneViewportRectMin.y && mousePos.y <= m_sceneViewportRectMax.y;
+    const bool sceneMouseActive = mouseInSceneRect && (m_sceneViewportHovered || m_sceneViewportFocused);
+    const bool sceneKeyboardActive = sceneMouseActive || m_sceneViewportFocused;
+    const bool ctrlDown = input.IsKeyDown(GLFW_KEY_LEFT_CONTROL) || input.IsKeyDown(GLFW_KEY_RIGHT_CONTROL);
+    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+
+#if BUILD_WITH_IMGUI
+    const bool textInputActive = ImGui::GetIO().WantTextInput;
+#else
+    const bool textInputActive = false;
+#endif
+
+    if (!textInputActive && ctrlDown && input.IsKeyPressed(GLFW_KEY_Z))
+    {
+        if (shiftDown)
+        {
+            Redo();
+        }
+        else
+        {
+            Undo();
+        }
+        return;
+    }
+    if (!textInputActive && ctrlDown && input.IsKeyPressed(GLFW_KEY_Y))
+    {
+        Redo();
+        return;
+    }
+
+    if (!textInputActive && input.IsKeyPressed(GLFW_KEY_TAB))
+    {
+        if (shiftDown)
+        {
+            m_gridSnap = !m_gridSnap;
+            m_statusLine = std::string{"Snap "} + (m_gridSnap ? "ON" : "OFF");
+        }
+        else
+        {
+            if (m_mode != Mode::LoopEditor)
+            {
+                m_mode = Mode::LoopEditor;
+            }
+            ToggleMeshObjectEditMode("Tab");
+        }
+    }
+
 #if BUILD_WITH_IMGUI
     if ((ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse) &&
-        !m_sceneViewportHovered && !m_sceneViewportFocused)
+        !sceneKeyboardActive)
     {
         return;
     }
 #endif
 
-    if (input.IsKeyPressed(GLFW_KEY_1))
+    const bool editMode = (m_mode == Mode::LoopEditor) && m_meshModelSceneEditEnabled;
+    if (input.IsKeyPressed(GLFW_KEY_PERIOD))
     {
-        m_gizmoMode = GizmoMode::Translate;
+        FocusCameraOnSelection();
     }
-    if (input.IsKeyPressed(GLFW_KEY_2))
+
+    if (editMode)
     {
-        m_gizmoMode = GizmoMode::Rotate;
+        if (input.IsKeyPressed(GLFW_KEY_1) || input.IsKeyPressed(GLFW_KEY_KP_1))
+        {
+            m_meshEditMode = MeshEditMode::Vertex;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_2) || input.IsKeyPressed(GLFW_KEY_KP_2))
+        {
+            m_meshEditMode = MeshEditMode::Edge;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_3) || input.IsKeyPressed(GLFW_KEY_KP_3))
+        {
+            m_meshEditMode = MeshEditMode::Face;
+        }
     }
-    if (input.IsKeyPressed(GLFW_KEY_3))
+    else
     {
-        m_gizmoMode = GizmoMode::Scale;
+        if (input.IsKeyPressed(GLFW_KEY_1) || input.IsKeyPressed(GLFW_KEY_KP_1))
+        {
+            m_gizmoMode = GizmoMode::Translate;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_2) || input.IsKeyPressed(GLFW_KEY_KP_2))
+        {
+            m_gizmoMode = GizmoMode::Rotate;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_3) || input.IsKeyPressed(GLFW_KEY_KP_3))
+        {
+            m_gizmoMode = GizmoMode::Scale;
+        }
     }
+    if (input.IsKeyPressed(GLFW_KEY_G))
+    {
+        if (HasSceneSelection() || HasMeshSelection())
+        {
+            BeginModalTransform(GizmoMode::Translate, input);
+        }
+        else
+        {
+            m_gizmoMode = GizmoMode::Translate;
+        }
+    }
+    if (input.IsKeyPressed(GLFW_KEY_R))
+    {
+        const bool hasSelection = HasSceneSelection() || HasMeshSelection();
+        if (hasSelection)
+        {
+            BeginModalTransform(GizmoMode::Rotate, input);
+        }
+        else if (m_mode == Mode::MapEditor && !editMode)
+        {
+            m_pendingPlacementRotation = (m_pendingPlacementRotation + 90) % 360;
+        }
+        else
+        {
+            m_gizmoMode = GizmoMode::Rotate;
+        }
+    }
+    if (input.IsKeyPressed(GLFW_KEY_S))
+    {
+        if (HasSceneSelection() || HasMeshSelection())
+        {
+            BeginModalTransform(GizmoMode::Scale, input);
+        }
+        else
+        {
+            m_gizmoMode = GizmoMode::Scale;
+        }
+    }
+    if (!ctrlDown && input.IsKeyPressed(GLFW_KEY_B) && sceneMouseActive)
+    {
+        m_boxSelection.active = true;
+        m_boxSelection.dragging = false;
+        m_boxSelection.start = input.MousePosition();
+        m_boxSelection.end = m_boxSelection.start;
+        m_statusLine = "Box select: hold LMB and drag";
+    }
+
     if (m_mode == Mode::LoopEditor)
     {
         if (input.IsKeyPressed(GLFW_KEY_4))
@@ -1567,13 +2279,31 @@ void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool
         }
         if (input.IsKeyPressed(GLFW_KEY_M))
         {
-            m_meshModelSceneEditEnabled = !m_meshModelSceneEditEnabled;
+            ToggleMeshObjectEditMode("M");
+        }
+        if (m_meshModelSceneEditEnabled && m_meshEditMode == MeshEditMode::Face && input.IsKeyPressed(GLFW_KEY_E))
+        {
+            int faceToExtrude = m_meshModelSelectedFace;
+            if ((faceToExtrude < 0 || faceToExtrude >= static_cast<int>(m_meshModelFaces.size())) &&
+                !m_meshModelFaceSelection.empty())
+            {
+                faceToExtrude = m_meshModelFaceSelection.back();
+            }
+            if (faceToExtrude >= 0 && faceToExtrude < static_cast<int>(m_meshModelFaces.size()))
+            {
+                PushHistorySnapshot();
+                const float startDistance = glm::max(0.02F, m_meshModelExtrudeDistance * 0.08F);
+                MeshModelerExtrudeFace(faceToExtrude, startDistance);
+                BeginModalTransform(GizmoMode::Translate, input, false);
+                m_statusLine = "Extrude modal active (mouse move, Enter/LMB confirm, Esc/RMB cancel)";
+                return;
+            }
         }
         if (m_meshEditMode == MeshEditMode::Edge && input.IsKeyPressed(GLFW_KEY_J))
         {
             MeshModelerExtrudeActiveEdges(m_meshModelExtrudeDistance);
         }
-        if (m_meshEditMode == MeshEditMode::Edge && input.IsKeyPressed(GLFW_KEY_B))
+        if (m_meshEditMode == MeshEditMode::Edge && ctrlDown && input.IsKeyPressed(GLFW_KEY_B))
         {
             MeshModelerBevelActiveEdges(m_meshModelBevelDistance, m_meshModelBevelSegments);
         }
@@ -1620,10 +2350,6 @@ void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool
     {
         m_topDownView = !m_topDownView;
     }
-    if (input.IsKeyPressed(GLFW_KEY_G))
-    {
-        m_gridSnap = !m_gridSnap;
-    }
     if (input.IsKeyPressed(GLFW_KEY_F2))
     {
         m_debugView = !m_debugView;
@@ -1634,10 +2360,6 @@ void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool
             (m_currentRenderMode == engine::render::RenderMode::Wireframe)
                 ? engine::render::RenderMode::Filled
                 : engine::render::RenderMode::Wireframe;
-    }
-    if (input.IsKeyPressed(GLFW_KEY_R) && m_mode == Mode::MapEditor)
-    {
-        m_pendingPlacementRotation = (m_pendingPlacementRotation + 90) % 360;
     }
     if (input.IsKeyPressed(GLFW_KEY_P) && m_mode == Mode::MapEditor)
     {
@@ -1656,26 +2378,6 @@ void LevelEditor::HandleEditorHotkeys(const engine::platform::Input& input, bool
         }
     }
 
-    const bool ctrlDown = input.IsKeyDown(GLFW_KEY_LEFT_CONTROL) || input.IsKeyDown(GLFW_KEY_RIGHT_CONTROL);
-    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
-
-    if (ctrlDown && input.IsKeyPressed(GLFW_KEY_Z))
-    {
-        if (shiftDown)
-        {
-            Redo();
-        }
-        else
-        {
-            Undo();
-        }
-        return;
-    }
-    if (ctrlDown && input.IsKeyPressed(GLFW_KEY_Y))
-    {
-        Redo();
-        return;
-    }
     if (ctrlDown && input.IsKeyPressed(GLFW_KEY_C))
     {
         CopyCurrentSelection();
@@ -2076,7 +2778,7 @@ bool LevelEditor::StartAxisDrag(const glm::vec3& rayOrigin, const glm::vec3& ray
     const glm::vec3 pivot = SelectionPivot();
     const float cameraDistance = glm::length(m_cameraPosition - pivot);
     const float axisLength = glm::clamp(cameraDistance * 0.18F, 1.8F, 10.0F);
-    const float handleHalf = glm::max(0.3F, axisLength * 0.14F);
+    const float handleHalf = glm::max(0.38F, axisLength * 0.17F);
     const glm::vec3 axisDirections[3] = {
         glm::vec3{1.0F, 0.0F, 0.0F},
         glm::vec3{0.0F, 1.0F, 0.0F},
@@ -3484,6 +4186,1250 @@ void LevelEditor::EnforceContentPreviewLru()
     }
 }
 
+bool LevelEditor::HasSceneSelection() const
+{
+    if (m_selection.kind == SelectionKind::None)
+    {
+        return false;
+    }
+    if (m_selection.kind == SelectionKind::LoopElement)
+    {
+        return !SortedUniqueValidSelection(SelectionKind::LoopElement).empty();
+    }
+    if (m_selection.kind == SelectionKind::MapPlacement)
+    {
+        return !SortedUniqueValidSelection(SelectionKind::MapPlacement).empty();
+    }
+    if (m_selection.kind == SelectionKind::Prop)
+    {
+        return !SortedUniqueValidSelection(SelectionKind::Prop).empty();
+    }
+    return false;
+}
+
+bool LevelEditor::HasMeshSelection() const
+{
+    if (m_mode != Mode::LoopEditor || !m_meshModelSceneEditEnabled)
+    {
+        return false;
+    }
+    if (m_meshEditMode == MeshEditMode::Vertex)
+    {
+        return !m_meshModelVertexSelection.empty() ||
+               (m_meshModelSelectedVertex >= 0 && m_meshModelSelectedVertex < static_cast<int>(m_meshModelVertices.size()));
+    }
+    if (m_meshEditMode == MeshEditMode::Edge)
+    {
+        return !CollectModalMeshVertexSelection().empty();
+    }
+    return !m_meshModelFaceSelection.empty() ||
+           (m_meshModelSelectedFace >= 0 && m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()));
+}
+
+std::vector<int> LevelEditor::CollectModalMeshVertexSelection() const
+{
+    std::unordered_set<int> vertices;
+    if (m_meshEditMode == MeshEditMode::Vertex)
+    {
+        for (const int selected : m_meshModelVertexSelection)
+        {
+            vertices.insert(selected);
+        }
+        if (m_meshModelSelectedVertex >= 0)
+        {
+            vertices.insert(m_meshModelSelectedVertex);
+        }
+    }
+    else if (m_meshEditMode == MeshEditMode::Edge)
+    {
+        const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
+        std::vector<int> edgeIndices = CollectMeshModelActiveEdges();
+        if (edgeIndices.empty() && m_meshModelSelectedEdge >= 0)
+        {
+            edgeIndices.push_back(m_meshModelSelectedEdge);
+        }
+        for (const int edgeIndex : edgeIndices)
+        {
+            if (edgeIndex < 0 || edgeIndex >= static_cast<int>(edges.size()))
+            {
+                continue;
+            }
+            vertices.insert(edges[static_cast<std::size_t>(edgeIndex)][0]);
+            vertices.insert(edges[static_cast<std::size_t>(edgeIndex)][1]);
+        }
+    }
+    else
+    {
+        std::vector<int> faces = m_meshModelFaceSelection;
+        if (faces.empty() && m_meshModelSelectedFace >= 0 && m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()))
+        {
+            faces.push_back(m_meshModelSelectedFace);
+        }
+        for (const int faceIndex : faces)
+        {
+            if (faceIndex < 0 || faceIndex >= static_cast<int>(m_meshModelFaces.size()))
+            {
+                continue;
+            }
+            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(faceIndex)];
+            if (face.deleted)
+            {
+                continue;
+            }
+            const int count = std::clamp(face.vertexCount, 3, 4);
+            for (int i = 0; i < count; ++i)
+            {
+                vertices.insert(face.indices[static_cast<std::size_t>(i)]);
+            }
+        }
+    }
+
+    std::vector<int> out(vertices.begin(), vertices.end());
+    std::sort(out.begin(), out.end());
+    out.erase(std::remove_if(out.begin(), out.end(), [this](int idx) {
+                  return idx < 0 || idx >= static_cast<int>(m_meshModelVertices.size()) ||
+                         m_meshModelVertices[static_cast<std::size_t>(idx)].deleted;
+              }),
+              out.end());
+    return out;
+}
+
+void LevelEditor::BeginModalTransform(GizmoMode tool, const engine::platform::Input& input, bool pushHistory)
+{
+    if (m_modalTransform.active)
+    {
+        return;
+    }
+
+    const bool meshSelection = HasMeshSelection();
+    const bool sceneSelection = HasSceneSelection();
+    if (!meshSelection && !sceneSelection)
+    {
+        return;
+    }
+
+    if (pushHistory)
+    {
+        PushHistorySnapshot();
+    }
+
+    m_modalTransform = ModalTransformState{};
+    m_modalTransform.active = true;
+    m_modalTransform.meshSelection = meshSelection;
+    m_modalTransform.tool = tool;
+    m_modalTransform.orientation = m_transformOrientationUi;
+    m_modalTransform.startMouse = input.MousePosition();
+    m_modalTransform.lastMouse = m_modalTransform.startMouse;
+    m_modalTransform.pivotWorld = meshSelection ? MeshModelSelectionPivot() : SelectionPivot();
+    m_modalTransform.viewRight = CameraRight();
+    m_modalTransform.viewUp = CameraUp();
+    m_modalTransform.numericMode = NumericInputMode::Absolute;
+    m_modalTransform.previewTranslateMagnitude = 0.0F;
+    m_modalTransform.previewRotateDegrees = 0.0F;
+    m_modalTransform.previewScaleFactor = 1.0F;
+    m_modalTransform.previewWorldDelta = glm::vec3{0.0F};
+
+    if (meshSelection)
+    {
+        for (const int idx : CollectModalMeshVertexSelection())
+        {
+            m_modalTransform.meshVertices.push_back(MeshVertexTransform{
+                idx,
+                m_meshModelVertices[static_cast<std::size_t>(idx)].position,
+            });
+        }
+    }
+    else
+    {
+        for (const int idx : SortedUniqueValidSelection(SelectionKind::LoopElement))
+        {
+            const LoopElement& e = m_loop.elements[static_cast<std::size_t>(idx)];
+            m_modalTransform.loopElements.push_back(SceneLoopElementTransform{
+                idx,
+                e.position,
+                e.halfExtents,
+                glm::vec3{e.pitchDegrees, e.yawDegrees, e.rollDegrees},
+            });
+        }
+        for (const int idx : SortedUniqueValidSelection(SelectionKind::MapPlacement))
+        {
+            const LoopPlacement& p = m_map.placements[static_cast<std::size_t>(idx)];
+            m_modalTransform.placements.push_back(ScenePlacementTransform{idx, p.tileX, p.tileY, p.rotationDegrees});
+        }
+        for (const int idx : SortedUniqueValidSelection(SelectionKind::Prop))
+        {
+            const PropInstance& p = m_map.props[static_cast<std::size_t>(idx)];
+            m_modalTransform.props.push_back(ScenePropTransform{
+                idx,
+                p.position,
+                p.halfExtents,
+                glm::vec3{p.pitchDegrees, p.yawDegrees, p.rollDegrees},
+            });
+        }
+    }
+
+    m_gizmoMode = tool;
+    m_statusLine = std::string{"Modal transform: "} + GizmoToText(tool) +
+                   " (X/Y/Z axis, Shift+axis plane, double axis key toggles global/local, numeric: 1|-2.5|*2|/2)";
+}
+
+void LevelEditor::UpdateModalConstraint(const engine::platform::Input& input)
+{
+    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    const auto handleAxisKey = [&](int key, GizmoAxis axis) {
+        if (!input.IsKeyPressed(key))
+        {
+            return;
+        }
+        if (m_modalTransform.constraintAxis == axis && !shiftDown &&
+            m_modalTransform.constraintMode == ModalConstraintMode::Axis)
+        {
+            m_modalTransform.orientation = (m_modalTransform.orientation == TransformOrientation::Global)
+                                               ? TransformOrientation::Local
+                                               : TransformOrientation::Global;
+            m_statusLine = std::string{"Constraint orientation: "} +
+                           (m_modalTransform.orientation == TransformOrientation::Local ? "Local" : "Global");
+            return;
+        }
+        m_modalTransform.constraintAxis = axis;
+        m_modalTransform.constraintMode = shiftDown ? ModalConstraintMode::Plane : ModalConstraintMode::Axis;
+    };
+
+    handleAxisKey(GLFW_KEY_X, GizmoAxis::X);
+    handleAxisKey(GLFW_KEY_Y, GizmoAxis::Y);
+    handleAxisKey(GLFW_KEY_Z, GizmoAxis::Z);
+}
+
+glm::vec3 LevelEditor::ModalConstraintAxisDirection() const
+{
+    if (!m_modalTransform.active || m_modalTransform.constraintAxis == GizmoAxis::None)
+    {
+        return glm::vec3{0.0F, 1.0F, 0.0F};
+    }
+    glm::vec3 axis =
+        m_modalTransform.constraintAxis == GizmoAxis::X ? glm::vec3{1.0F, 0.0F, 0.0F}
+        : (m_modalTransform.constraintAxis == GizmoAxis::Y ? glm::vec3{0.0F, 1.0F, 0.0F}
+                                                           : glm::vec3{0.0F, 0.0F, 1.0F});
+    if (m_modalTransform.orientation == TransformOrientation::Global)
+    {
+        return axis;
+    }
+
+    if (m_modalTransform.meshSelection)
+    {
+        glm::mat3 basis{1.0F};
+        if (BuildActiveMeshLocalBasis(&basis))
+        {
+            if (m_modalTransform.constraintAxis == GizmoAxis::X)
+            {
+                axis = basis[0];
+            }
+            else if (m_modalTransform.constraintAxis == GizmoAxis::Y)
+            {
+                axis = basis[1];
+            }
+            else
+            {
+                axis = basis[2];
+            }
+            if (glm::length(axis) > 1.0e-6F)
+            {
+                return glm::normalize(axis);
+            }
+        }
+        return axis;
+    }
+
+    glm::vec3 euler{0.0F};
+    if (!m_modalTransform.loopElements.empty())
+    {
+        euler = m_modalTransform.loopElements.front().rotationEuler;
+    }
+    else if (!m_modalTransform.props.empty())
+    {
+        euler = m_modalTransform.props.front().rotationEuler;
+    }
+    const glm::mat3 localRot = RotationMatrixFromEulerDegrees(euler);
+    return glm::normalize(localRot * axis);
+}
+
+float LevelEditor::ApplyModalNumericMode(float baseValue, const std::optional<float>& numericOverride) const
+{
+    if (!numericOverride.has_value())
+    {
+        return baseValue;
+    }
+    const float numericValue = *numericOverride;
+    if (m_modalTransform.numericMode == NumericInputMode::Multiply)
+    {
+        return baseValue * numericValue;
+    }
+    if (m_modalTransform.numericMode == NumericInputMode::Divide)
+    {
+        const float denom = std::abs(numericValue) < 1.0e-4F ? 1.0F : numericValue;
+        return baseValue / denom;
+    }
+    return numericValue;
+}
+
+std::optional<float> LevelEditor::ConsumeModalNumericInput(const engine::platform::Input& input)
+{
+    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    if (input.IsKeyPressed(GLFW_KEY_KP_MULTIPLY) || (shiftDown && input.IsKeyPressed(GLFW_KEY_8)))
+    {
+        m_modalTransform.numericMode = NumericInputMode::Multiply;
+        m_modalTransform.numericInput.clear();
+        m_modalTransform.numericNegative = false;
+        return std::nullopt;
+    }
+    if (input.IsKeyPressed(GLFW_KEY_SLASH) || input.IsKeyPressed(GLFW_KEY_KP_DIVIDE))
+    {
+        m_modalTransform.numericMode = NumericInputMode::Divide;
+        m_modalTransform.numericInput.clear();
+        m_modalTransform.numericNegative = false;
+        return std::nullopt;
+    }
+
+    auto appendDigit = [&](int key, char digit) {
+        if (key == GLFW_KEY_8 && shiftDown)
+        {
+            return;
+        }
+        if (input.IsKeyPressed(key) || input.IsKeyPressed(GLFW_KEY_KP_0 + (key - GLFW_KEY_0)))
+        {
+            m_modalTransform.numericInput.push_back(digit);
+        }
+    };
+    appendDigit(GLFW_KEY_0, '0');
+    appendDigit(GLFW_KEY_1, '1');
+    appendDigit(GLFW_KEY_2, '2');
+    appendDigit(GLFW_KEY_3, '3');
+    appendDigit(GLFW_KEY_4, '4');
+    appendDigit(GLFW_KEY_5, '5');
+    appendDigit(GLFW_KEY_6, '6');
+    appendDigit(GLFW_KEY_7, '7');
+    appendDigit(GLFW_KEY_8, '8');
+    appendDigit(GLFW_KEY_9, '9');
+    if (input.IsKeyPressed(GLFW_KEY_PERIOD) || input.IsKeyPressed(GLFW_KEY_KP_DECIMAL))
+    {
+        if (m_modalTransform.numericInput.find('.') == std::string::npos)
+        {
+            m_modalTransform.numericInput.push_back('.');
+        }
+    }
+    if (input.IsKeyPressed(GLFW_KEY_MINUS) || input.IsKeyPressed(GLFW_KEY_KP_SUBTRACT))
+    {
+        m_modalTransform.numericNegative = !m_modalTransform.numericNegative;
+    }
+    if (input.IsKeyPressed(GLFW_KEY_BACKSPACE) && !m_modalTransform.numericInput.empty())
+    {
+        m_modalTransform.numericInput.pop_back();
+    }
+    if (m_modalTransform.numericInput.empty())
+    {
+        return std::nullopt;
+    }
+
+    try
+    {
+        float value = std::stof(m_modalTransform.numericInput);
+        if (m_modalTransform.numericNegative)
+        {
+            value = -value;
+        }
+        return value;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
+glm::vec3 LevelEditor::ApplyModalAxisConstraint(const glm::vec3& worldDelta) const
+{
+    if (!m_modalTransform.active || m_modalTransform.constraintMode == ModalConstraintMode::None)
+    {
+        return worldDelta;
+    }
+    const glm::vec3 axisDirection = glm::normalize(ModalConstraintAxisDirection());
+    if (m_modalTransform.constraintMode == ModalConstraintMode::Axis)
+    {
+        return axisDirection * glm::dot(worldDelta, axisDirection);
+    }
+
+    return worldDelta - axisDirection * glm::dot(worldDelta, axisDirection);
+}
+
+glm::vec3 LevelEditor::ModalRotationAxis() const
+{
+    if (!m_modalTransform.active || m_modalTransform.constraintMode == ModalConstraintMode::None ||
+        m_modalTransform.constraintAxis == GizmoAxis::None)
+    {
+        return glm::vec3{0.0F, 1.0F, 0.0F};
+    }
+    return glm::normalize(ModalConstraintAxisDirection());
+}
+
+void LevelEditor::UpdateModalTransform(const engine::platform::Input& input, float /*deltaSeconds*/)
+{
+    if (!m_modalTransform.active)
+    {
+        return;
+    }
+
+    UpdateModalConstraint(input);
+
+    const glm::vec2 mouseNow = input.MousePosition();
+    const glm::vec2 totalDelta = mouseNow - m_modalTransform.startMouse;
+    const float cameraDistance = glm::max(1.0F, glm::length(m_cameraPosition - m_modalTransform.pivotWorld));
+    const std::optional<float> numericOverride = ConsumeModalNumericInput(input);
+
+    if (m_modalTransform.tool == GizmoMode::Translate)
+    {
+        const float moveScale = cameraDistance * 0.0018F;
+        glm::vec3 worldDelta = m_modalTransform.viewRight * totalDelta.x - m_modalTransform.viewUp * totalDelta.y;
+        worldDelta *= moveScale;
+        float baseMagnitude = glm::length(worldDelta);
+        if (numericOverride.has_value())
+        {
+            glm::vec3 direction = worldDelta;
+            if (glm::length(direction) < 1.0e-6F)
+            {
+                direction = m_modalTransform.viewRight;
+            }
+            if (m_modalTransform.constraintMode != ModalConstraintMode::None)
+            {
+                direction = ModalConstraintAxisDirection();
+            }
+            direction = glm::normalize(direction);
+            const float targetMagnitude = ApplyModalNumericMode(baseMagnitude, numericOverride);
+            worldDelta = direction * targetMagnitude;
+        }
+        worldDelta = ApplyModalAxisConstraint(worldDelta);
+        m_modalTransform.previewWorldDelta = worldDelta;
+        m_modalTransform.previewTranslateMagnitude = glm::length(worldDelta);
+        m_modalTransform.previewRotateDegrees = 0.0F;
+        m_modalTransform.previewScaleFactor = 1.0F;
+
+        if (m_gridSnap && !numericOverride.has_value())
+        {
+            const float step = std::max(0.05F, m_gridStep);
+            worldDelta.x = std::round(worldDelta.x / step) * step;
+            worldDelta.y = std::round(worldDelta.y / step) * step;
+            worldDelta.z = std::round(worldDelta.z / step) * step;
+        }
+
+        if (m_modalTransform.meshSelection)
+        {
+            const glm::vec3 localDelta{
+                std::abs(m_meshModelScale.x) > 1.0e-6F ? worldDelta.x / m_meshModelScale.x : 0.0F,
+                std::abs(m_meshModelScale.y) > 1.0e-6F ? worldDelta.y / m_meshModelScale.y : 0.0F,
+                std::abs(m_meshModelScale.z) > 1.0e-6F ? worldDelta.z / m_meshModelScale.z : 0.0F,
+            };
+            for (const MeshVertexTransform& v : m_modalTransform.meshVertices)
+            {
+                if (v.index < 0 || v.index >= static_cast<int>(m_meshModelVertices.size()))
+                {
+                    continue;
+                }
+                m_meshModelVertices[static_cast<std::size_t>(v.index)].position = v.position + localDelta;
+            }
+        }
+        else
+        {
+            for (const SceneLoopElementTransform& e : m_modalTransform.loopElements)
+            {
+                if (e.index < 0 || e.index >= static_cast<int>(m_loop.elements.size()))
+                {
+                    continue;
+                }
+                m_loop.elements[static_cast<std::size_t>(e.index)].position = e.position + worldDelta;
+            }
+            for (const ScenePropTransform& p : m_modalTransform.props)
+            {
+                if (p.index < 0 || p.index >= static_cast<int>(m_map.props.size()))
+                {
+                    continue;
+                }
+                m_map.props[static_cast<std::size_t>(p.index)].position = p.position + worldDelta;
+            }
+            for (const ScenePlacementTransform& p : m_modalTransform.placements)
+            {
+                if (p.index < 0 || p.index >= static_cast<int>(m_map.placements.size()))
+                {
+                    continue;
+                }
+                const int dx = static_cast<int>(std::round(worldDelta.x / glm::max(1.0F, m_map.tileSize)));
+                const int dy = static_cast<int>(std::round(worldDelta.z / glm::max(1.0F, m_map.tileSize)));
+                m_map.placements[static_cast<std::size_t>(p.index)].tileX = p.tileX + dx;
+                m_map.placements[static_cast<std::size_t>(p.index)].tileY = p.tileY + dy;
+            }
+        }
+        m_modalTransform.lastMouse = mouseNow;
+        return;
+    }
+
+    if (m_modalTransform.tool == GizmoMode::Rotate)
+    {
+        const float baseDegrees = totalDelta.x * 0.35F;
+        float degrees = ApplyModalNumericMode(baseDegrees, numericOverride);
+        if (m_angleSnap && !numericOverride.has_value())
+        {
+            const float step = std::max(1.0F, m_angleStepDegrees);
+            degrees = std::round(degrees / step) * step;
+        }
+        m_modalTransform.previewRotateDegrees = degrees;
+        m_modalTransform.previewTranslateMagnitude = 0.0F;
+        m_modalTransform.previewScaleFactor = 1.0F;
+        m_modalTransform.previewWorldDelta = glm::vec3{0.0F};
+        const glm::vec3 axis = glm::normalize(ModalRotationAxis());
+        if (m_modalTransform.meshSelection)
+        {
+            const glm::mat4 rotationMat = glm::rotate(glm::mat4{1.0F}, glm::radians(degrees), axis);
+            for (const MeshVertexTransform& v : m_modalTransform.meshVertices)
+            {
+                if (v.index < 0 || v.index >= static_cast<int>(m_meshModelVertices.size()))
+                {
+                    continue;
+                }
+                const glm::vec3 worldBase = m_meshModelPosition + v.position * m_meshModelScale;
+                const glm::vec3 rotatedWorld =
+                    m_modalTransform.pivotWorld +
+                    glm::vec3(rotationMat * glm::vec4(worldBase - m_modalTransform.pivotWorld, 0.0F));
+                const glm::vec3 localRotated{
+                    std::abs(m_meshModelScale.x) > 1.0e-6F ? (rotatedWorld.x - m_meshModelPosition.x) / m_meshModelScale.x : 0.0F,
+                    std::abs(m_meshModelScale.y) > 1.0e-6F ? (rotatedWorld.y - m_meshModelPosition.y) / m_meshModelScale.y : 0.0F,
+                    std::abs(m_meshModelScale.z) > 1.0e-6F ? (rotatedWorld.z - m_meshModelPosition.z) / m_meshModelScale.z : 0.0F,
+                };
+                m_meshModelVertices[static_cast<std::size_t>(v.index)].position = localRotated;
+            }
+        }
+        else
+        {
+            for (const SceneLoopElementTransform& e : m_modalTransform.loopElements)
+            {
+                if (e.index < 0 || e.index >= static_cast<int>(m_loop.elements.size()))
+                {
+                    continue;
+                }
+                LoopElement& target = m_loop.elements[static_cast<std::size_t>(e.index)];
+                target.pitchDegrees = e.rotationEuler.x + (axis.x > 0.5F ? degrees : 0.0F);
+                target.yawDegrees = e.rotationEuler.y + (axis.y > 0.5F ? degrees : 0.0F);
+                target.rollDegrees = e.rotationEuler.z + (axis.z > 0.5F ? degrees : 0.0F);
+            }
+            for (const ScenePropTransform& p : m_modalTransform.props)
+            {
+                if (p.index < 0 || p.index >= static_cast<int>(m_map.props.size()))
+                {
+                    continue;
+                }
+                PropInstance& target = m_map.props[static_cast<std::size_t>(p.index)];
+                target.pitchDegrees = p.rotationEuler.x + (axis.x > 0.5F ? degrees : 0.0F);
+                target.yawDegrees = p.rotationEuler.y + (axis.y > 0.5F ? degrees : 0.0F);
+                target.rollDegrees = p.rotationEuler.z + (axis.z > 0.5F ? degrees : 0.0F);
+            }
+            for (const ScenePlacementTransform& p : m_modalTransform.placements)
+            {
+                if (p.index < 0 || p.index >= static_cast<int>(m_map.placements.size()))
+                {
+                    continue;
+                }
+                const int snapped = static_cast<int>(std::round(degrees / 90.0F)) * 90;
+                m_map.placements[static_cast<std::size_t>(p.index)].rotationDegrees =
+                    ((p.rotationDegrees + snapped) % 360 + 360) % 360;
+            }
+        }
+        return;
+    }
+
+    const float baseFactor = 1.0F + (totalDelta.x - totalDelta.y) * 0.005F;
+    float factor = ApplyModalNumericMode(baseFactor, numericOverride);
+    factor = glm::clamp(factor, 0.05F, 8.0F);
+    m_modalTransform.previewScaleFactor = factor;
+    m_modalTransform.previewTranslateMagnitude = 0.0F;
+    m_modalTransform.previewRotateDegrees = 0.0F;
+    m_modalTransform.previewWorldDelta = glm::vec3{0.0F};
+    if (m_gridSnap && !numericOverride.has_value())
+    {
+        const float step = 0.05F;
+        factor = std::round(factor / step) * step;
+        factor = glm::clamp(factor, 0.05F, 8.0F);
+    }
+
+    glm::vec3 axisScale{factor, factor, factor};
+    if (m_modalTransform.constraintMode == ModalConstraintMode::Axis)
+    {
+        axisScale = glm::vec3{1.0F};
+        if (m_modalTransform.constraintAxis == GizmoAxis::X)
+        {
+            axisScale.x = factor;
+        }
+        else if (m_modalTransform.constraintAxis == GizmoAxis::Y)
+        {
+            axisScale.y = factor;
+        }
+        else if (m_modalTransform.constraintAxis == GizmoAxis::Z)
+        {
+            axisScale.z = factor;
+        }
+    }
+    else if (m_modalTransform.constraintMode == ModalConstraintMode::Plane)
+    {
+        if (m_modalTransform.constraintAxis == GizmoAxis::X)
+        {
+            axisScale.x = 1.0F;
+        }
+        else if (m_modalTransform.constraintAxis == GizmoAxis::Y)
+        {
+            axisScale.y = 1.0F;
+        }
+        else if (m_modalTransform.constraintAxis == GizmoAxis::Z)
+        {
+            axisScale.z = 1.0F;
+        }
+    }
+
+    if (m_modalTransform.meshSelection)
+    {
+        for (const MeshVertexTransform& v : m_modalTransform.meshVertices)
+        {
+            if (v.index < 0 || v.index >= static_cast<int>(m_meshModelVertices.size()))
+            {
+                continue;
+            }
+            const glm::vec3 worldBase = m_meshModelPosition + v.position * m_meshModelScale;
+            const glm::vec3 fromPivot = worldBase - m_modalTransform.pivotWorld;
+            const glm::vec3 scaledWorld = m_modalTransform.pivotWorld + fromPivot * axisScale;
+            const glm::vec3 localScaled{
+                std::abs(m_meshModelScale.x) > 1.0e-6F ? (scaledWorld.x - m_meshModelPosition.x) / m_meshModelScale.x : 0.0F,
+                std::abs(m_meshModelScale.y) > 1.0e-6F ? (scaledWorld.y - m_meshModelPosition.y) / m_meshModelScale.y : 0.0F,
+                std::abs(m_meshModelScale.z) > 1.0e-6F ? (scaledWorld.z - m_meshModelPosition.z) / m_meshModelScale.z : 0.0F,
+            };
+            m_meshModelVertices[static_cast<std::size_t>(v.index)].position = localScaled;
+        }
+    }
+    else
+    {
+        for (const SceneLoopElementTransform& e : m_modalTransform.loopElements)
+        {
+            if (e.index < 0 || e.index >= static_cast<int>(m_loop.elements.size()))
+            {
+                continue;
+            }
+            m_loop.elements[static_cast<std::size_t>(e.index)].halfExtents = glm::max(e.halfExtents * axisScale, glm::vec3{0.05F});
+        }
+        for (const ScenePropTransform& p : m_modalTransform.props)
+        {
+            if (p.index < 0 || p.index >= static_cast<int>(m_map.props.size()))
+            {
+                continue;
+            }
+            m_map.props[static_cast<std::size_t>(p.index)].halfExtents = glm::max(p.halfExtents * axisScale, glm::vec3{0.05F});
+        }
+    }
+}
+
+void LevelEditor::ConfirmModalTransform()
+{
+    if (!m_modalTransform.active)
+    {
+        return;
+    }
+    AutoComputeLoopBoundsAndFootprint();
+    m_modalTransform = ModalTransformState{};
+    m_statusLine = "Transform confirmed";
+}
+
+void LevelEditor::CancelModalTransform()
+{
+    if (!m_modalTransform.active)
+    {
+        return;
+    }
+    m_modalTransform = ModalTransformState{};
+    Undo();
+    m_statusLine = "Transform canceled";
+}
+
+bool LevelEditor::WorldToScreenPoint(const glm::vec3& world, glm::vec2* outScreen) const
+{
+    if (outScreen == nullptr || m_lastFramebufferWidth <= 0 || m_lastFramebufferHeight <= 0)
+    {
+        return false;
+    }
+    const float aspect = static_cast<float>(m_lastFramebufferWidth) / static_cast<float>(m_lastFramebufferHeight);
+    const glm::mat4 projection = glm::perspective(glm::radians(60.0F), aspect, 0.05F, 900.0F);
+    const glm::mat4 view = glm::lookAt(m_cameraPosition, m_cameraPosition + CameraForward(), CameraUp());
+    const glm::vec4 clip = projection * view * glm::vec4(world, 1.0F);
+    if (clip.w <= 1.0e-6F)
+    {
+        return false;
+    }
+    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    if (ndc.z < -1.0F || ndc.z > 1.0F)
+    {
+        return false;
+    }
+    outScreen->x = (ndc.x * 0.5F + 0.5F) * static_cast<float>(m_lastFramebufferWidth);
+    outScreen->y = (1.0F - (ndc.y * 0.5F + 0.5F)) * static_cast<float>(m_lastFramebufferHeight);
+    return true;
+}
+
+void LevelEditor::ApplyBoxSelection(SelectionCombineMode mode)
+{
+    const glm::vec2 minCorner{
+        std::min(m_boxSelection.start.x, m_boxSelection.end.x),
+        std::min(m_boxSelection.start.y, m_boxSelection.end.y),
+    };
+    const glm::vec2 maxCorner{
+        std::max(m_boxSelection.start.x, m_boxSelection.end.x),
+        std::max(m_boxSelection.start.y, m_boxSelection.end.y),
+    };
+    if (glm::length(maxCorner - minCorner) < 3.0F)
+    {
+        return;
+    }
+
+    auto inRect = [&](const glm::vec2& p) {
+        return p.x >= minCorner.x && p.x <= maxCorner.x && p.y >= minCorner.y && p.y <= maxCorner.y;
+    };
+
+    if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
+    {
+        if (m_meshEditMode == MeshEditMode::Vertex)
+        {
+            std::vector<int> hits;
+            for (int i = 0; i < static_cast<int>(m_meshModelVertices.size()); ++i)
+            {
+                if (m_meshModelVertices[static_cast<std::size_t>(i)].deleted)
+                {
+                    continue;
+                }
+                glm::vec2 screen{0.0F};
+                const glm::vec3 world = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(i)].position * m_meshModelScale;
+                if (!WorldToScreenPoint(world, &screen) || !inRect(screen))
+                {
+                    continue;
+                }
+                hits.push_back(i);
+            }
+            auto current = m_meshModelVertexSelection;
+            if (current.empty() && m_meshModelSelectedVertex >= 0)
+            {
+                current.push_back(m_meshModelSelectedVertex);
+            }
+            if (mode == SelectionCombineMode::Replace)
+            {
+                current = hits;
+            }
+            else if (mode == SelectionCombineMode::Add)
+            {
+                current.insert(current.end(), hits.begin(), hits.end());
+            }
+            else if (mode == SelectionCombineMode::Subtract)
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                    }),
+                    current.end());
+            }
+            else
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                    }),
+                    current.end());
+            }
+            std::sort(current.begin(), current.end());
+            current.erase(std::unique(current.begin(), current.end()), current.end());
+            m_meshModelVertexSelection = current;
+            m_meshModelSelectedVertex = current.empty() ? -1 : current.back();
+            return;
+        }
+        if (m_meshEditMode == MeshEditMode::Edge)
+        {
+            const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
+            std::vector<int> hits;
+            for (int i = 0; i < static_cast<int>(edges.size()); ++i)
+            {
+                const auto edge = edges[static_cast<std::size_t>(i)];
+                const glm::vec3 a = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(edge[0])].position * m_meshModelScale;
+                const glm::vec3 b = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(edge[1])].position * m_meshModelScale;
+                glm::vec2 screen{0.0F};
+                if (!WorldToScreenPoint((a + b) * 0.5F, &screen) || !inRect(screen))
+                {
+                    continue;
+                }
+                hits.push_back(i);
+            }
+            std::vector<int> current = m_meshModelLoopSelectionEdges;
+            if (current.empty() && m_meshModelSelectedEdge >= 0)
+            {
+                current.push_back(m_meshModelSelectedEdge);
+            }
+            if (mode == SelectionCombineMode::Replace)
+            {
+                current = hits;
+            }
+            else if (mode == SelectionCombineMode::Add)
+            {
+                current.insert(current.end(), hits.begin(), hits.end());
+            }
+            else if (mode == SelectionCombineMode::Subtract)
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                    }),
+                    current.end());
+            }
+            else
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                    }),
+                    current.end());
+            }
+            std::sort(current.begin(), current.end());
+            current.erase(std::unique(current.begin(), current.end()), current.end());
+            m_meshModelLoopSelectionEdges = current;
+            m_meshModelRingSelectionEdges.clear();
+            m_meshModelSelectedEdge = current.empty() ? -1 : current.back();
+            return;
+        }
+
+        std::vector<int> hits;
+        for (int i = 0; i < static_cast<int>(m_meshModelFaces.size()); ++i)
+        {
+            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(i)];
+            if (face.deleted)
+            {
+                continue;
+            }
+            glm::vec3 center{0.0F};
+            int count = 0;
+            const int vc = std::clamp(face.vertexCount, 3, 4);
+            for (int k = 0; k < vc; ++k)
+            {
+                const int vi = face.indices[static_cast<std::size_t>(k)];
+                if (vi < 0 || vi >= static_cast<int>(m_meshModelVertices.size()))
+                {
+                    continue;
+                }
+                center += m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(vi)].position * m_meshModelScale;
+                ++count;
+            }
+            if (count <= 0)
+            {
+                continue;
+            }
+            glm::vec2 screen{0.0F};
+            if (WorldToScreenPoint(center / static_cast<float>(count), &screen) && inRect(screen))
+            {
+                hits.push_back(i);
+            }
+        }
+        auto current = m_meshModelFaceSelection;
+        if (current.empty() && m_meshModelSelectedFace >= 0)
+        {
+            current.push_back(m_meshModelSelectedFace);
+        }
+        if (mode == SelectionCombineMode::Replace)
+        {
+            current = hits;
+        }
+        else if (mode == SelectionCombineMode::Add)
+        {
+            current.insert(current.end(), hits.begin(), hits.end());
+        }
+        else if (mode == SelectionCombineMode::Subtract)
+        {
+            current.erase(
+                std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                }),
+                current.end());
+        }
+        else
+        {
+            current.erase(
+                std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                }),
+                current.end());
+        }
+        std::sort(current.begin(), current.end());
+        current.erase(std::unique(current.begin(), current.end()), current.end());
+        m_meshModelFaceSelection = current;
+        m_meshModelSelectedFace = current.empty() ? -1 : current.back();
+        return;
+    }
+
+    std::vector<int> hitLoop;
+    std::vector<int> hitPlacement;
+    std::vector<int> hitProps;
+
+    if (m_mode == Mode::LoopEditor)
+    {
+        for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
+        {
+            glm::vec2 screen{0.0F};
+            if (WorldToScreenPoint(m_loop.elements[static_cast<std::size_t>(i)].position, &screen) && inRect(screen))
+            {
+                hitLoop.push_back(i);
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < static_cast<int>(m_map.props.size()); ++i)
+        {
+            glm::vec2 screen{0.0F};
+            if (WorldToScreenPoint(m_map.props[static_cast<std::size_t>(i)].position, &screen) && inRect(screen))
+            {
+                hitProps.push_back(i);
+            }
+        }
+        for (int i = 0; i < static_cast<int>(m_map.placements.size()); ++i)
+        {
+            const LoopPlacement& p = m_map.placements[static_cast<std::size_t>(i)];
+            glm::vec2 screen{0.0F};
+            if (WorldToScreenPoint(TileCenter(p.tileX, p.tileY), &screen) && inRect(screen))
+            {
+                hitPlacement.push_back(i);
+            }
+        }
+    }
+
+    auto applyToList = [&](std::vector<int>* list, const std::vector<int>& hits) {
+        if (list == nullptr)
+        {
+            return;
+        }
+        if (mode == SelectionCombineMode::Replace)
+        {
+            *list = hits;
+        }
+        else if (mode == SelectionCombineMode::Add)
+        {
+            list->insert(list->end(), hits.begin(), hits.end());
+        }
+        else if (mode == SelectionCombineMode::Subtract)
+        {
+            list->erase(
+                std::remove_if(list->begin(), list->end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                }),
+                list->end());
+        }
+        else
+        {
+            list->erase(
+                std::remove_if(list->begin(), list->end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                }),
+                list->end());
+        }
+        std::sort(list->begin(), list->end());
+        list->erase(std::unique(list->begin(), list->end()), list->end());
+    };
+
+    applyToList(&m_selectedLoopElements, hitLoop);
+    applyToList(&m_selectedMapPlacements, hitPlacement);
+    applyToList(&m_selectedProps, hitProps);
+    if (!m_selectedLoopElements.empty())
+    {
+        m_selection = Selection{SelectionKind::LoopElement, m_selectedLoopElements.back()};
+    }
+    else if (!m_selectedMapPlacements.empty())
+    {
+        m_selection = Selection{SelectionKind::MapPlacement, m_selectedMapPlacements.back()};
+    }
+    else if (!m_selectedProps.empty())
+    {
+        m_selection = Selection{SelectionKind::Prop, m_selectedProps.back()};
+    }
+    else
+    {
+        m_selection = Selection{};
+    }
+}
+
+void LevelEditor::ApplyLassoSelection(SelectionCombineMode mode)
+{
+    if (m_lassoSelection.points.size() < 3U)
+    {
+        return;
+    }
+    auto inLasso = [this](const glm::vec2& p) { return PointInPolygon2D(m_lassoSelection.points, p); };
+
+    if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
+    {
+        if (m_meshEditMode == MeshEditMode::Vertex)
+        {
+            std::vector<int> hits;
+            for (int i = 0; i < static_cast<int>(m_meshModelVertices.size()); ++i)
+            {
+                if (m_meshModelVertices[static_cast<std::size_t>(i)].deleted)
+                {
+                    continue;
+                }
+                glm::vec2 s{0.0F};
+                const glm::vec3 world = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(i)].position * m_meshModelScale;
+                if (WorldToScreenPoint(world, &s) && inLasso(s))
+                {
+                    hits.push_back(i);
+                }
+            }
+            auto current = m_meshModelVertexSelection;
+            if (current.empty() && m_meshModelSelectedVertex >= 0)
+            {
+                current.push_back(m_meshModelSelectedVertex);
+            }
+            if (mode == SelectionCombineMode::Replace)
+            {
+                current = hits;
+            }
+            else if (mode == SelectionCombineMode::Add)
+            {
+                current.insert(current.end(), hits.begin(), hits.end());
+            }
+            else if (mode == SelectionCombineMode::Subtract)
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                    }),
+                    current.end());
+            }
+            else
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                    }),
+                    current.end());
+            }
+            std::sort(current.begin(), current.end());
+            current.erase(std::unique(current.begin(), current.end()), current.end());
+            m_meshModelVertexSelection = current;
+            m_meshModelSelectedVertex = current.empty() ? -1 : current.back();
+            return;
+        }
+        if (m_meshEditMode == MeshEditMode::Edge)
+        {
+            const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
+            std::vector<int> hits;
+            for (int i = 0; i < static_cast<int>(edges.size()); ++i)
+            {
+                const auto edge = edges[static_cast<std::size_t>(i)];
+                const glm::vec3 a = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(edge[0])].position * m_meshModelScale;
+                const glm::vec3 b = m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(edge[1])].position * m_meshModelScale;
+                glm::vec2 s{0.0F};
+                if (WorldToScreenPoint((a + b) * 0.5F, &s) && inLasso(s))
+                {
+                    hits.push_back(i);
+                }
+            }
+            auto current = m_meshModelLoopSelectionEdges;
+            if (current.empty() && m_meshModelSelectedEdge >= 0)
+            {
+                current.push_back(m_meshModelSelectedEdge);
+            }
+            if (mode == SelectionCombineMode::Replace)
+            {
+                current = hits;
+            }
+            else if (mode == SelectionCombineMode::Add)
+            {
+                current.insert(current.end(), hits.begin(), hits.end());
+            }
+            else if (mode == SelectionCombineMode::Subtract)
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                    }),
+                    current.end());
+            }
+            else
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                    }),
+                    current.end());
+            }
+            std::sort(current.begin(), current.end());
+            current.erase(std::unique(current.begin(), current.end()), current.end());
+            m_meshModelLoopSelectionEdges = current;
+            m_meshModelRingSelectionEdges.clear();
+            m_meshModelSelectedEdge = current.empty() ? -1 : current.back();
+            return;
+        }
+        if (m_meshEditMode == MeshEditMode::Face)
+        {
+            std::vector<int> hits;
+            for (int i = 0; i < static_cast<int>(m_meshModelFaces.size()); ++i)
+            {
+                const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(i)];
+                if (face.deleted)
+                {
+                    continue;
+                }
+                glm::vec3 center{0.0F};
+                int count = 0;
+                const int vc = std::clamp(face.vertexCount, 3, 4);
+                for (int k = 0; k < vc; ++k)
+                {
+                    const int vi = face.indices[static_cast<std::size_t>(k)];
+                    if (vi < 0 || vi >= static_cast<int>(m_meshModelVertices.size()))
+                    {
+                        continue;
+                    }
+                    center += m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(vi)].position * m_meshModelScale;
+                    ++count;
+                }
+                if (count <= 0)
+                {
+                    continue;
+                }
+                glm::vec2 s{0.0F};
+                if (WorldToScreenPoint(center / static_cast<float>(count), &s) && inLasso(s))
+                {
+                    hits.push_back(i);
+                }
+            }
+            auto current = m_meshModelFaceSelection;
+            if (current.empty() && m_meshModelSelectedFace >= 0)
+            {
+                current.push_back(m_meshModelSelectedFace);
+            }
+            if (mode == SelectionCombineMode::Replace)
+            {
+                current = hits;
+            }
+            else if (mode == SelectionCombineMode::Add)
+            {
+                current.insert(current.end(), hits.begin(), hits.end());
+            }
+            else if (mode == SelectionCombineMode::Subtract)
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                    }),
+                    current.end());
+            }
+            else
+            {
+                current.erase(
+                    std::remove_if(current.begin(), current.end(), [&hits](int idx) {
+                        return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                    }),
+                    current.end());
+            }
+            std::sort(current.begin(), current.end());
+            current.erase(std::unique(current.begin(), current.end()), current.end());
+            m_meshModelFaceSelection = current;
+            m_meshModelSelectedFace = current.empty() ? -1 : current.back();
+            return;
+        }
+    }
+
+    std::vector<int> hitLoop;
+    std::vector<int> hitPlacement;
+    std::vector<int> hitProps;
+
+    if (m_mode == Mode::LoopEditor)
+    {
+        for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
+        {
+            glm::vec2 s{0.0F};
+            if (WorldToScreenPoint(m_loop.elements[static_cast<std::size_t>(i)].position, &s) && inLasso(s))
+            {
+                hitLoop.push_back(i);
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < static_cast<int>(m_map.props.size()); ++i)
+        {
+            glm::vec2 s{0.0F};
+            if (WorldToScreenPoint(m_map.props[static_cast<std::size_t>(i)].position, &s) && inLasso(s))
+            {
+                hitProps.push_back(i);
+            }
+        }
+        for (int i = 0; i < static_cast<int>(m_map.placements.size()); ++i)
+        {
+            const LoopPlacement& p = m_map.placements[static_cast<std::size_t>(i)];
+            glm::vec2 s{0.0F};
+            if (WorldToScreenPoint(TileCenter(p.tileX, p.tileY), &s) && inLasso(s))
+            {
+                hitPlacement.push_back(i);
+            }
+        }
+    }
+
+    auto applyToList = [&](std::vector<int>* list, const std::vector<int>& hits) {
+        if (list == nullptr)
+        {
+            return;
+        }
+        if (mode == SelectionCombineMode::Replace)
+        {
+            *list = hits;
+        }
+        else if (mode == SelectionCombineMode::Add)
+        {
+            list->insert(list->end(), hits.begin(), hits.end());
+        }
+        else if (mode == SelectionCombineMode::Subtract)
+        {
+            list->erase(
+                std::remove_if(list->begin(), list->end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) != hits.end();
+                }),
+                list->end());
+        }
+        else
+        {
+            list->erase(
+                std::remove_if(list->begin(), list->end(), [&hits](int idx) {
+                    return std::find(hits.begin(), hits.end(), idx) == hits.end();
+                }),
+                list->end());
+        }
+        std::sort(list->begin(), list->end());
+        list->erase(std::unique(list->begin(), list->end()), list->end());
+    };
+
+    applyToList(&m_selectedLoopElements, hitLoop);
+    applyToList(&m_selectedMapPlacements, hitPlacement);
+    applyToList(&m_selectedProps, hitProps);
+    if (!m_selectedLoopElements.empty())
+    {
+        m_selection = Selection{SelectionKind::LoopElement, m_selectedLoopElements.back()};
+    }
+    else if (!m_selectedMapPlacements.empty())
+    {
+        m_selection = Selection{SelectionKind::MapPlacement, m_selectedMapPlacements.back()};
+    }
+    else if (!m_selectedProps.empty())
+    {
+        m_selection = Selection{SelectionKind::Prop, m_selectedProps.back()};
+    }
+    else
+    {
+        m_selection = Selection{};
+    }
+}
+
 void LevelEditor::PlaceImportedAssetAtHovered(const std::string& relativeAssetPath)
 {
     if (m_mode != Mode::MapEditor || !m_hoveredTileValid)
@@ -3990,6 +5936,16 @@ void LevelEditor::ResetMeshModelerCommonState()
 
     m_meshModelSelectedFace = m_meshModelFaces.empty() ? -1 : 0;
     m_meshModelSelectedVertex = m_meshModelVertices.empty() ? -1 : 0;
+    m_meshModelFaceSelection.clear();
+    m_meshModelVertexSelection.clear();
+    if (m_meshModelSelectedFace >= 0)
+    {
+        m_meshModelFaceSelection.push_back(m_meshModelSelectedFace);
+    }
+    if (m_meshModelSelectedVertex >= 0)
+    {
+        m_meshModelVertexSelection.push_back(m_meshModelSelectedVertex);
+    }
     m_meshModelHoveredFace = -1;
     m_meshModelHoveredVertex = -1;
     const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
@@ -4181,6 +6137,8 @@ void LevelEditor::MeshModelerExtrudeFace(int faceIndex, float distance)
     m_meshModelFaces.push_back(MeshModelFace{{i2, i3, e3, e2}, false});
     m_meshModelFaces.push_back(MeshModelFace{{i3, i0, e0, e3}, false});
     m_meshModelSelectedFace = static_cast<int>(m_meshModelFaces.size()) - 5;
+    m_meshModelFaceSelection.clear();
+    m_meshModelFaceSelection.push_back(m_meshModelSelectedFace);
 }
 
 std::vector<std::array<int, 2>> LevelEditor::BuildMeshModelEdges() const
@@ -4496,6 +6454,10 @@ void LevelEditor::MeshModelerBevelEdge(int edgeIndex, float distance, int segmen
         return;
     }
 
+    if (segments < 2)
+    {
+        segments = 2;
+    }
     if (segments <= 0)
     {
         segments = 1;
@@ -4511,225 +6473,211 @@ void LevelEditor::MeshModelerBevelEdge(int edgeIndex, float distance, int segmen
     }
     edgeDir = glm::normalize(edgeDir);
 
-    std::vector<glm::vec3> sideDirections;
-    for (const MeshModelFace& face : m_meshModelFaces)
+    struct AdjacentFaceInfo
     {
+        int faceIndex = -1;
+        int localEdge = -1;
+        int count = 4;
+        int a = -1;
+        int b = -1;
+        int i0Neighbor = -1;
+        int i1Neighbor = -1;
+        glm::vec3 i0Dir{0.0F};
+        glm::vec3 i1Dir{0.0F};
+        glm::vec3 faceNormal{0.0F, 1.0F, 0.0F};
+    };
+
+    std::vector<AdjacentFaceInfo> adjacentFaces;
+    adjacentFaces.reserve(4U);
+    auto safeNormalize = [](const glm::vec3& value, const glm::vec3& fallback) {
+        const float len = glm::length(value);
+        if (len < 1.0e-6F)
+        {
+            const float fallbackLen = glm::length(fallback);
+            if (fallbackLen < 1.0e-6F)
+            {
+                return glm::vec3{0.0F, 1.0F, 0.0F};
+            }
+            return fallback / fallbackLen;
+        }
+        return value / len;
+    };
+
+    for (int faceIndex = 0; faceIndex < static_cast<int>(m_meshModelFaces.size()); ++faceIndex)
+    {
+        const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(faceIndex)];
         if (face.deleted)
         {
             continue;
         }
-        bool hasI0 = false;
-        bool hasI1 = false;
         const int count = std::clamp(face.vertexCount, 3, 4);
-        for (int i = 0; i < count; ++i)
+        for (int local = 0; local < count; ++local)
         {
-            const int idx = face.indices[static_cast<std::size_t>(i)];
-            hasI0 = hasI0 || idx == i0;
-            hasI1 = hasI1 || idx == i1;
-        }
-        if (!hasI0 || !hasI1)
-        {
-            continue;
-        }
-
-        const glm::vec3 f0 = m_meshModelVertices[static_cast<std::size_t>(face.indices[0])].position;
-        const glm::vec3 f1 = m_meshModelVertices[static_cast<std::size_t>(face.indices[1])].position;
-        const glm::vec3 f2 = m_meshModelVertices[static_cast<std::size_t>(face.indices[2])].position;
-        glm::vec3 normal = glm::cross(f1 - f0, f2 - f0);
-        if (glm::length(normal) < 1.0e-6F)
-        {
-            continue;
-        }
-        normal = glm::normalize(normal);
-        glm::vec3 side = glm::cross(normal, edgeDir);
-        if (glm::length(side) < 1.0e-6F)
-        {
-            continue;
-        }
-        side = glm::normalize(side);
-
-        glm::vec3 center{0.0F};
-        int centerCount = 0;
-        for (int i = 0; i < count; ++i)
-        {
-            const int idx = face.indices[static_cast<std::size_t>(i)];
-            if (idx >= 0 && idx < static_cast<int>(m_meshModelVertices.size()) &&
-                !m_meshModelVertices[static_cast<std::size_t>(idx)].deleted)
-            {
-                center += m_meshModelVertices[static_cast<std::size_t>(idx)].position;
-                ++centerCount;
-            }
-        }
-        if (centerCount > 0)
-        {
-            center /= static_cast<float>(centerCount);
-        }
-        const glm::vec3 edgeMid = (p0 + p1) * 0.5F;
-        const glm::vec3 toFace = center - edgeMid;
-        if (glm::dot(side, toFace) < 0.0F)
-        {
-            side = -side;
-        }
-
-        bool duplicate = false;
-        for (const glm::vec3& existing : sideDirections)
-        {
-            if (std::abs(glm::dot(existing, side)) > 0.98F)
-            {
-                duplicate = true;
-                break;
-            }
-        }
-        if (!duplicate)
-        {
-            sideDirections.push_back(side);
-        }
-    }
-
-    if (sideDirections.empty())
-    {
-        glm::vec3 fallback = glm::normalize(glm::cross(edgeDir, glm::vec3{0.0F, 1.0F, 0.0F}));
-        if (glm::length(fallback) < 1.0e-6F)
-        {
-            fallback = glm::normalize(glm::cross(edgeDir, glm::vec3{1.0F, 0.0F, 0.0F}));
-        }
-        if (glm::length(fallback) < 1.0e-6F)
-        {
-            fallback = glm::vec3{0.0F, 0.0F, 1.0F};
-        }
-        sideDirections.push_back(fallback);
-    }
-    if (sideDirections.size() == 1U)
-    {
-        sideDirections.push_back(-sideDirections.front());
-    }
-    else if (sideDirections.size() > 2U)
-    {
-        sideDirections.resize(2U);
-    }
-
-    auto computeMiterScale = [&](int vertexIndex, const glm::vec3& baseDirection) {
-        if (!m_meshModelBevelUseMiter)
-        {
-            return 1.0F;
-        }
-        float bestAngle = glm::pi<float>() * 0.5F;
-        float minNeighborLength = std::numeric_limits<float>::max();
-        bool hasNeighbor = false;
-        for (const MeshModelFace& face : m_meshModelFaces)
-        {
-            if (face.deleted)
+            const int a = face.indices[static_cast<std::size_t>(local)];
+            const int b = face.indices[static_cast<std::size_t>((local + 1) % count)];
+            if (!((a == i0 && b == i1) || (a == i1 && b == i0)))
             {
                 continue;
             }
-            const int count = std::clamp(face.vertexCount, 3, 4);
-            for (int local = 0; local < count; ++local)
+            const int prev = face.indices[static_cast<std::size_t>((local - 1 + count) % count)];
+            const int next = face.indices[static_cast<std::size_t>((local + 2) % count)];
+            const int i0Neighbor = (a == i0) ? prev : next;
+            const int i1Neighbor = (a == i0) ? next : prev;
+            if (i0Neighbor < 0 || i1Neighbor < 0 ||
+                i0Neighbor >= static_cast<int>(m_meshModelVertices.size()) ||
+                i1Neighbor >= static_cast<int>(m_meshModelVertices.size()))
             {
-                const int a = face.indices[static_cast<std::size_t>(local)];
-                const int b = face.indices[static_cast<std::size_t>((local + 1) % count)];
-                if (a != vertexIndex && b != vertexIndex)
+                continue;
+            }
+
+            const glm::vec3 faceP0 = m_meshModelVertices[static_cast<std::size_t>(face.indices[0])].position;
+            const glm::vec3 faceP1 = m_meshModelVertices[static_cast<std::size_t>(face.indices[1])].position;
+            const glm::vec3 faceP2 = m_meshModelVertices[static_cast<std::size_t>(face.indices[2])].position;
+            glm::vec3 faceNormal = glm::cross(faceP1 - faceP0, faceP2 - faceP0);
+            if (glm::length(faceNormal) < 1.0e-6F)
+            {
+                faceNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+            }
+            else
+            {
+                faceNormal = glm::normalize(faceNormal);
+            }
+
+            const glm::vec3 posI0 = m_meshModelVertices[static_cast<std::size_t>(i0)].position;
+            const glm::vec3 posI1 = m_meshModelVertices[static_cast<std::size_t>(i1)].position;
+            const glm::vec3 posN0 = m_meshModelVertices[static_cast<std::size_t>(i0Neighbor)].position;
+            const glm::vec3 posN1 = m_meshModelVertices[static_cast<std::size_t>(i1Neighbor)].position;
+
+            glm::vec3 dir0 = safeNormalize(posN0 - posI0, glm::cross(faceNormal, edgeDir));
+            glm::vec3 dir1 = safeNormalize(posN1 - posI1, glm::cross(faceNormal, edgeDir));
+            if (glm::abs(glm::dot(dir0, edgeDir)) > 0.97F)
+            {
+                dir0 = safeNormalize(glm::cross(faceNormal, edgeDir), -edgeDir);
+            }
+            if (glm::abs(glm::dot(dir1, edgeDir)) > 0.97F)
+            {
+                dir1 = safeNormalize(glm::cross(faceNormal, edgeDir), edgeDir);
+            }
+
+            adjacentFaces.push_back(AdjacentFaceInfo{
+                faceIndex,
+                local,
+                count,
+                a,
+                b,
+                i0Neighbor,
+                i1Neighbor,
+                dir0,
+                dir1,
+                faceNormal
+            });
+            break;
+        }
+    }
+    if (adjacentFaces.empty())
+    {
+        return;
+    }
+    if (adjacentFaces.size() > 2U)
+    {
+        float bestDot = 1.0F;
+        std::size_t bestA = 0;
+        std::size_t bestB = 1;
+        for (std::size_t a = 0; a + 1U < adjacentFaces.size(); ++a)
+        {
+            for (std::size_t b = a + 1U; b < adjacentFaces.size(); ++b)
+            {
+                const float d = glm::dot(adjacentFaces[a].faceNormal, adjacentFaces[b].faceNormal);
+                if (d < bestDot)
                 {
-                    continue;
-                }
-                const int other = a == vertexIndex ? b : a;
-                if (other < 0 || other >= static_cast<int>(m_meshModelVertices.size()) ||
-                    m_meshModelVertices[static_cast<std::size_t>(other)].deleted)
-                {
-                    continue;
-                }
-                if (other == i0 || other == i1)
-                {
-                    continue;
-                }
-                glm::vec3 dir = m_meshModelVertices[static_cast<std::size_t>(other)].position -
-                                m_meshModelVertices[static_cast<std::size_t>(vertexIndex)].position;
-                const float neighborLength = glm::length(dir);
-                if (neighborLength < 1.0e-6F)
-                {
-                    continue;
-                }
-                minNeighborLength = std::min(minNeighborLength, neighborLength);
-                dir = glm::normalize(dir);
-                float dotValue = glm::clamp(glm::dot(glm::normalize(baseDirection), dir), -1.0F, 1.0F);
-                float angle = std::acos(dotValue);
-                if (angle > glm::pi<float>() * 0.5F)
-                {
-                    angle = glm::pi<float>() - angle;
-                }
-                if (angle > 0.02F)
-                {
-                    bestAngle = std::min(bestAngle, angle);
-                    hasNeighbor = true;
+                    bestDot = d;
+                    bestA = a;
+                    bestB = b;
                 }
             }
         }
-        if (!hasNeighbor)
-        {
-            return 1.0F;
-        }
-        float miterScale = 1.0F;
-        const float sinHalf = std::sin(bestAngle * 0.5F);
-        if (sinHalf < 1.0e-3F)
-        {
-            miterScale = 3.5F;
-        }
-        else
-        {
-            miterScale = glm::clamp(1.0F / sinHalf, 1.0F, 3.5F);
-        }
-        if (minNeighborLength < std::numeric_limits<float>::max() && totalDistance > 1.0e-6F)
-        {
-            const float maxScaleByLength = glm::clamp((minNeighborLength * 0.45F) / totalDistance, 1.0F, 3.5F);
-            miterScale = std::min(miterScale, maxScaleByLength);
-        }
-        return glm::clamp(miterScale, 1.0F, 3.5F);
-    };
-
-    const float miterScale0 = computeMiterScale(i0, edgeDir);
-    const float miterScale1 = computeMiterScale(i1, -edgeDir);
+        std::vector<AdjacentFaceInfo> reduced;
+        reduced.reserve(2U);
+        reduced.push_back(adjacentFaces[bestA]);
+        reduced.push_back(adjacentFaces[bestB]);
+        adjacentFaces = std::move(reduced);
+    }
+    if (adjacentFaces.size() < 2U)
+    {
+        // Boundary/non-manifold fallback: edge extrude is more predictable than broken bevel topology.
+        MeshModelerExtrudeEdge(edgeIndex, totalDistance);
+        return;
+    }
 
     const auto addVertex = [this](const glm::vec3& position) {
         m_meshModelVertices.push_back(MeshModelVertex{position, false});
         return static_cast<int>(m_meshModelVertices.size()) - 1;
     };
 
-    int selectedA = -1;
-    int selectedB = -1;
-    for (std::size_t sideIndex = 0; sideIndex < sideDirections.size(); ++sideIndex)
+    const AdjacentFaceInfo& sideA = adjacentFaces[0];
+    const AdjacentFaceInfo& sideB = adjacentFaces[1];
+    const float miterScale = m_meshModelBevelUseMiter ? glm::clamp(1.0F / glm::sin(glm::radians(45.0F)), 1.0F, 2.0F) : 1.0F;
+    std::vector<std::array<int, 2>> rings;
+    rings.reserve(static_cast<std::size_t>(segments) + 1U);
+    for (int step = 0; step <= segments; ++step)
     {
-        const glm::vec3 side = glm::normalize(sideDirections[sideIndex]);
-        int prev0 = i0;
-        int prev1 = i1;
-        for (int step = 1; step <= segments; ++step)
+        const float t = static_cast<float>(step) / static_cast<float>(segments);
+        const float shapedT = glm::clamp(std::pow(t, profile), 0.0F, 1.0F);
+        glm::vec3 d0 = glm::mix(sideA.i0Dir, sideB.i0Dir, shapedT);
+        glm::vec3 d1 = glm::mix(sideA.i1Dir, sideB.i1Dir, shapedT);
+        d0 = safeNormalize(d0, sideA.i0Dir);
+        d1 = safeNormalize(d1, sideA.i1Dir);
+        const int ring0 = addVertex(p0 + d0 * totalDistance * miterScale);
+        const int ring1 = addVertex(p1 + d1 * totalDistance * miterScale);
+        rings.push_back(std::array<int, 2>{ring0, ring1});
+    }
+
+    // Replace original faces that used the beveled edge with trimmed versions that use first/last bevel rings.
+    const auto emitTrimmedFace = [this, i0, i1](const AdjacentFaceInfo& adjacent, const std::array<int, 2>& ring) {
+        MeshModelFace oldFace = m_meshModelFaces[static_cast<std::size_t>(adjacent.faceIndex)];
+        m_meshModelFaces[static_cast<std::size_t>(adjacent.faceIndex)].deleted = true;
+
+        const int replacementA = (adjacent.a == i0) ? ring[0] : ring[1];
+        const int replacementB = (adjacent.b == i0) ? ring[0] : ring[1];
+        oldFace.indices[static_cast<std::size_t>(adjacent.localEdge)] = replacementA;
+        oldFace.indices[static_cast<std::size_t>((adjacent.localEdge + 1) % adjacent.count)] = replacementB;
+        oldFace.deleted = false;
+        oldFace.vertexCount = adjacent.count;
+        m_meshModelFaces.push_back(oldFace);
+    };
+    emitTrimmedFace(sideA, rings.front());
+    emitTrimmedFace(sideB, rings.back());
+
+    for (std::size_t ringIndex = 0; ringIndex + 1U < rings.size(); ++ringIndex)
+    {
+        const auto& a = rings[ringIndex];
+        const auto& b = rings[ringIndex + 1U];
+        if (a[0] < 0 || a[1] < 0 || b[0] < 0 || b[1] < 0)
         {
-            const float t = static_cast<float>(step) / static_cast<float>(segments);
-            const float curveT = std::pow(t, profile);
-            const float offsetLength = totalDistance * curveT;
-            const glm::vec3 offset = side * offsetLength;
-            const int next0 = addVertex(p0 + offset * miterScale0);
-            const int next1 = addVertex(p1 + offset * miterScale1);
-            m_meshModelFaces.push_back(MeshModelFace{{prev0, prev1, next1, next0}, false});
-            prev0 = next0;
-            prev1 = next1;
-            if (sideIndex == 0U && step == segments)
-            {
-                selectedA = next0;
-                selectedB = next1;
-            }
+            continue;
         }
+        m_meshModelFaces.push_back(MeshModelFace{{a[0], a[1], b[1], b[0]}, false, 4});
     }
 
     CleanupMeshModelTopology();
     const std::vector<std::array<int, 2>> postEdges = BuildMeshModelEdges();
     m_meshModelSelectedEdge = -1;
+    const std::array<int, 2> highlightPair = rings.size() > 1U ? rings[1U] : rings.back();
     for (int edgeIdx = 0; edgeIdx < static_cast<int>(postEdges.size()); ++edgeIdx)
     {
         const auto& edge = postEdges[static_cast<std::size_t>(edgeIdx)];
-        if ((edge[0] == selectedA && edge[1] == selectedB) || (edge[0] == selectedB && edge[1] == selectedA))
+        if ((edge[0] == highlightPair[0] && edge[1] == highlightPair[1]) ||
+            (edge[0] == highlightPair[1] && edge[1] == highlightPair[0]))
         {
             m_meshModelSelectedEdge = edgeIdx;
             break;
         }
+    }
+    m_meshModelFaceSelection.clear();
+    if (!m_meshModelFaces.empty())
+    {
+        m_meshModelSelectedFace = static_cast<int>(m_meshModelFaces.size()) - 1;
+        m_meshModelFaceSelection.push_back(m_meshModelSelectedFace);
     }
 }
 
@@ -5413,6 +7361,8 @@ void LevelEditor::CleanupMeshModelTopology()
 {
     const int oldSelectedFace = m_meshModelSelectedFace;
     const int oldSelectedVertex = m_meshModelSelectedVertex;
+    const std::vector<int> oldSelectedFaces = m_meshModelFaceSelection;
+    const std::vector<int> oldSelectedVertices = m_meshModelVertexSelection;
     const int oldMergeKeep = m_meshModelMergeKeepVertex;
     const int oldMergeRemove = m_meshModelMergeRemoveVertex;
 
@@ -5541,6 +7491,19 @@ void LevelEditor::CleanupMeshModelTopology()
     m_meshModelSelectedVertex = remapVertexSelection(oldSelectedVertex);
     m_meshModelMergeKeepVertex = remapVertexSelection(oldMergeKeep);
     m_meshModelMergeRemoveVertex = remapVertexSelection(oldMergeRemove);
+    m_meshModelVertexSelection.clear();
+    for (const int oldIndex : oldSelectedVertices)
+    {
+        const int mapped = remapVertexSelection(oldIndex);
+        if (mapped >= 0)
+        {
+            m_meshModelVertexSelection.push_back(mapped);
+        }
+    }
+    std::sort(m_meshModelVertexSelection.begin(), m_meshModelVertexSelection.end());
+    m_meshModelVertexSelection.erase(
+        std::unique(m_meshModelVertexSelection.begin(), m_meshModelVertexSelection.end()),
+        m_meshModelVertexSelection.end());
 
     if (oldSelectedFace >= 0 && oldSelectedFace < static_cast<int>(faceRemap.size()))
     {
@@ -5550,6 +7513,23 @@ void LevelEditor::CleanupMeshModelTopology()
     {
         m_meshModelSelectedFace = -1;
     }
+    m_meshModelFaceSelection.clear();
+    for (const int oldFace : oldSelectedFaces)
+    {
+        if (oldFace < 0 || oldFace >= static_cast<int>(faceRemap.size()))
+        {
+            continue;
+        }
+        const int mapped = faceRemap[static_cast<std::size_t>(oldFace)];
+        if (mapped >= 0)
+        {
+            m_meshModelFaceSelection.push_back(mapped);
+        }
+    }
+    std::sort(m_meshModelFaceSelection.begin(), m_meshModelFaceSelection.end());
+    m_meshModelFaceSelection.erase(
+        std::unique(m_meshModelFaceSelection.begin(), m_meshModelFaceSelection.end()),
+        m_meshModelFaceSelection.end());
 
     if (m_meshModelSelectedFace < 0 && !m_meshModelFaces.empty())
     {
@@ -5558,6 +7538,18 @@ void LevelEditor::CleanupMeshModelTopology()
     if (m_meshModelSelectedVertex < 0 && !m_meshModelVertices.empty())
     {
         m_meshModelSelectedVertex = 0;
+    }
+    if (m_meshModelSelectedFace >= 0 &&
+        std::find(m_meshModelFaceSelection.begin(), m_meshModelFaceSelection.end(), m_meshModelSelectedFace) ==
+            m_meshModelFaceSelection.end())
+    {
+        m_meshModelFaceSelection.push_back(m_meshModelSelectedFace);
+    }
+    if (m_meshModelSelectedVertex >= 0 &&
+        std::find(m_meshModelVertexSelection.begin(), m_meshModelVertexSelection.end(), m_meshModelSelectedVertex) ==
+            m_meshModelVertexSelection.end())
+    {
+        m_meshModelVertexSelection.push_back(m_meshModelSelectedVertex);
     }
 
     m_meshModelSelectedEdge = -1;
@@ -5800,10 +7792,29 @@ glm::vec3 LevelEditor::MeshModelSelectionPivot() const
 
     if (m_meshEditMode == MeshEditMode::Vertex)
     {
-        if (m_meshModelSelectedVertex >= 0 && m_meshModelSelectedVertex < static_cast<int>(m_meshModelVertices.size()) &&
-            !m_meshModelVertices[static_cast<std::size_t>(m_meshModelSelectedVertex)].deleted)
+        std::vector<int> selected = m_meshModelVertexSelection;
+        if (selected.empty() && m_meshModelSelectedVertex >= 0)
         {
-            return toWorld(m_meshModelSelectedVertex);
+            selected.push_back(m_meshModelSelectedVertex);
+        }
+        glm::vec3 center{0.0F};
+        int count = 0;
+        for (const int idx : selected)
+        {
+            if (idx < 0 || idx >= static_cast<int>(m_meshModelVertices.size()))
+            {
+                continue;
+            }
+            if (m_meshModelVertices[static_cast<std::size_t>(idx)].deleted)
+            {
+                continue;
+            }
+            center += toWorld(idx);
+            ++count;
+        }
+        if (count > 0)
+        {
+            return center / static_cast<float>(count);
         }
     }
     else if (m_meshEditMode == MeshEditMode::Edge)
@@ -5817,32 +7828,205 @@ glm::vec3 LevelEditor::MeshModelSelectionPivot() const
     }
     else
     {
-        if (m_meshModelSelectedFace >= 0 && m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()))
+        std::vector<int> faces = m_meshModelFaceSelection;
+        if (faces.empty() && m_meshModelSelectedFace >= 0 && m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()))
         {
-            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(m_meshModelSelectedFace)];
-            if (!face.deleted)
+            faces.push_back(m_meshModelSelectedFace);
+        }
+        glm::vec3 center{0.0F};
+        int count = 0;
+        for (const int faceIndex : faces)
+        {
+            if (faceIndex < 0 || faceIndex >= static_cast<int>(m_meshModelFaces.size()))
             {
-                glm::vec3 center{0.0F};
-                int count = 0;
-                const int faceCount = std::clamp(face.vertexCount, 3, 4);
-                for (int i = 0; i < faceCount; ++i)
+                continue;
+            }
+            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(faceIndex)];
+            if (face.deleted)
+            {
+                continue;
+            }
+            const int faceCount = std::clamp(face.vertexCount, 3, 4);
+            for (int i = 0; i < faceCount; ++i)
+            {
+                const int idx = face.indices[static_cast<std::size_t>(i)];
+                if (idx >= 0 && idx < static_cast<int>(m_meshModelVertices.size()) &&
+                    !m_meshModelVertices[static_cast<std::size_t>(idx)].deleted)
                 {
-                    const int idx = face.indices[static_cast<std::size_t>(i)];
-                    if (idx >= 0 && idx < static_cast<int>(m_meshModelVertices.size()) &&
-                        !m_meshModelVertices[static_cast<std::size_t>(idx)].deleted)
-                    {
-                        center += toWorld(idx);
-                        ++count;
-                    }
+                    center += toWorld(idx);
+                    ++count;
                 }
-                if (count > 0)
+            }
+        }
+        if (count > 0)
+        {
+            return center / static_cast<float>(count);
+        }
+    }
+    return m_meshModelPosition;
+}
+
+bool LevelEditor::BuildActiveMeshLocalBasis(glm::mat3* outBasis) const
+{
+    if (outBasis == nullptr)
+    {
+        return false;
+    }
+
+    auto toWorld = [this](int vertexIndex) {
+        return m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(vertexIndex)].position * m_meshModelScale;
+    };
+
+    glm::vec3 basisX{1.0F, 0.0F, 0.0F};
+    glm::vec3 basisY{0.0F, 1.0F, 0.0F};
+    glm::vec3 basisZ{0.0F, 0.0F, 1.0F};
+
+    auto safeNormalize = [](const glm::vec3& v, const glm::vec3& fallback) {
+        const float len = glm::length(v);
+        if (len < 1.0e-6F || !std::isfinite(len))
+        {
+            return fallback;
+        }
+        return v / len;
+    };
+
+    if (m_meshEditMode == MeshEditMode::Face && m_meshModelSelectedFace >= 0 &&
+        m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()))
+    {
+        const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(m_meshModelSelectedFace)];
+        if (!face.deleted)
+        {
+            const int i0 = face.indices[0];
+            const int i1 = face.indices[1];
+            const int i2 = face.indices[2];
+            if (i0 >= 0 && i1 >= 0 && i2 >= 0 &&
+                i0 < static_cast<int>(m_meshModelVertices.size()) &&
+                i1 < static_cast<int>(m_meshModelVertices.size()) &&
+                i2 < static_cast<int>(m_meshModelVertices.size()))
+            {
+                const glm::vec3 p0 = toWorld(i0);
+                const glm::vec3 p1 = toWorld(i1);
+                const glm::vec3 p2 = toWorld(i2);
+                basisX = safeNormalize(p1 - p0, basisX);
+                basisZ = safeNormalize(glm::cross(p1 - p0, p2 - p0), basisZ);
+                basisY = safeNormalize(glm::cross(basisZ, basisX), basisY);
+            }
+        }
+    }
+    else if (m_meshEditMode == MeshEditMode::Edge)
+    {
+        const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
+        const std::vector<int> activeEdges = CollectMeshModelActiveEdges();
+        if (!activeEdges.empty())
+        {
+            const int edgeIndex = activeEdges.front();
+            if (edgeIndex >= 0 && edgeIndex < static_cast<int>(edges.size()))
+            {
+                const int a = edges[static_cast<std::size_t>(edgeIndex)][0];
+                const int b = edges[static_cast<std::size_t>(edgeIndex)][1];
+                if (a >= 0 && b >= 0 && a < static_cast<int>(m_meshModelVertices.size()) &&
+                    b < static_cast<int>(m_meshModelVertices.size()))
                 {
-                    return center / static_cast<float>(count);
+                    const glm::vec3 pa = toWorld(a);
+                    const glm::vec3 pb = toWorld(b);
+                    basisX = safeNormalize(pb - pa, basisX);
+
+                    glm::vec3 avgNormal{0.0F};
+                    int normalCount = 0;
+                    for (const MeshModelFace& face : m_meshModelFaces)
+                    {
+                        if (face.deleted)
+                        {
+                            continue;
+                        }
+                        bool hasA = false;
+                        bool hasB = false;
+                        const int count = std::clamp(face.vertexCount, 3, 4);
+                        for (int i = 0; i < count; ++i)
+                        {
+                            const int idx = face.indices[static_cast<std::size_t>(i)];
+                            hasA = hasA || idx == a;
+                            hasB = hasB || idx == b;
+                        }
+                        if (!hasA || !hasB)
+                        {
+                            continue;
+                        }
+                        const glm::vec3 p0 = toWorld(face.indices[0]);
+                        const glm::vec3 p1 = toWorld(face.indices[1]);
+                        const glm::vec3 p2 = toWorld(face.indices[2]);
+                        const glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+                        if (glm::length(n) > 1.0e-6F)
+                        {
+                            avgNormal += glm::normalize(n);
+                            ++normalCount;
+                        }
+                    }
+                    if (normalCount > 0)
+                    {
+                        basisZ = safeNormalize(avgNormal, basisZ);
+                    }
+                    basisY = safeNormalize(glm::cross(basisZ, basisX), basisY);
+                    basisZ = safeNormalize(glm::cross(basisX, basisY), basisZ);
                 }
             }
         }
     }
-    return m_meshModelPosition;
+    else if (m_meshEditMode == MeshEditMode::Vertex && m_meshModelSelectedVertex >= 0 &&
+             m_meshModelSelectedVertex < static_cast<int>(m_meshModelVertices.size()))
+    {
+        const int vertexIndex = m_meshModelSelectedVertex;
+        glm::vec3 avgNormal{0.0F};
+        int normalCount = 0;
+        int firstNeighbor = -1;
+        for (const MeshModelFace& face : m_meshModelFaces)
+        {
+            if (face.deleted)
+            {
+                continue;
+            }
+            const int count = std::clamp(face.vertexCount, 3, 4);
+            bool hasVertex = false;
+            for (int i = 0; i < count; ++i)
+            {
+                const int idx = face.indices[static_cast<std::size_t>(i)];
+                if (idx == vertexIndex)
+                {
+                    hasVertex = true;
+                }
+                else if (firstNeighbor < 0)
+                {
+                    firstNeighbor = idx;
+                }
+            }
+            if (!hasVertex)
+            {
+                continue;
+            }
+            const glm::vec3 p0 = toWorld(face.indices[0]);
+            const glm::vec3 p1 = toWorld(face.indices[1]);
+            const glm::vec3 p2 = toWorld(face.indices[2]);
+            const glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+            if (glm::length(n) > 1.0e-6F)
+            {
+                avgNormal += glm::normalize(n);
+                ++normalCount;
+            }
+        }
+        if (firstNeighbor >= 0 && firstNeighbor < static_cast<int>(m_meshModelVertices.size()))
+        {
+            basisX = safeNormalize(toWorld(firstNeighbor) - toWorld(vertexIndex), basisX);
+        }
+        if (normalCount > 0)
+        {
+            basisZ = safeNormalize(avgNormal, basisZ);
+        }
+        basisY = safeNormalize(glm::cross(basisZ, basisX), basisY);
+        basisX = safeNormalize(glm::cross(basisY, basisZ), basisX);
+    }
+
+    *outBasis = glm::mat3{basisX, basisY, basisZ};
+    return true;
 }
 
 void LevelEditor::MoveMeshSelection(const glm::vec3& delta)
@@ -5856,31 +8040,57 @@ void LevelEditor::MoveMeshSelection(const glm::vec3& delta)
     std::unordered_set<int> moveVertices;
     if (m_meshEditMode == MeshEditMode::Vertex)
     {
-        moveVertices.insert(m_meshModelSelectedVertex);
+        for (const int idx : m_meshModelVertexSelection)
+        {
+            moveVertices.insert(idx);
+        }
+        if (m_meshModelSelectedVertex >= 0)
+        {
+            moveVertices.insert(m_meshModelSelectedVertex);
+        }
     }
     else if (m_meshEditMode == MeshEditMode::Edge)
     {
         const std::vector<std::array<int, 2>> edges = BuildMeshModelEdges();
-        if (m_meshModelSelectedEdge >= 0 && m_meshModelSelectedEdge < static_cast<int>(edges.size()))
+        std::vector<int> edgeIndices = CollectMeshModelActiveEdges();
+        if (edgeIndices.empty() && m_meshModelSelectedEdge >= 0)
         {
-            const auto& edge = edges[static_cast<std::size_t>(m_meshModelSelectedEdge)];
+            edgeIndices.push_back(m_meshModelSelectedEdge);
+        }
+        for (const int edgeIndex : edgeIndices)
+        {
+            if (edgeIndex < 0 || edgeIndex >= static_cast<int>(edges.size()))
+            {
+                continue;
+            }
+            const auto& edge = edges[static_cast<std::size_t>(edgeIndex)];
             moveVertices.insert(edge[0]);
             moveVertices.insert(edge[1]);
         }
     }
     else
     {
-        if (m_meshModelSelectedFace >= 0 && m_meshModelSelectedFace < static_cast<int>(m_meshModelFaces.size()))
+        std::vector<int> selectedFaces = m_meshModelFaceSelection;
+        if (selectedFaces.empty() && m_meshModelSelectedFace >= 0)
         {
-            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(m_meshModelSelectedFace)];
-            if (!face.deleted)
+            selectedFaces.push_back(m_meshModelSelectedFace);
+        }
+        for (const int faceIndex : selectedFaces)
+        {
+            if (faceIndex < 0 || faceIndex >= static_cast<int>(m_meshModelFaces.size()))
             {
-                const int faceCount = std::clamp(face.vertexCount, 3, 4);
-                for (int i = 0; i < faceCount; ++i)
-                {
-                    const int idx = face.indices[static_cast<std::size_t>(i)];
-                    moveVertices.insert(idx);
-                }
+                continue;
+            }
+            const MeshModelFace& face = m_meshModelFaces[static_cast<std::size_t>(faceIndex)];
+            if (face.deleted)
+            {
+                continue;
+            }
+            const int faceCount = std::clamp(face.vertexCount, 3, 4);
+            for (int i = 0; i < faceCount; ++i)
+            {
+                const int idx = face.indices[static_cast<std::size_t>(i)];
+                moveVertices.insert(idx);
             }
         }
     }
@@ -6008,7 +8218,7 @@ void LevelEditor::UpdateMeshHover(const glm::vec3& rayOrigin, const glm::vec3& r
             }
             const glm::vec3 closest = rayOrigin + rayDirection * t;
             const float dist = glm::length(p - closest);
-            if (dist > 0.32F)
+            if (dist > 0.5F)
             {
                 continue;
             }
@@ -6033,7 +8243,7 @@ void LevelEditor::UpdateMeshHover(const glm::vec3& rayOrigin, const glm::vec3& r
             float segT = 0.0F;
             const float dist = DistanceRayToSegment(rayOrigin, rayDirection, toWorld(edge[0]), toWorld(edge[1]), &rayT, &segT);
             (void)segT;
-            if (rayT < 0.0F || dist > 0.24F)
+            if (rayT < 0.0F || dist > 0.35F)
             {
                 continue;
             }
@@ -6094,7 +8304,7 @@ bool LevelEditor::StartMeshAxisDrag(const glm::vec3& rayOrigin, const glm::vec3&
     const glm::vec3 pivot = MeshModelSelectionPivot();
     const float cameraDistance = glm::length(m_cameraPosition - pivot);
     const float axisLength = glm::clamp(cameraDistance * 0.16F, 1.2F, 6.0F);
-    const float handleHalf = glm::max(0.15F, axisLength * 0.12F);
+    const float handleHalf = glm::max(0.22F, axisLength * 0.16F);
     const glm::vec3 axisDirections[3] = {
         glm::vec3{1.0F, 0.0F, 0.0F},
         glm::vec3{0.0F, 1.0F, 0.0F},
@@ -7388,7 +9598,10 @@ void LevelEditor::RenderMeshModeler(engine::render::Renderer& renderer) const
                 const glm::vec3 p3 = count == 4
                                          ? (m_meshModelPosition + m_meshModelVertices[static_cast<std::size_t>(i3)].position * m_meshModelScale)
                                          : p0;
-                const bool isSelectedFace = faceToOutline == m_meshModelSelectedFace;
+                const bool isSelectedFace =
+                    faceToOutline == m_meshModelSelectedFace ||
+                    std::find(m_meshModelFaceSelection.begin(), m_meshModelFaceSelection.end(), faceToOutline) !=
+                        m_meshModelFaceSelection.end();
                 const glm::vec3 c = isSelectedFace ? glm::vec3{1.0F, 0.45F, 0.2F} : glm::vec3{0.95F, 0.9F, 0.35F};
                 renderer.DrawOverlayLine(p0, p1, c);
                 renderer.DrawOverlayLine(p1, p2, c);
@@ -7413,7 +9626,9 @@ void LevelEditor::RenderMeshModeler(engine::render::Renderer& renderer) const
             continue;
         }
         const glm::vec3 pos = m_meshModelPosition + vertex.position * m_meshModelScale;
-        const bool selected = static_cast<int>(i) == m_meshModelSelectedVertex;
+        const bool selected = static_cast<int>(i) == m_meshModelSelectedVertex ||
+                              std::find(m_meshModelVertexSelection.begin(), m_meshModelVertexSelection.end(), static_cast<int>(i)) !=
+                                  m_meshModelVertexSelection.end();
         const bool hovered = m_meshEditMode == MeshEditMode::Vertex && static_cast<int>(i) == m_meshModelHoveredVertex;
         const glm::vec3 color = selected
                                     ? glm::vec3{1.0F, 0.82F, 0.2F}
@@ -7538,6 +9753,30 @@ std::string LevelEditor::SelectedLabel() const
     }
 }
 
+std::string LevelEditor::SceneDump() const
+{
+    std::ostringstream oss;
+    oss << "EditorSceneDump\n";
+    oss << " mode=" << ModeToText(m_mode)
+        << " object_mode=" << (m_meshModelSceneEditEnabled ? "edit" : "object")
+        << " workspace=" << (m_uiWorkspace == UiWorkspace::All
+                                  ? "all"
+                                  : (m_uiWorkspace == UiWorkspace::Mesh
+                                         ? "mesh"
+                                         : (m_uiWorkspace == UiWorkspace::Map
+                                                ? "map"
+                                                : (m_uiWorkspace == UiWorkspace::Lighting ? "lighting" : "fx"))))
+        << "\n";
+    oss << " active_mesh=" << m_meshActiveObjectName
+        << " verts=" << m_meshModelVertices.size()
+        << " faces=" << m_meshModelFaces.size()
+        << " pos=(" << m_meshModelPosition.x << "," << m_meshModelPosition.y << "," << m_meshModelPosition.z << ")\n";
+    oss << " map placements=" << m_map.placements.size()
+        << " props=" << m_map.props.size()
+        << " lights=" << m_map.lights.size() << "\n";
+    return oss.str();
+}
+
 void LevelEditor::Update(
     float deltaSeconds,
     const engine::platform::Input& input,
@@ -7546,6 +9785,9 @@ void LevelEditor::Update(
     int framebufferHeight
 )
 {
+    m_lastFramebufferWidth = std::max(1, framebufferWidth);
+    m_lastFramebufferHeight = std::max(1, framebufferHeight);
+    m_meshObjectMode = m_meshModelSceneEditEnabled ? MeshObjectMode::Edit : MeshObjectMode::Object;
     m_materialLabElapsed += glm::max(0.0F, deltaSeconds);
 
     if (m_contentNeedsRefresh)
@@ -7567,7 +9809,24 @@ void LevelEditor::Update(
 
     HandleCamera(deltaSeconds, input, controlsEnabled);
     HandleEditorHotkeys(input, controlsEnabled);
-    ApplyGizmoInput(input, deltaSeconds);
+    if (m_modalTransform.active)
+    {
+        UpdateModalTransform(input, deltaSeconds);
+        if (input.IsKeyPressed(GLFW_KEY_ESCAPE) || input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            CancelModalTransform();
+            return;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_ENTER) || input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            ConfirmModalTransform();
+            return;
+        }
+    }
+    else
+    {
+        ApplyGizmoInput(input, deltaSeconds);
+    }
     UpdateHoveredTile(input, framebufferWidth, framebufferHeight);
     m_fxPreviewSystem.Update(deltaSeconds, m_cameraPosition);
     if (m_axisDragActive && input.IsMouseReleased(GLFW_MOUSE_BUTTON_LEFT))
@@ -7588,12 +9847,133 @@ void LevelEditor::Update(
         return;
     }
 
+    const glm::vec2 mousePos = input.MousePosition();
+    const bool mouseInSceneRect =
+        mousePos.x >= m_sceneViewportRectMin.x && mousePos.x <= m_sceneViewportRectMax.x &&
+        mousePos.y >= m_sceneViewportRectMin.y && mousePos.y <= m_sceneViewportRectMax.y;
+    const bool sceneMouseActive = mouseInSceneRect && (m_sceneViewportHovered || m_sceneViewportFocused);
+
+    if (m_mode == Mode::LoopEditor)
+    {
+        SpawnQueuedMeshPrimitive(input);
+    }
+
 #if BUILD_WITH_IMGUI
-    if (ImGui::GetIO().WantCaptureMouse && !m_sceneViewportHovered && !m_sceneViewportFocused)
+    if (ImGui::GetIO().WantCaptureMouse && !sceneMouseActive)
     {
         return;
     }
 #endif
+
+    const bool ctrlDown = input.IsKeyDown(GLFW_KEY_LEFT_CONTROL) || input.IsKeyDown(GLFW_KEY_RIGHT_CONTROL);
+    const bool shiftDown = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    const bool altDown = input.IsKeyDown(GLFW_KEY_LEFT_ALT) || input.IsKeyDown(GLFW_KEY_RIGHT_ALT);
+
+    if (m_mode == Mode::LoopEditor)
+    {
+        if (sceneMouseActive && shiftDown && input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT) && !ctrlDown)
+        {
+            UpdateMeshCursorFromMouse(input, framebufferWidth, framebufferHeight);
+        }
+
+        if (m_meshClickPlacementPending)
+        {
+            m_meshClickPreviewPosition = ComputeMeshSpawnPosition(static_cast<int>(MeshSpawnMode::ClickPlace), input);
+            if (input.IsKeyPressed(GLFW_KEY_ESCAPE))
+            {
+                m_meshClickPlacementPending = false;
+                m_clickPlacePrimitive = MeshPrimitiveType::None;
+                m_statusLine = "Click placement canceled";
+                return;
+            }
+            if (sceneMouseActive && input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+            {
+                SpawnMeshPrimitiveNow(
+                    static_cast<int>(m_clickPlacePrimitive),
+                    m_meshClickPreviewPosition,
+                    "click place"
+                );
+                m_meshClickPlacementPending = false;
+                m_clickPlacePrimitive = MeshPrimitiveType::None;
+                return;
+            }
+        }
+    }
+
+    SelectionCombineMode runtimeSelectionMode = m_selectionCombineMode;
+    if (shiftDown && altDown)
+    {
+        runtimeSelectionMode = SelectionCombineMode::Intersect;
+    }
+    else if (altDown)
+    {
+        runtimeSelectionMode = SelectionCombineMode::Subtract;
+    }
+    else if (shiftDown)
+    {
+        runtimeSelectionMode = SelectionCombineMode::Add;
+    }
+
+    if (sceneMouseActive && ctrlDown && input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT) &&
+        !m_lassoSelection.active)
+    {
+        m_lassoSelection.active = true;
+        m_lassoSelection.points.clear();
+        m_lassoSelection.points.push_back(input.MousePosition());
+        m_statusLine = "Lasso select active";
+    }
+    if (m_lassoSelection.active)
+    {
+        if (input.IsMouseDown(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            const glm::vec2 p = input.MousePosition();
+            if (m_lassoSelection.points.empty() || glm::length(p - m_lassoSelection.points.back()) > 2.0F)
+            {
+                m_lassoSelection.points.push_back(p);
+            }
+        }
+        else
+        {
+            ApplyLassoSelection(runtimeSelectionMode);
+            m_lassoSelection.active = false;
+            m_lassoSelection.points.clear();
+            m_statusLine = "Lasso selection applied";
+        }
+        return;
+    }
+    if (m_boxSelection.active)
+    {
+        if (input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        {
+            m_boxSelection = BoxSelectionState{};
+            m_statusLine = "Box select canceled";
+            return;
+        }
+        if (input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            m_boxSelection.dragging = true;
+            m_boxSelection.end = input.MousePosition();
+        }
+        if (input.IsMouseReleased(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            if (m_boxSelection.dragging)
+            {
+                m_boxSelection.end = input.MousePosition();
+                ApplyBoxSelection(runtimeSelectionMode);
+                m_statusLine = "Box selection applied";
+            }
+            m_boxSelection = BoxSelectionState{};
+        }
+        return;
+    }
+
+    if (!sceneMouseActive)
+    {
+        m_meshModelHoveredFace = -1;
+        m_meshModelHoveredEdge = -1;
+        m_meshModelHoveredVertex = -1;
+        return;
+    }
 
     glm::vec3 rayOrigin{0.0F};
     glm::vec3 rayDirection{0.0F};
@@ -7605,8 +9985,7 @@ void LevelEditor::Update(
         return;
     }
 
-    if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled &&
-        (m_sceneViewportHovered || m_sceneViewportFocused))
+    if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled && sceneMouseActive)
     {
         UpdateMeshHover(rayOrigin, rayDirection);
     }
@@ -7619,6 +9998,13 @@ void LevelEditor::Update(
 
     if (m_axisDragActive)
     {
+        if (input.IsKeyPressed(GLFW_KEY_ESCAPE) || input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            StopAxisDrag();
+            Undo();
+            m_statusLine = "Transform canceled";
+            return;
+        }
         if (input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
         {
             UpdateAxisDrag(rayOrigin, rayDirection);
@@ -7627,6 +10013,13 @@ void LevelEditor::Update(
     }
     if (m_meshModelAxisDragActive)
     {
+        if (input.IsKeyPressed(GLFW_KEY_ESCAPE) || input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            StopMeshAxisDrag();
+            Undo();
+            m_statusLine = "Mesh transform canceled";
+            return;
+        }
         if (input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
         {
             UpdateMeshAxisDrag(rayOrigin, rayDirection);
@@ -7635,6 +10028,12 @@ void LevelEditor::Update(
     }
     if (m_meshModelBatchDragActive)
     {
+        if (input.IsKeyPressed(GLFW_KEY_ESCAPE) || input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            StopMeshBatchEdgeDrag();
+            m_statusLine = "Batch drag canceled";
+            return;
+        }
         if (input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
         {
             UpdateMeshBatchEdgeDrag(rayOrigin, rayDirection);
@@ -7644,6 +10043,13 @@ void LevelEditor::Update(
 
     if (input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
     {
+        const bool shiftSelect = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+        const bool altSelect = input.IsKeyDown(GLFW_KEY_LEFT_ALT) || input.IsKeyDown(GLFW_KEY_RIGHT_ALT);
+#if BUILD_WITH_IMGUI
+        const bool doubleClickSelect = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+#else
+        const bool doubleClickSelect = false;
+#endif
         if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
         {
             if (m_meshModelLoopCutToolEnabled)
@@ -7678,8 +10084,114 @@ void LevelEditor::Update(
                 m_statusLine = "Mesh gizmo drag started";
                 return;
             }
+            if ((altSelect || doubleClickSelect) && m_meshEditMode == MeshEditMode::Edge && m_meshModelHoveredEdge >= 0)
+            {
+                if (shiftSelect)
+                {
+                    MeshModelerSelectEdgeRing(m_meshModelHoveredEdge);
+                    m_statusLine = "Edge ring selected";
+                }
+                else
+                {
+                    MeshModelerSelectEdgeLoop(m_meshModelHoveredEdge);
+                    m_statusLine = "Edge loop selected";
+                }
+                return;
+            }
             if (PickMeshModelInScene(rayOrigin, rayDirection))
             {
+                if (m_meshEditMode == MeshEditMode::Vertex)
+                {
+                    auto current = m_meshModelVertexSelection;
+                    if (current.empty() && m_meshModelSelectedVertex >= 0)
+                    {
+                        current.push_back(m_meshModelSelectedVertex);
+                    }
+                    if (shiftSelect && m_meshModelHoveredVertex >= 0)
+                    {
+                        const auto it = std::find(current.begin(), current.end(), m_meshModelHoveredVertex);
+                        if (it != current.end())
+                        {
+                            current.erase(it);
+                        }
+                        else
+                        {
+                            current.push_back(m_meshModelHoveredVertex);
+                        }
+                    }
+                    else
+                    {
+                        current.clear();
+                        if (m_meshModelSelectedVertex >= 0)
+                        {
+                            current.push_back(m_meshModelSelectedVertex);
+                        }
+                    }
+                    std::sort(current.begin(), current.end());
+                    current.erase(std::unique(current.begin(), current.end()), current.end());
+                    m_meshModelVertexSelection = current;
+                    m_meshModelSelectedVertex = current.empty() ? -1 : current.back();
+                }
+                else if (m_meshEditMode == MeshEditMode::Edge)
+                {
+                    if (shiftSelect && m_meshModelHoveredEdge >= 0)
+                    {
+                        auto toggleEdge = [this](int edgeIndex) {
+                            auto it = std::find(m_meshModelLoopSelectionEdges.begin(), m_meshModelLoopSelectionEdges.end(), edgeIndex);
+                            if (it != m_meshModelLoopSelectionEdges.end())
+                            {
+                                m_meshModelLoopSelectionEdges.erase(it);
+                            }
+                            else
+                            {
+                                m_meshModelLoopSelectionEdges.push_back(edgeIndex);
+                            }
+                        };
+                        toggleEdge(m_meshModelHoveredEdge);
+                    }
+                    else
+                    {
+                        m_meshModelLoopSelectionEdges.clear();
+                        m_meshModelRingSelectionEdges.clear();
+                    }
+                }
+                else
+                {
+                    auto current = m_meshModelFaceSelection;
+                    if (current.empty() && m_meshModelSelectedFace >= 0)
+                    {
+                        current.push_back(m_meshModelSelectedFace);
+                    }
+                    if (shiftSelect && m_meshModelHoveredFace >= 0)
+                    {
+                        const auto it = std::find(current.begin(), current.end(), m_meshModelHoveredFace);
+                        if (it != current.end())
+                        {
+                            current.erase(it);
+                        }
+                        else
+                        {
+                            current.push_back(m_meshModelHoveredFace);
+                        }
+                    }
+                    else
+                    {
+                        current.clear();
+                        if (m_meshModelSelectedFace >= 0)
+                        {
+                            current.push_back(m_meshModelSelectedFace);
+                        }
+                    }
+                    std::sort(current.begin(), current.end());
+                    current.erase(std::unique(current.begin(), current.end()), current.end());
+                    m_meshModelFaceSelection = current;
+                    m_meshModelSelectedFace = current.empty() ? -1 : current.back();
+                    if (!shiftSelect)
+                    {
+                        m_meshModelLoopSelectionEdges.clear();
+                        m_meshModelRingSelectionEdges.clear();
+                    }
+                }
                 if (m_meshEditMode == MeshEditMode::Vertex)
                 {
                     m_statusLine = "Mesh vertex selected: " + std::to_string(m_meshModelSelectedVertex);
@@ -7708,6 +10220,7 @@ void LevelEditor::Update(
         }
 
         const bool ctrlDown = input.IsKeyDown(GLFW_KEY_LEFT_CONTROL) || input.IsKeyDown(GLFW_KEY_RIGHT_CONTROL);
+        const bool additiveSelect = ctrlDown || shiftSelect;
         int pickedLightIndex = -1;
         float pickedLightT = 1.0e9F;
         if (m_mode == Mode::MapEditor)
@@ -7730,7 +10243,7 @@ void LevelEditor::Update(
         }
         if (pickedLightIndex >= 0)
         {
-            if (!ctrlDown)
+            if (!additiveSelect)
             {
                 ClearSelections();
             }
@@ -7743,7 +10256,7 @@ void LevelEditor::Update(
         if (selection.kind != SelectionKind::None)
         {
             m_selectedLightIndex = -1;
-            if (ctrlDown)
+            if (additiveSelect)
             {
                 ToggleSelection(selection);
             }
@@ -7754,7 +10267,7 @@ void LevelEditor::Update(
             return;
         }
 
-        if (!ctrlDown)
+        if (!additiveSelect)
         {
             ClearSelections();
             m_selectedLightIndex = -1;
@@ -8085,44 +10598,59 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
 
     if (loopMode)
     {
-        for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
+        // In dedicated Modeling workspace we keep scene uncluttered: active mesh + work plane.
+        const bool modelingWorkspace = m_uiWorkspace == UiWorkspace::Mesh;
+        if (!modelingWorkspace)
         {
-            const LoopElement& element = m_loop.elements[static_cast<std::size_t>(i)];
-            glm::vec3 color{0.8F, 0.8F, 0.8F};
-            if (element.type == LoopElementType::Window)
+            for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
             {
-                color = glm::vec3{0.2F, 0.8F, 1.0F};
+                const LoopElement& element = m_loop.elements[static_cast<std::size_t>(i)];
+                glm::vec3 color{0.8F, 0.8F, 0.8F};
+                if (element.type == LoopElementType::Window)
+                {
+                    color = glm::vec3{0.2F, 0.8F, 1.0F};
+                }
+                else if (element.type == LoopElementType::Pallet)
+                {
+                    color = glm::vec3{1.0F, 0.85F, 0.2F};
+                }
+                else if (element.type == LoopElementType::Marker)
+                {
+                    color = glm::vec3{0.9F, 0.4F, 1.0F};
+                }
+                if (IsSelected(SelectionKind::LoopElement, i))
+                {
+                    color = glm::vec3{1.0F, 0.2F, 0.2F};
+                }
+                if (element.transformLocked && !IsSelected(SelectionKind::LoopElement, i))
+                {
+                    color *= 0.65F;
+                }
+                renderer.DrawOrientedBox(element.position, element.halfExtents, ElementRotation(element), color);
             }
-            else if (element.type == LoopElementType::Pallet)
+
+            if (m_debugView)
             {
-                color = glm::vec3{1.0F, 0.85F, 0.2F};
+                const glm::vec3 loopCenter = (m_loop.boundsMin + m_loop.boundsMax) * 0.5F;
+                const glm::vec3 loopHalf = glm::max(glm::vec3{0.05F}, (m_loop.boundsMax - m_loop.boundsMin) * 0.5F);
+                renderer.DrawBox(loopCenter + glm::vec3{0.0F, 0.01F, 0.0F}, loopHalf, glm::vec3{0.35F, 0.65F, 0.35F});
             }
-            else if (element.type == LoopElementType::Marker)
-            {
-                color = glm::vec3{0.9F, 0.4F, 1.0F};
-            }
-            if (IsSelected(SelectionKind::LoopElement, i))
-            {
-                color = glm::vec3{1.0F, 0.2F, 0.2F};
-            }
-            if (element.transformLocked && !IsSelected(SelectionKind::LoopElement, i))
-            {
-                color *= 0.65F;
-            }
-            renderer.DrawOrientedBox(element.position, element.halfExtents, ElementRotation(element), color);
         }
 
-        if (m_debugView)
-        {
-            const glm::vec3 loopCenter = (m_loop.boundsMin + m_loop.boundsMax) * 0.5F;
-            const glm::vec3 loopHalf = glm::max(glm::vec3{0.05F}, (m_loop.boundsMax - m_loop.boundsMin) * 0.5F);
-            renderer.DrawBox(loopCenter + glm::vec3{0.0F, 0.01F, 0.0F}, loopHalf, glm::vec3{0.35F, 0.65F, 0.35F});
-        }
-
-        drawGizmo();
-        return;
+        const float planeSize = modelingWorkspace ? 12.0F : 8.0F;
+        const glm::vec3 planeCenter = modelingWorkspace
+                                          ? glm::vec3{m_meshModelPosition.x, -0.06F, m_meshModelPosition.z}
+                                          : glm::vec3{0.0F, -0.06F, 0.0F};
+        renderer.DrawOrientedBox(
+            planeCenter,
+            glm::vec3{planeSize, 0.05F, planeSize},
+            glm::vec3{0.0F, 0.0F, 0.0F},
+            glm::vec3{0.20F, 0.23F, 0.28F}
+        );
     }
 
+    if (!loopMode)
+    {
     for (int i = 0; i < static_cast<int>(m_map.placements.size()); ++i)
     {
         const LoopPlacement& placement = m_map.placements[static_cast<std::size_t>(i)];
@@ -8403,6 +10931,37 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
             renderer.DrawOverlayLine(pos, pos + dir * 2.4F, color);
         }
     }
+    }
+
+    if (m_mode == Mode::LoopEditor)
+    {
+        const glm::vec3 cursorColor{0.2F, 0.95F, 0.95F};
+        const float c = 0.32F;
+        renderer.DrawOverlayLine(
+            m_meshCursorPosition + glm::vec3{-c, 0.0F, 0.0F},
+            m_meshCursorPosition + glm::vec3{c, 0.0F, 0.0F},
+            cursorColor
+        );
+        renderer.DrawOverlayLine(
+            m_meshCursorPosition + glm::vec3{0.0F, -c, 0.0F},
+            m_meshCursorPosition + glm::vec3{0.0F, c, 0.0F},
+            cursorColor
+        );
+        renderer.DrawOverlayLine(
+            m_meshCursorPosition + glm::vec3{0.0F, 0.0F, -c},
+            m_meshCursorPosition + glm::vec3{0.0F, 0.0F, c},
+            cursorColor
+        );
+        if (m_meshClickPlacementPending)
+        {
+            renderer.DrawCapsule(
+                m_meshClickPreviewPosition,
+                0.65F,
+                0.18F,
+                glm::vec3{0.95F, 0.82F, 0.25F}
+            );
+        }
+    }
 
     m_fxPreviewSystem.Render(renderer, m_cameraPosition);
     RenderMeshModeler(renderer);
@@ -8449,6 +11008,8 @@ void LevelEditor::DrawUi(
     }
     m_sceneViewportHovered = false;
     m_sceneViewportFocused = false;
+    m_sceneViewportRectMin = glm::vec2{0.0F};
+    m_sceneViewportRectMax = glm::vec2{0.0F};
     m_contentBrowserHovered = false;
 
     auto saveCurrentLoop = [this]() {
@@ -8490,13 +11051,79 @@ void LevelEditor::DrawUi(
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 vpPos = viewport != nullptr ? viewport->Pos : ImVec2{0.0F, 0.0F};
     const ImVec2 vpSize = viewport != nullptr ? viewport->Size : ImVec2{1920.0F, 1080.0F};
-    const float pad = 4.0F;
+    const float pad = 2.0F;
     const float workspaceX = vpPos.x + pad;
     const float workspaceY = vpPos.y + pad;
-    const float workspaceW = std::max(800.0F, vpSize.x - pad * 2.0F);
-    const float workspaceH = std::max(560.0F, vpSize.y - pad * 2.0F);
-    const float topH = std::clamp(workspaceH * 0.19F, 150.0F, 220.0F);
-    const float bottomH = std::clamp(workspaceH * 0.26F, 200.0F, 340.0F);
+    const float workspaceW = std::max(900.0F, vpSize.x - pad * 2.0F);
+    const float workspaceH = std::max(620.0F, vpSize.y - pad * 2.0F);
+    float topH = m_blenderLayoutPreset
+                     ? 92.0F
+                     : glm::clamp(workspaceH * m_layoutTopHeightRatio, 62.0F, 120.0F);
+    float bottomH = glm::clamp(workspaceH * m_layoutBottomHeightRatio, 95.0F, workspaceH * 0.45F);
+    float middleH = workspaceH - topH - bottomH;
+    if (middleH < 210.0F)
+    {
+        const float deficit = 210.0F - middleH;
+        bottomH = std::max(95.0F, bottomH - deficit * 0.5F);
+        topH = std::max(70.0F, topH - deficit * 0.5F);
+        middleH = workspaceH - topH - bottomH;
+    }
+
+    float leftW = glm::clamp(workspaceW * m_layoutLeftWidthRatio, 150.0F, workspaceW * 0.45F);
+    float rightW = glm::clamp(workspaceW * m_layoutRightWidthRatio, 220.0F, workspaceW * 0.48F);
+    float centerW = workspaceW - leftW - rightW;
+    if (centerW < 360.0F)
+    {
+        const float deficit = 360.0F - centerW;
+        leftW = std::max(150.0F, leftW - deficit * 0.5F);
+        rightW = std::max(220.0F, rightW - deficit * 0.5F);
+        centerW = workspaceW - leftW - rightW;
+    }
+
+    const glm::vec4 topRect{workspaceX, workspaceY, workspaceW, topH};
+    const glm::vec4 leftRect{workspaceX, workspaceY + topH, leftW, middleH};
+    const glm::vec4 centerRect{leftRect.x + leftRect.z, leftRect.y, centerW, middleH};
+    const glm::vec4 rightRect{centerRect.x + centerRect.z, leftRect.y, rightW, middleH};
+    const glm::vec4 bottomRect{workspaceX, leftRect.y + leftRect.w, workspaceW, bottomH};
+    float bottomSplitX = bottomRect.x + glm::clamp(m_layoutBottomSplitRatio, 0.2F, 0.8F) * bottomRect.z;
+    bottomSplitX = glm::clamp(bottomSplitX, bottomRect.x + 180.0F, bottomRect.x + bottomRect.z - 220.0F);
+    const glm::vec4 bottomLeftRect{bottomRect.x, bottomRect.y, bottomSplitX - bottomRect.x, bottomRect.w};
+    const glm::vec4 bottomRightRect{bottomSplitX, bottomRect.y, bottomRect.x + bottomRect.z - bottomSplitX, bottomRect.w};
+    const float toolbarW = m_blenderLayoutPreset ? 86.0F : 0.0F;
+    const float contentAreaX = leftRect.x + toolbarW;
+    const float contentAreaW = std::max(180.0F, leftRect.z - toolbarW);
+    const float midY = leftRect.y;
+    const float midH = leftRect.w;
+
+    auto setPanelRect = [](float x, float y, float w, float h) {
+        ImGui::SetNextWindowPos(ImVec2{x, y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2{std::max(140.0F, w), std::max(90.0F, h)}, ImGuiCond_Always);
+    };
+
+    const ImGuiWindowFlags dockPanelFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+                                            ImGuiWindowFlags_NoResize;
+    const ImGuiWindowFlags sceneWindowFlags = dockPanelFlags | ImGuiWindowFlags_NoScrollbar |
+                                              ImGuiWindowFlags_NoScrollWithMouse;
+
+    const ImGuiWindowFlags rootFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                       ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs;
+    ImGui::SetNextWindowPos(ImVec2{workspaceX, workspaceY}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2{workspaceW, workspaceH}, ImGuiCond_Always);
+    if (ImGui::Begin("##EditorLayoutRoot", nullptr, rootFlags))
+    {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImU32 sepColor = IM_COL32(64, 79, 103, 180);
+        draw->AddLine(ImVec2{leftRect.x, leftRect.y}, ImVec2{leftRect.x + leftRect.z + rightRect.z + centerRect.z, leftRect.y}, sepColor, 1.0F);
+        draw->AddLine(ImVec2{leftRect.x, bottomRect.y}, ImVec2{leftRect.x + leftRect.z + rightRect.z + centerRect.z, bottomRect.y}, sepColor, 1.0F);
+        draw->AddLine(ImVec2{leftRect.x + leftRect.z, leftRect.y}, ImVec2{leftRect.x + leftRect.z, leftRect.y + leftRect.w}, sepColor, 1.0F);
+        draw->AddLine(ImVec2{rightRect.x, rightRect.y}, ImVec2{rightRect.x, rightRect.y + rightRect.w}, sepColor, 1.0F);
+        draw->AddLine(ImVec2{bottomSplitX, bottomRect.y}, ImVec2{bottomSplitX, bottomRect.y + bottomRect.w}, sepColor, 1.0F);
+
+        // NOTE: layout root is visual-only to avoid invisible hitboxes blocking panel input.
+    }
+    ImGui::End();
+
     const bool workspaceAll = m_uiWorkspace == UiWorkspace::All;
     const bool workspaceMesh = m_uiWorkspace == UiWorkspace::Mesh;
     const bool workspaceMap = m_uiWorkspace == UiWorkspace::Map;
@@ -8512,30 +11139,11 @@ void LevelEditor::DrawUi(
         m_mode = Mode::MapEditor;
     }
 
-    const bool showLoopPanels = (m_mode == Mode::LoopEditor) && workspaceAll;
+    const bool showLoopPanels = (m_mode == Mode::LoopEditor) && (workspaceAll || workspaceMesh);
     const bool showMapPanels = (m_mode == Mode::MapEditor) && (workspaceAll || workspaceMap);
-    const bool showContentWindow = workspaceAll || workspaceMap;
+    const bool showContentWindow = workspaceAll || workspaceMap || workspaceLighting || workspaceFxEnv;
     const bool showMaterialWindow = workspaceAll || workspaceLighting || workspaceFxEnv;
     const bool showFxWindow = workspaceAll || workspaceFxEnv || workspaceMesh;
-
-    const bool showMidLeftPanels = showLoopPanels || showMapPanels;
-    const bool showMidRightPanels = showLoopPanels || showMapPanels;
-    const float leftW = showMidLeftPanels ? std::clamp(workspaceW * 0.22F, 320.0F, 430.0F) : 0.0F;
-    const float rightW = showMidRightPanels ? std::clamp(workspaceW * 0.24F, 350.0F, 500.0F) : 0.0F;
-    const float centerW = std::max(
-        360.0F,
-        workspaceW - (showMidLeftPanels ? (leftW + pad) : 0.0F) - (showMidRightPanels ? (rightW + pad) : 0.0F)
-    );
-    const float midY = workspaceY + topH + pad;
-    const float midH = std::max(240.0F, workspaceH - topH - bottomH - pad * 2.0F);
-    const float bottomY = midY + midH + pad;
-    const float centerX = workspaceX + (showMidLeftPanels ? (leftW + pad) : 0.0F);
-    const float rightX = centerX + centerW + pad;
-
-    auto setPanelRect = [](float x, float y, float w, float h) {
-        ImGui::SetNextWindowPos(ImVec2{x, y}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2{std::max(220.0F, w), std::max(110.0F, h)}, ImGuiCond_Always);
-    };
 
     auto handleSceneDropPayload = [this]() {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_ASSET_PATH"))
@@ -8603,248 +11211,820 @@ void LevelEditor::DrawUi(
         return false;
     };
 
-    setPanelRect(workspaceX, workspaceY, workspaceW, topH);
+    float leftDockCursorY = midY + 6.0F;
+    float rightDockCursorY = midY + 6.0F;
+    float bottomLeftDockCursorY = bottomLeftRect.y + 6.0F;
+    const float panelSpacing = 4.0F;
+    const float regionPadding = 6.0F;
+
+    auto drawPanelDragHandle = [&](DockPanel panel) {
+        ImGui::SameLine();
+        const std::string buttonId = std::string("Dock##") + DockPanelTitle(panel);
+        ImGui::SmallButton(buttonId.c_str());
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
+        {
+            const int panelId = static_cast<int>(panel);
+            ImGui::SetDragDropPayload("EDITOR_DOCK_PANEL", &panelId, sizeof(panelId));
+            ImGui::Text("Dock %s", DockPanelTitle(panel));
+            ImGui::EndDragDropSource();
+        }
+    };
+
+    auto beginDockedPanel = [&](DockPanel panel, float preferredHeight, const char* titleOverride) {
+        if (!m_panelVisible[static_cast<std::size_t>(panel)])
+        {
+            return false;
+        }
+        const LayoutRegion region = m_panelRegion[static_cast<std::size_t>(panel)];
+        float x = rightRect.x + regionPadding;
+        float y = rightDockCursorY;
+        float w = rightRect.z - regionPadding * 2.0F;
+        float h = preferredHeight;
+        float* cursorY = &rightDockCursorY;
+        float regionBottom = rightRect.y + rightRect.w - regionPadding;
+
+        if (region == LayoutRegion::Left)
+        {
+            x = contentAreaX + regionPadding;
+            y = leftDockCursorY;
+            w = contentAreaW - regionPadding * 2.0F;
+            cursorY = &leftDockCursorY;
+            regionBottom = leftRect.y + leftRect.w - regionPadding;
+        }
+        else if (region == LayoutRegion::BottomLeft)
+        {
+            x = bottomLeftRect.x + regionPadding;
+            y = bottomLeftDockCursorY;
+            w = bottomLeftRect.z - regionPadding * 2.0F;
+            cursorY = &bottomLeftDockCursorY;
+            regionBottom = bottomLeftRect.y + bottomLeftRect.w - regionPadding;
+        }
+
+        const float remaining = regionBottom - y;
+        if (remaining < 80.0F)
+        {
+            return false;
+        }
+        h = glm::clamp(h, 80.0F, remaining);
+        setPanelRect(x, y, w, h);
+        const char* title = titleOverride != nullptr ? titleOverride : DockPanelTitle(panel);
+        const bool open = ImGui::Begin(title, nullptr, dockPanelFlags);
+        *cursorY += h + panelSpacing;
+        if (!open)
+        {
+            ImGui::End();
+            return false;
+        }
+        drawPanelDragHandle(panel);
+        return true;
+    };
+
+    setPanelRect(topRect.x, topRect.y, topRect.z, topRect.w);
     ImGui::SetNextWindowBgAlpha(0.88F);
-    if (ImGui::Begin("Editor Mode", nullptr, ImGuiWindowFlags_NoCollapse))
+    if (ImGui::Begin("Editor Top Bar", nullptr, dockPanelFlags | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
     {
-        ImGui::TextUnformatted("Workspace");
-        if (ImGui::Button("All"))
-        {
-            m_uiWorkspace = UiWorkspace::All;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Mesh"))
-        {
-            m_uiWorkspace = UiWorkspace::Mesh;
-            m_mode = Mode::LoopEditor;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Map"))
-        {
-            m_uiWorkspace = UiWorkspace::Map;
-            m_mode = Mode::MapEditor;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Lighting"))
-        {
-            m_uiWorkspace = UiWorkspace::Lighting;
-            m_mode = Mode::MapEditor;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("FX/Env"))
-        {
-            m_uiWorkspace = UiWorkspace::FxEnv;
-            m_mode = Mode::MapEditor;
-        }
-        ImGui::SameLine();
-        ImGui::Text("Current: %s",
-                    m_uiWorkspace == UiWorkspace::All    ? "All"
-                    : m_uiWorkspace == UiWorkspace::Mesh ? "Mesh"
-                    : m_uiWorkspace == UiWorkspace::Map  ? "Map"
-                    : m_uiWorkspace == UiWorkspace::Lighting ? "Lighting"
-                                                             : "FX/Env");
-        ImGui::Separator();
-        ImGui::Text("Mode: %s", ModeToText(m_mode));
-        ImGui::SameLine();
-        if (ImGui::Button("Loop Editor"))
-        {
-            m_mode = Mode::LoopEditor;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Map Editor"))
-        {
-            m_mode = Mode::MapEditor;
-        }
-        ImGui::Separator();
-        ImGui::Text("Camera Speed: %.1f", m_cameraSpeed);
-        const float wheel = ImGui::GetIO().MouseWheel;
-        if (std::abs(wheel) > 1.0e-4F && !ImGui::GetIO().WantCaptureMouse)
-        {
-            m_cameraSpeed = glm::clamp(m_cameraSpeed + wheel * 2.0F, 2.0F, 120.0F);
-        }
-        ImGui::Checkbox("Top-down View", &m_topDownView);
-        ImGui::SameLine();
-        ImGui::Text("(%s)", m_topDownView ? "ON" : "OFF");
-        ImGui::Checkbox("Grid Snap", &m_gridSnap);
-        ImGui::SameLine();
-        ImGui::Text("(%s)", m_gridSnap ? "ON" : "OFF");
-        ImGui::DragFloat("Grid Step", &m_gridStep, 0.05F, 0.1F, 8.0F);
-        ImGui::Checkbox("Angle Snap", &m_angleSnap);
-        ImGui::SameLine();
-        ImGui::Text("(%s)", m_angleSnap ? "ON" : "OFF");
-        ImGui::DragFloat("Angle Step", &m_angleStepDegrees, 1.0F, 1.0F, 90.0F);
-        int renderModeIndex = m_currentRenderMode == engine::render::RenderMode::Wireframe ? 0 : 1;
-        const char* renderModeItems[] = {"Wireframe", "Filled"};
-        if (ImGui::Combo("Viewport Render", &renderModeIndex, renderModeItems, IM_ARRAYSIZE(renderModeItems)))
-        {
-            m_pendingRenderMode =
-                renderModeIndex == 0 ? engine::render::RenderMode::Wireframe : engine::render::RenderMode::Filled;
-            m_currentRenderMode = *m_pendingRenderMode;
-        }
-        const bool hasEnabledLights = std::any_of(
-            m_map.lights.begin(),
-            m_map.lights.end(),
-            [](const LightInstance& light) { return light.enabled; }
-        );
-        ImGui::Checkbox("Auto Lit Preview", &m_autoLitPreview);
-        if (m_autoLitPreview && m_mode == Mode::MapEditor && hasEnabledLights &&
-            m_currentRenderMode != engine::render::RenderMode::Filled)
-        {
-            m_pendingRenderMode = engine::render::RenderMode::Filled;
-            m_currentRenderMode = engine::render::RenderMode::Filled;
-        }
-        if (m_mode == Mode::MapEditor && hasEnabledLights &&
-            m_currentRenderMode != engine::render::RenderMode::Filled)
-        {
-            ImGui::TextColored(ImVec4(1.0F, 0.82F, 0.25F, 1.0F), "Lights visible only in Filled mode");
-            if (ImGui::Button("Switch To Filled (Lighting)"))
+        auto setWorkspace = [this](UiWorkspace ws) {
+            m_uiWorkspace = ws;
+            if (ws == UiWorkspace::Mesh)
             {
-                m_pendingRenderMode = engine::render::RenderMode::Filled;
-                m_currentRenderMode = engine::render::RenderMode::Filled;
+                m_mode = Mode::LoopEditor;
+                SetMeshObjectEditMode(true, "workspace");
             }
-        }
-        ImGui::Checkbox("Debug View", &m_debugView);
-        ImGui::SameLine();
-        ImGui::Text("(%s)", m_debugView ? "ON" : "OFF");
-        ImGui::Text("Gizmo: %s (1/2/3)", GizmoToText(m_gizmoMode));
-        ImGui::Text("Render Mode: %s", RenderModeToText(m_currentRenderMode));
-        ImGui::Text("Viewport Scene: %s", MaterialLabViewModeToText(m_materialLabViewMode));
-        ImGui::Text("Axis Drag: %s", m_axisDragActive ? "ACTIVE (LMB hold)" : "READY");
-        if (m_mode == Mode::LoopEditor)
-        {
-            ImGui::Text("Loop Tile Boundaries: ON (16 units)");
-        }
-        if (m_mode == Mode::MapEditor)
-        {
-            ImGui::Text("Prop Placement: %s", m_propPlacementMode ? "ON" : "OFF");
-        }
-        ImGui::Text("Selected: %s", SelectedLabel().c_str());
-        ImGui::TextWrapped("%s", m_statusLine.c_str());
-        auto setSelectionLocked = [this](bool locked) {
-            if (m_selection.kind == SelectionKind::LoopElement)
+            else if (ws == UiWorkspace::Map || ws == UiWorkspace::Lighting || ws == UiWorkspace::FxEnv)
             {
-                const std::vector<int> indices = SortedUniqueValidSelection(SelectionKind::LoopElement);
-                for (int idx : indices)
-                {
-                    m_loop.elements[static_cast<std::size_t>(idx)].transformLocked = locked;
-                }
-                return;
-            }
-            if (m_selection.kind == SelectionKind::MapPlacement)
-            {
-                const std::vector<int> indices = SortedUniqueValidSelection(SelectionKind::MapPlacement);
-                for (int idx : indices)
-                {
-                    m_map.placements[static_cast<std::size_t>(idx)].transformLocked = locked;
-                }
-                return;
-            }
-            if (m_selection.kind == SelectionKind::Prop)
-            {
-                const std::vector<int> indices = SortedUniqueValidSelection(SelectionKind::Prop);
-                for (int idx : indices)
-                {
-                    m_map.props[static_cast<std::size_t>(idx)].transformLocked = locked;
-                }
+                m_mode = Mode::MapEditor;
+                SetMeshObjectEditMode(false, "workspace");
             }
         };
-        if (ImGui::Button("Lock Selected"))
-        {
-            setSelectionLocked(true);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Unlock Selected"))
-        {
-            setSelectionLocked(false);
-        }
-        if (ImGui::Button("Copy Selected"))
-        {
-            CopyCurrentSelection();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Paste Clipboard"))
-        {
-            PasteClipboard();
-        }
-        if (ImGui::Button("Undo (Ctrl+Z)"))
-        {
-            Undo();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Redo (Ctrl+Y)"))
-        {
-            Redo();
-        }
-        ImGui::Text("History: %d undo / %d redo", static_cast<int>(m_undoStack.size()), static_cast<int>(m_redoStack.size()));
-        ImGui::Separator();
-        ImGui::TextUnformatted("Hotkeys:");
-        ImGui::TextUnformatted("RMB+Mouse look | WASD/QE fly | Wheel speed");
-        ImGui::TextUnformatted("1/2/3 gizmo | LMB handle drag (move/rotate/scale)");
-        ImGui::TextUnformatted("Rotate: click X/Y/Z handle in rotate gizmo");
-        ImGui::TextUnformatted("Arrows/PgUp/PgDn keyboard nudge");
-        ImGui::TextUnformatted("[/] rotate | +/- scale | G snap | T top-down");
-        ImGui::TextUnformatted("F2 debug view | F3 toggle wireframe/filled");
-        ImGui::TextUnformatted("R rotate placement | P prop mode");
-        ImGui::TextUnformatted("Ctrl+C copy | Ctrl+V paste");
-        ImGui::TextUnformatted("Ctrl+D duplicate | Del delete | Ctrl+Click multi-select");
+        auto tooltip = [](const char* text) {
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", text);
+            }
+        };
+        auto playtestCurrentMap = [&]() {
+            std::string error;
+            if (LevelAssetIO::SaveEnvironment(m_environmentEditing, &error))
+            {
+                m_map.environmentAssetId = m_environmentEditing.id;
+            }
+            if (error.empty() && LevelAssetIO::SaveMap(m_map, &error))
+            {
+                if (outPlaytestMap != nullptr)
+                {
+                    *outPlaytestMap = true;
+                }
+                if (outPlaytestMapName != nullptr)
+                {
+                    *outPlaytestMapName = m_map.name;
+                }
+            }
+            else
+            {
+                m_statusLine = "Playtest failed: " + error;
+            }
+        };
 
-        if (ImGui::Button("Back To Main Menu"))
+        if (ImGui::BeginMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                if (ImGui::MenuItem("New Map"))
+                {
+                    PushHistorySnapshot();
+                    CreateNewMap("new_map");
+                    m_mode = Mode::MapEditor;
+                }
+                if (ImGui::MenuItem("New Loop"))
+                {
+                    PushHistorySnapshot();
+                    CreateNewLoop("new_loop");
+                    m_mode = Mode::LoopEditor;
+                }
+                if (ImGui::MenuItem("Save Map", "Ctrl+S", false, m_mode == Mode::MapEditor))
+                {
+                    saveCurrentMap();
+                }
+                if (ImGui::MenuItem("Save Loop", "Ctrl+Shift+S", false, m_mode == Mode::LoopEditor))
+                {
+                    saveCurrentLoop();
+                }
+                if (ImGui::MenuItem("Import Asset..."))
+                {
+                    const std::vector<std::string> pickedFiles = OpenMultipleFileDialog();
+                    if (!pickedFiles.empty())
+                    {
+                        int importedCount = 0;
+                        for (const std::string& picked : pickedFiles)
+                        {
+                            const engine::assets::ImportResult imported =
+                                m_assetRegistry.ImportExternalFileToDirectory(picked, m_contentDirectory == "." ? std::string{} : m_contentDirectory);
+                            if (imported.success)
+                            {
+                                ++importedCount;
+                            }
+                        }
+                        std::ostringstream oss;
+                        oss << "Imported " << importedCount << "/" << pickedFiles.size() << " file(s)";
+                        m_statusLine = oss.str();
+                        RefreshLibraries();
+                        RefreshContentBrowser();
+                    }
+                }
+                if (ImGui::MenuItem("Playtest Current Map", "F5", false, m_mode == Mode::MapEditor))
+                {
+                    playtestCurrentMap();
+                }
+                if (ImGui::MenuItem("Exit To Main Menu", "Esc"))
+                {
+                    if (outBackToMenu != nullptr)
+                    {
+                        *outBackToMenu = true;
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Edit"))
+            {
+                if (ImGui::MenuItem("Undo", "Ctrl+Z"))
+                {
+                    Undo();
+                }
+                if (ImGui::MenuItem("Redo", "Ctrl+Y"))
+                {
+                    Redo();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Reset Layout"))
+                {
+                    ResetEditorLayout();
+                    m_layoutNeedsSave = true;
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View"))
+            {
+                ImGui::MenuItem("Toolbar", nullptr, &m_showToolbar);
+                ImGui::MenuItem("Status Bar", nullptr, &m_showStatusBar);
+                for (int panel = 0; panel < static_cast<int>(DockPanel::Count); ++panel)
+                {
+                    DockPanel panelId = static_cast<DockPanel>(panel);
+                    ImGui::MenuItem(DockPanelTitle(panelId), nullptr, &m_panelVisible[static_cast<std::size_t>(panelId)]);
+                }
+                ImGui::Separator();
+                ImGui::MenuItem("Debug View", nullptr, &m_debugView);
+                ImGui::MenuItem("Top-down Camera", nullptr, &m_topDownView);
+                if (ImGui::MenuItem("Wireframe"))
+                {
+                    m_pendingRenderMode = engine::render::RenderMode::Wireframe;
+                    m_currentRenderMode = *m_pendingRenderMode;
+                }
+                if (ImGui::MenuItem("Filled"))
+                {
+                    m_pendingRenderMode = engine::render::RenderMode::Filled;
+                    m_currentRenderMode = *m_pendingRenderMode;
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Add"))
+            {
+                if (ImGui::MenuItem("Loop Placement", "LMB", false, m_mode == Mode::MapEditor))
+                {
+                    m_propPlacementMode = false;
+                }
+                if (ImGui::MenuItem("Prop Placement", "P", false, m_mode == Mode::MapEditor))
+                {
+                    m_propPlacementMode = true;
+                }
+                if (ImGui::MenuItem("Point Light", nullptr, false, m_mode == Mode::MapEditor))
+                {
+                    AddLightAtHovered(LightType::Point);
+                }
+                if (ImGui::MenuItem("Spot Light", nullptr, false, m_mode == Mode::MapEditor))
+                {
+                    AddLightAtHovered(LightType::Spot);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Meshes"))
+            {
+                int spawnModeIndex = static_cast<int>(m_meshSpawnMode);
+                const char* spawnModeItems[] = {"Cursor", "Raycast", "Click Place"};
+                ImGui::SetNextItemWidth(180.0F);
+                if (ImGui::Combo("Spawn Mode", &spawnModeIndex, spawnModeItems, IM_ARRAYSIZE(spawnModeItems)))
+                {
+                    spawnModeIndex = std::clamp(spawnModeIndex, 0, 2);
+                    m_meshSpawnMode = static_cast<MeshSpawnMode>(spawnModeIndex);
+                }
+                ImGui::Text("3D Cursor: %.2f %.2f %.2f", m_meshCursorPosition.x, m_meshCursorPosition.y, m_meshCursorPosition.z);
+                ImGui::TextDisabled("Shift+RMB in viewport = set cursor");
+                ImGui::Separator();
+
+                auto addPrimitive = [&](MeshPrimitiveType primitive) {
+                    if (m_mode == Mode::LoopEditor)
+                    {
+                        QueueMeshPrimitiveSpawn(static_cast<int>(primitive));
+                        return;
+                    }
+
+                    PushHistorySnapshot();
+                    PropInstance prop;
+                    prop.name = BuildUniquePropName(std::string("mesh_") + std::string(MeshPrimitiveToText(static_cast<int>(primitive))));
+                    prop.type = PropType::Obstacle;
+                    glm::vec3 spawnPos = m_hoveredTileValid
+                                             ? glm::vec3{m_hoveredWorld.x, 0.85F, m_hoveredWorld.z}
+                                             : (m_cameraPosition + CameraForward() * 7.0F + glm::vec3{0.0F, 0.85F, 0.0F});
+                    glm::vec3 hit{0.0F};
+                    if (RayIntersectGround(m_cameraPosition, CameraForward(), 0.0F, &hit))
+                    {
+                        spawnPos = hit + glm::vec3{0.0F, 0.85F, 0.0F};
+                    }
+                    prop.position = spawnPos;
+                    switch (primitive)
+                    {
+                        case MeshPrimitiveType::Cube:
+                            prop.halfExtents = glm::vec3{0.6F, 0.6F, 0.6F};
+                            break;
+                        case MeshPrimitiveType::Sphere:
+                            prop.type = PropType::Rock;
+                            prop.halfExtents = glm::vec3{0.65F, 0.65F, 0.65F};
+                            break;
+                        case MeshPrimitiveType::Plane:
+                            prop.type = PropType::Platform;
+                            prop.halfExtents = glm::vec3{1.2F, 0.08F, 1.2F};
+                            prop.position.y = 0.18F;
+                            break;
+                        case MeshPrimitiveType::Cylinder:
+                            prop.halfExtents = glm::vec3{0.5F, 0.95F, 0.5F};
+                            break;
+                        case MeshPrimitiveType::Cone:
+                            prop.halfExtents = glm::vec3{0.55F, 0.85F, 0.55F};
+                            break;
+                        case MeshPrimitiveType::Capsule:
+                            prop.halfExtents = glm::vec3{0.5F, 1.1F, 0.5F};
+                            break;
+                        default:
+                            prop.halfExtents = glm::vec3{0.6F, 0.6F, 0.6F};
+                            break;
+                    }
+                    prop.colliderType = ColliderType::Box;
+                    prop.colliderHalfExtents = prop.halfExtents;
+                    m_map.props.push_back(prop);
+                    SelectSingle(Selection{SelectionKind::Prop, static_cast<int>(m_map.props.size()) - 1});
+                    m_statusLine = std::string("Added map primitive: ") + MeshPrimitiveToText(static_cast<int>(primitive));
+                };
+
+                if (ImGui::MenuItem("Add Cube")) { addPrimitive(MeshPrimitiveType::Cube); }
+                if (ImGui::MenuItem("Add Sphere")) { addPrimitive(MeshPrimitiveType::Sphere); }
+                if (ImGui::MenuItem("Add Plane")) { addPrimitive(MeshPrimitiveType::Plane); }
+                if (ImGui::MenuItem("Add Cylinder")) { addPrimitive(MeshPrimitiveType::Cylinder); }
+                if (ImGui::MenuItem("Add Cone")) { addPrimitive(MeshPrimitiveType::Cone); }
+                if (ImGui::MenuItem("Add Capsule")) { addPrimitive(MeshPrimitiveType::Capsule); }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Select"))
+            {
+                if (ImGui::MenuItem("Select None", "A"))
+                {
+                    ClearSelections();
+                    m_selectedLightIndex = -1;
+                }
+                if (ImGui::MenuItem("Select All", "Ctrl+A"))
+                {
+                    if (m_mode == Mode::LoopEditor)
+                    {
+                        m_selectedLoopElements.clear();
+                        for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
+                        {
+                            m_selectedLoopElements.push_back(i);
+                        }
+                        if (!m_selectedLoopElements.empty())
+                        {
+                            m_selection = Selection{SelectionKind::LoopElement, m_selectedLoopElements.front()};
+                        }
+                    }
+                    else
+                    {
+                        m_selectedMapPlacements.clear();
+                        for (int i = 0; i < static_cast<int>(m_map.placements.size()); ++i)
+                        {
+                            m_selectedMapPlacements.push_back(i);
+                        }
+                        if (!m_selectedMapPlacements.empty())
+                        {
+                            m_selection = Selection{SelectionKind::MapPlacement, m_selectedMapPlacements.front()};
+                        }
+                    }
+                }
+                ImGui::Separator();
+                ImGui::MenuItem("Box Select", "B");
+                ImGui::MenuItem("Lasso Select", "Ctrl+RMB");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Help"))
+            {
+                ImGui::MenuItem("Shortcut Guide", nullptr, &m_showShortcutGuide);
+                ImGui::MenuItem("Editor Manual", nullptr, &m_showEditorManual);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+
+        auto tabButton = [&](const char* label, UiWorkspace ws) {
+            const bool active = m_uiWorkspace == ws;
+            if (active)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18F, 0.36F, 0.62F, 0.95F));
+            }
+            if (ImGui::Button(label))
+            {
+                setWorkspace(ws);
+            }
+            if (active)
+            {
+                ImGui::PopStyleColor();
+            }
+        };
+
+        tabButton("Layout", UiWorkspace::All);
+        ImGui::SameLine();
+        tabButton("Modeling", UiWorkspace::Mesh);
+        ImGui::SameLine();
+        tabButton("Map", UiWorkspace::Map);
+        ImGui::SameLine();
+        tabButton("Lighting", UiWorkspace::Lighting);
+        ImGui::SameLine();
+        tabButton("FX", UiWorkspace::FxEnv);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Mode");
+        ImGui::SameLine();
+        if (ImGui::Button("Object"))
+        {
+            if (m_mode != Mode::LoopEditor)
+            {
+                m_mode = Mode::LoopEditor;
+            }
+            SetMeshObjectEditMode(false, "toolbar");
+        }
+        tooltip("Object Mode (Tab)");
+        ImGui::SameLine();
+        if (ImGui::Button("Edit"))
+        {
+            if (m_mode != Mode::LoopEditor)
+            {
+                m_mode = Mode::LoopEditor;
+            }
+            SetMeshObjectEditMode(true, "toolbar");
+        }
+        tooltip("Edit Mode (Tab)");
+        if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Vertex"))
+            {
+                m_meshEditMode = MeshEditMode::Vertex;
+            }
+            tooltip("Vertex Select (1)");
+            ImGui::SameLine();
+            if (ImGui::Button("Edge"))
+            {
+                m_meshEditMode = MeshEditMode::Edge;
+            }
+            tooltip("Edge Select (2)");
+            ImGui::SameLine();
+            if (ImGui::Button("Face"))
+            {
+                m_meshEditMode = MeshEditMode::Face;
+            }
+            tooltip("Face Select (3)");
+        }
+
+        if (m_uiWorkspace == UiWorkspace::Mesh)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Meshes");
+            ImGui::SameLine();
+            int spawnModeIndex = static_cast<int>(m_meshSpawnMode);
+            const char* spawnModeItems[] = {"Cursor", "Raycast", "Click"};
+            ImGui::SetNextItemWidth(110.0F);
+            if (ImGui::Combo("Spawn", &spawnModeIndex, spawnModeItems, IM_ARRAYSIZE(spawnModeItems)))
+            {
+                spawnModeIndex = std::clamp(spawnModeIndex, 0, 2);
+                m_meshSpawnMode = static_cast<MeshSpawnMode>(spawnModeIndex);
+            }
+            ImGui::SameLine();
+            ImGui::Text("Cursor %.1f %.1f %.1f", m_meshCursorPosition.x, m_meshCursorPosition.y, m_meshCursorPosition.z);
+            tooltip("Shift+RMB in viewport sets 3D cursor");
+
+            if (ImGui::Button("Add Cube"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Cube));
+            }
+            tooltip("Create Cube");
+            ImGui::SameLine();
+            if (ImGui::Button("Add Sphere"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Sphere));
+            }
+            tooltip("Create Sphere");
+            ImGui::SameLine();
+            if (ImGui::Button("Add Plane"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Plane));
+            }
+            tooltip("Create Plane");
+            ImGui::SameLine();
+            if (ImGui::Button("Add Cylinder"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Cylinder));
+            }
+            tooltip("Create Cylinder");
+            ImGui::SameLine();
+            if (ImGui::Button("Add Cone"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Cone));
+            }
+            tooltip("Create Cone");
+            ImGui::SameLine();
+            if (ImGui::Button("Add Capsule"))
+            {
+                QueueMeshPrimitiveSpawn(static_cast<int>(MeshPrimitiveType::Capsule));
+            }
+            tooltip("Create Capsule");
+            if (m_meshClickPlacementPending)
+            {
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel Place"))
+                {
+                    m_meshClickPlacementPending = false;
+                    m_clickPlacePrimitive = MeshPrimitiveType::None;
+                    m_statusLine = "Click placement canceled";
+                }
+            }
+        }
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap", &m_gridSnap);
+        tooltip("Toggle Snap (Shift+Tab)");
+        ImGui::SameLine();
+        int snapTypeIndex = static_cast<int>(m_snapType);
+        const char* snapItems[] = {"Increment", "Vertex", "Edge", "Face"};
+        if (ImGui::Combo("##snap_type", &snapTypeIndex, snapItems, IM_ARRAYSIZE(snapItems)))
+        {
+            snapTypeIndex = std::clamp(snapTypeIndex, 0, 3);
+            m_snapType = static_cast<SnapType>(snapTypeIndex);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80.0F);
+        ImGui::DragFloat("Grid", &m_gridStep, 0.05F, 0.1F, 8.0F, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80.0F);
+        ImGui::DragFloat("Angle", &m_angleStepDegrees, 1.0F, 1.0F, 90.0F, "%.1f");
+        ImGui::SameLine();
+        int orientationIndex = m_transformOrientationUi == TransformOrientation::Local ? 1 : 0;
+        const char* orientationItems[] = {"Global", "Local"};
+        if (ImGui::Combo("Orientation", &orientationIndex, orientationItems, IM_ARRAYSIZE(orientationItems)))
+        {
+            m_transformOrientationUi = orientationIndex == 1 ? TransformOrientation::Local : TransformOrientation::Global;
+            if (m_modalTransform.active)
+            {
+                m_modalTransform.orientation = m_transformOrientationUi;
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Back"))
         {
             if (outBackToMenu != nullptr)
             {
                 *outBackToMenu = true;
             }
         }
+        tooltip("Return to Main Menu");
         if (m_mode == Mode::MapEditor)
         {
             ImGui::SameLine();
-            if (ImGui::Button("Playtest Current Map"))
+            if (ImGui::Button("Playtest"))
             {
-                std::string error;
-                if (LevelAssetIO::SaveEnvironment(m_environmentEditing, &error))
-                {
-                    m_map.environmentAssetId = m_environmentEditing.id;
-                }
-                if (error.empty() && LevelAssetIO::SaveMap(m_map, &error))
-                {
-                    if (outPlaytestMap != nullptr)
-                    {
-                        *outPlaytestMap = true;
-                    }
-                    if (outPlaytestMapName != nullptr)
-                    {
-                        *outPlaytestMapName = m_map.name;
-                    }
-                }
-                else
-                {
-                    m_statusLine = "Playtest failed: " + error;
-                }
+                playtestCurrentMap();
             }
+            tooltip("Save and play current map");
         }
     }
     ImGui::End();
 
-    setPanelRect(centerX, midY, centerW, midH);
-    ImGui::SetNextWindowBgAlpha(0.08F);
-    if (ImGui::Begin(
-            "Scene Viewport",
-            nullptr,
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    if (m_blenderLayoutPreset && m_showToolbar)
     {
+        ImGui::SetNextWindowPos(ImVec2{leftRect.x, leftRect.y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2{toolbarW, leftRect.w}, ImGuiCond_Always);
+        if (ImGui::Begin("Toolbar", nullptr, dockPanelFlags))
+        {
+            if (ImGui::Button("Select"))
+            {
+                m_statusLine = "Select tool active";
+            }
+            if (ImGui::Button("Move (G)"))
+            {
+                m_gizmoMode = GizmoMode::Translate;
+            }
+            if (ImGui::Button("Rotate (R)"))
+            {
+                m_gizmoMode = GizmoMode::Rotate;
+            }
+            if (ImGui::Button("Scale (S)"))
+            {
+                m_gizmoMode = GizmoMode::Scale;
+            }
+            ImGui::Separator();
+            if (ImGui::Button("Object"))
+            {
+                SetMeshObjectEditMode(false, "toolbar");
+            }
+            if (ImGui::Button("Edit"))
+            {
+                if (m_mode == Mode::LoopEditor)
+                {
+                    SetMeshObjectEditMode(true, "toolbar");
+                }
+            }
+            if (m_mode == Mode::LoopEditor && m_meshModelSceneEditEnabled)
+            {
+                ImGui::Separator();
+                if (ImGui::Button("Vtx (1)"))
+                {
+                    m_meshEditMode = MeshEditMode::Vertex;
+                }
+                if (ImGui::Button("Edge (2)"))
+                {
+                    m_meshEditMode = MeshEditMode::Edge;
+                }
+                if (ImGui::Button("Face (3)"))
+                {
+                    m_meshEditMode = MeshEditMode::Face;
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::Button(m_gridSnap ? "Snap ON" : "Snap OFF"))
+            {
+                m_gridSnap = !m_gridSnap;
+            }
+            if (ImGui::Button("Frame (.)"))
+            {
+                FocusCameraOnSelection();
+            }
+        }
+        ImGui::End();
+
+    }
+
+    const bool toolSettingsOpen =
+        beginDockedPanel(DockPanel::ToolSettings, std::min(260.0F, std::max(170.0F, midH * 0.32F)), "Tool Settings");
+    if (toolSettingsOpen)
+    {
+        ImGui::Text("Active Tool: %s", GizmoToText(m_gizmoMode));
+        ImGui::Text("Modal Transform: %s", m_modalTransform.active ? "ON" : "OFF");
+        if (m_modalTransform.active)
+        {
+            int orientationIndex =
+                m_modalTransform.orientation == TransformOrientation::Local ? 1 : 0;
+            const char* orientationItems[] = {"Global", "Local"};
+            if (ImGui::Combo("Transform Orientation", &orientationIndex, orientationItems, IM_ARRAYSIZE(orientationItems)))
+            {
+                m_modalTransform.orientation = orientationIndex == 1 ? TransformOrientation::Local : TransformOrientation::Global;
+            }
+
+            const char* constraintLabel = m_modalTransform.constraintMode == ModalConstraintMode::None
+                                              ? "None"
+                                              : (m_modalTransform.constraintMode == ModalConstraintMode::Axis ? "Axis" : "Plane");
+            ImGui::Text("Constraint: %s", constraintLabel);
+            ImGui::Text("Axis: %s",
+                        m_modalTransform.constraintAxis == GizmoAxis::X ? "X"
+                        : (m_modalTransform.constraintAxis == GizmoAxis::Y ? "Y"
+                                                                           : (m_modalTransform.constraintAxis == GizmoAxis::Z ? "Z" : "None")));
+
+            char numericBuffer[64]{};
+            std::snprintf(numericBuffer, sizeof(numericBuffer), "%s",
+                          m_modalTransform.numericInput.empty() ? "" : m_modalTransform.numericInput.c_str());
+            if (ImGui::InputText("Numeric", numericBuffer, sizeof(numericBuffer)))
+            {
+                m_modalTransform.numericInput = numericBuffer;
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("Neg", &m_modalTransform.numericNegative);
+            ImGui::SameLine();
+            if (ImGui::Button("Abs"))
+            {
+                m_modalTransform.numericMode = NumericInputMode::Absolute;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("*"))
+            {
+                m_modalTransform.numericMode = NumericInputMode::Multiply;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("/"))
+            {
+                m_modalTransform.numericMode = NumericInputMode::Divide;
+            }
+            const char* numericModeText =
+                m_modalTransform.numericMode == NumericInputMode::Absolute
+                    ? "Absolute"
+                    : (m_modalTransform.numericMode == NumericInputMode::Multiply ? "Multiply" : "Divide");
+            ImGui::Text("Numeric Mode: %s", numericModeText);
+            ImGui::TextWrapped("Numeric: 1, -2.5, *2, /2. Enter confirms, Esc cancels.");
+        }
+        else
+        {
+            ImGui::TextWrapped("Press G/R/S with selection to start modal transform.");
+            ImGui::TextWrapped("Use X/Y/Z to lock axis, Shift+X/Y/Z to lock plane.");
+        }
+
+        ImGui::Separator();
+        int combineIndex = static_cast<int>(m_selectionCombineMode);
+        const char* combineItems[] = {"Replace", "Add", "Subtract", "Intersect"};
+        if (ImGui::Combo("Box/Lasso Combine", &combineIndex, combineItems, IM_ARRAYSIZE(combineItems)))
+        {
+            combineIndex = std::clamp(combineIndex, 0, 3);
+            m_selectionCombineMode = static_cast<SelectionCombineMode>(combineIndex);
+        }
+
+        if (m_mode == Mode::LoopEditor)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Mesh Quick Ops");
+            if (ImGui::Button("Extrude (E) Face") && m_meshEditMode == MeshEditMode::Face && m_meshModelSelectedFace >= 0)
+            {
+                MeshModelerExtrudeFace(m_meshModelSelectedFace, m_meshModelExtrudeDistance);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Delete (X) Face") && m_meshEditMode == MeshEditMode::Face && m_meshModelSelectedFace >= 0)
+            {
+                MeshModelerDeleteFace(m_meshModelSelectedFace);
+            }
+            if (ImGui::Button("Ctrl+B Bevel Edge(s)") && m_meshEditMode == MeshEditMode::Edge)
+            {
+                MeshModelerBevelActiveEdges(m_meshModelBevelDistance, m_meshModelBevelSegments);
+            }
+        }
+    }
+    if (toolSettingsOpen)
+    {
+        ImGui::End();
+    }
+
+    setPanelRect(centerRect.x, centerRect.y, centerRect.z, centerRect.w);
+    ImGui::SetNextWindowBgAlpha(0.08F);
+    if (ImGui::Begin("Scene Viewport", nullptr, sceneWindowFlags))
+    {
+        const bool editModeActive = (m_mode == Mode::LoopEditor) && m_meshModelSceneEditEnabled;
+        const char* editSelectionType =
+            m_meshEditMode == MeshEditMode::Vertex ? "VERTEX" :
+            (m_meshEditMode == MeshEditMode::Edge ? "EDGE" : "FACE");
+        const std::string modeDetails = editModeActive ? (" (" + std::string(editSelectionType) + ")") : "";
+        const char* modeLabel = editModeActive ? "EDIT MODE" : "OBJECT MODE";
+        const char* toolLabel = m_gizmoMode == GizmoMode::Translate ? "MOVE (G)" :
+                                (m_gizmoMode == GizmoMode::Rotate ? "ROTATE (R)" : "SCALE (S)");
+        int selectedVertexCount = (m_meshModelSelectedVertex >= 0) ? 1 : 0;
+        int selectedFaceCount = (m_meshModelSelectedFace >= 0) ? 1 : 0;
+        int selectedEdgeCount = 0;
+        if (!m_meshModelLoopSelectionEdges.empty())
+        {
+            selectedEdgeCount = static_cast<int>(m_meshModelLoopSelectionEdges.size());
+        }
+        else if (!m_meshModelRingSelectionEdges.empty())
+        {
+            selectedEdgeCount = static_cast<int>(m_meshModelRingSelectionEdges.size());
+        }
+        else if (m_meshModelSelectedEdge >= 0)
+        {
+            selectedEdgeCount = 1;
+        }
+
+        ImGui::Text("Mode: %s%s", modeLabel, modeDetails.c_str());
+        ImGui::Text("Tool: %s | Snap: %s", toolLabel, m_gridSnap ? "ON" : "OFF");
+        if (m_mode == Mode::LoopEditor)
+        {
+            ImGui::Text("ActiveObject: %s (Mesh)", m_meshActiveObjectName.c_str());
+        }
+        ImGui::Text("Selection Count  V:%d  E:%d  F:%d", selectedVertexCount, selectedEdgeCount, selectedFaceCount);
         ImGui::TextUnformatted("Main scene area (drag assets/loops/prefabs/fx here).");
-        ImGui::TextWrapped(
-            "LMB: select/place (and mesh pick when Mesh Scene Edit is ON), RMB: remove, RMB+mouse: camera look, WASD/QE: camera move");
+        ImGui::TextWrapped("Mouse now: LMB select/drag gizmo | MMB orbit | Shift+MMB pan | Wheel zoom");
+        ImGui::TextWrapped("Transforms: G/R/S tool, X/Y/Z constraint via gizmo axis pick, Enter/LMB confirm, Esc/RMB cancel");
         if (workspaceMesh)
         {
             ImGui::TextWrapped(
-                "Mesh workspace active: enable \"Scene Edit\" in Mesh Modeler and use 4/5/6 (Face/Edge/Vertex) for direct scene selection.");
+                "Mesh workspace active: Tab switches Object/Edit. In Edit mode use 1/2/3 (Vertex/Edge/Face), Shift+LMB add/remove, Alt+LMB loop select.");
             ImGui::Text("Hover Face/Edge/Vertex: %d / %d / %d", m_meshModelHoveredFace, m_meshModelHoveredEdge, m_meshModelHoveredVertex);
         }
         const ImVec2 dropSize = ImGui::GetContentRegionAvail();
         ImGui::InvisibleButton("##scene_drop_target", dropSize, ImGuiButtonFlags_MouseButtonLeft);
-        m_sceneViewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        const ImVec2 dropRectMin = ImGui::GetItemRectMin();
+        const ImVec2 dropRectMax = ImGui::GetItemRectMax();
+        m_sceneViewportRectMin = glm::vec2{dropRectMin.x, dropRectMin.y};
+        m_sceneViewportRectMax = glm::vec2{dropRectMax.x, dropRectMax.y};
+        m_sceneViewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
         m_sceneViewportFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        if (m_boxSelection.active)
+        {
+            const ImVec2 a{m_boxSelection.start.x, m_boxSelection.start.y};
+            const ImVec2 b{m_boxSelection.end.x, m_boxSelection.end.y};
+            fg->AddRectFilled(a, b, IM_COL32(90, 165, 255, 28));
+            fg->AddRect(a, b, IM_COL32(130, 195, 255, 220), 0.0F, 0, 2.0F);
+        }
+        if (m_lassoSelection.active && m_lassoSelection.points.size() >= 2U)
+        {
+            for (std::size_t i = 1; i < m_lassoSelection.points.size(); ++i)
+            {
+                const glm::vec2& p0 = m_lassoSelection.points[i - 1U];
+                const glm::vec2& p1 = m_lassoSelection.points[i];
+                fg->AddLine(ImVec2{p0.x, p0.y}, ImVec2{p1.x, p1.y}, IM_COL32(255, 200, 90, 230), 2.0F);
+            }
+        }
+        if (m_modalTransform.active)
+        {
+            std::ostringstream modalLabel;
+            if (m_modalTransform.tool == GizmoMode::Translate)
+            {
+                modalLabel << "Move: " << m_modalTransform.previewTranslateMagnitude;
+                if (m_modalTransform.constraintMode != ModalConstraintMode::None)
+                {
+                    modalLabel << " (" << (m_modalTransform.orientation == TransformOrientation::Local ? "Local" : "Global")
+                               << ")";
+                }
+                glm::vec2 pivotScreen{0.0F};
+                glm::vec2 endScreen{0.0F};
+                if (WorldToScreenPoint(m_modalTransform.pivotWorld, &pivotScreen) &&
+                    WorldToScreenPoint(m_modalTransform.pivotWorld + m_modalTransform.previewWorldDelta, &endScreen))
+                {
+                    fg->AddLine(
+                        ImVec2{pivotScreen.x, pivotScreen.y},
+                        ImVec2{endScreen.x, endScreen.y},
+                        IM_COL32(255, 220, 90, 235),
+                        2.5F);
+                    fg->AddCircleFilled(ImVec2{endScreen.x, endScreen.y}, 4.0F, IM_COL32(255, 220, 90, 235));
+                }
+            }
+            else if (m_modalTransform.tool == GizmoMode::Rotate)
+            {
+                modalLabel << "Rotate: " << m_modalTransform.previewRotateDegrees << " deg";
+            }
+            else
+            {
+                modalLabel << "Scale: " << m_modalTransform.previewScaleFactor << "x";
+            }
+
+            const ImVec2 mouseNow = ImGui::GetMousePos();
+            const ImVec2 textPos{mouseNow.x + 18.0F, mouseNow.y + 18.0F};
+            const std::string text = modalLabel.str();
+            const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+            const ImVec2 bgMin{textPos.x - 6.0F, textPos.y - 4.0F};
+            const ImVec2 bgMax{textPos.x + textSize.x + 6.0F, textPos.y + textSize.y + 4.0F};
+            fg->AddRectFilled(bgMin, bgMax, IM_COL32(15, 20, 30, 220), 4.0F);
+            fg->AddRect(bgMin, bgMax, IM_COL32(100, 155, 235, 220), 4.0F, 0, 1.0F);
+            fg->AddText(textPos, IM_COL32(230, 236, 255, 255), text.c_str());
+        }
         if (ImGui::BeginDragDropTarget())
         {
             (void)handleSceneDropPayload();
@@ -8857,11 +12037,99 @@ void LevelEditor::DrawUi(
     }
     ImGui::End();
 
+    const bool outlinerOpen =
+        m_blenderLayoutPreset &&
+        beginDockedPanel(DockPanel::Outliner, std::max(170.0F, bottomLeftRect.w * 0.52F), "Outliner");
+    if (outlinerOpen)
+    {
+        if (m_mode == Mode::LoopEditor)
+        {
+            ImGui::TextUnformatted("Mesh Objects");
+            const bool selected = true;
+            if (ImGui::Selectable(m_meshActiveObjectName.c_str(), selected))
+            {
+                ClearSelections();
+            }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
+            {
+                FocusCameraOnSelection();
+            }
+            ImGui::Separator();
+            ImGui::Text("Active: %s", m_meshActiveObjectName.c_str());
+            ImGui::Text("Verts: %d", static_cast<int>(m_meshModelVertices.size()));
+            ImGui::Text("Faces: %d", static_cast<int>(m_meshModelFaces.size()));
+            ImGui::Text("Mode: %s", m_meshModelSceneEditEnabled ? "Edit" : "Object");
+            if (ImGui::Button("Frame Active (.)"))
+            {
+                FocusCameraOnSelection();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(m_meshModelSceneEditEnabled ? "Switch Object" : "Switch Edit"))
+            {
+                ToggleMeshObjectEditMode("outliner");
+            }
+            if (workspaceAll)
+            {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Loop Elements");
+                for (int i = 0; i < static_cast<int>(m_loop.elements.size()); ++i)
+                {
+                    const LoopElement& element = m_loop.elements[static_cast<std::size_t>(i)];
+                    std::string label = "[" + std::to_string(i) + "] " + element.name;
+                    if (ImGui::Selectable(label.c_str(), IsSelected(SelectionKind::LoopElement, i)))
+                    {
+                        SelectSingle(Selection{SelectionKind::LoopElement, i});
+                    }
+                }
+            }
+        }
+        else
+        {
+            ImGui::TextUnformatted("Placements");
+            for (int i = 0; i < static_cast<int>(m_map.placements.size()); ++i)
+            {
+                const LoopPlacement& p = m_map.placements[static_cast<std::size_t>(i)];
+                std::string label = "[" + std::to_string(i) + "] " + p.loopId;
+                if (ImGui::Selectable(label.c_str(), IsSelected(SelectionKind::MapPlacement, i)))
+                {
+                    SelectSingle(Selection{SelectionKind::MapPlacement, i});
+                }
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Props");
+            for (int i = 0; i < static_cast<int>(m_map.props.size()); ++i)
+            {
+                const PropInstance& p = m_map.props[static_cast<std::size_t>(i)];
+                std::string label = "[" + std::to_string(i) + "] " + p.name;
+                if (ImGui::Selectable(label.c_str(), IsSelected(SelectionKind::Prop, i)))
+                {
+                    SelectSingle(Selection{SelectionKind::Prop, i});
+                }
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Lights");
+            for (int i = 0; i < static_cast<int>(m_map.lights.size()); ++i)
+            {
+                const LightInstance& l = m_map.lights[static_cast<std::size_t>(i)];
+                std::string label = "[" + std::to_string(i) + "] " + l.name;
+                if (ImGui::Selectable(label.c_str(), m_selectedLightIndex == i))
+                {
+                    m_selectedLightIndex = i;
+                    m_statusLine = "Selected light " + l.name;
+                }
+            }
+        }
+    }
+    if (outlinerOpen)
+    {
+        ImGui::End();
+    }
+
     if (showLoopPanels)
     {
         const float loopLibraryH = std::max(180.0F, midH * 0.44F);
-        setPanelRect(workspaceX, midY, leftW, loopLibraryH);
-        if (ImGui::Begin("Loop Library"))
+        const bool loopLibraryOpen = beginDockedPanel(DockPanel::LoopLibrary, loopLibraryH, "Loop Library");
+        if (loopLibraryOpen)
         {
             char searchBuffer[128]{};
             std::snprintf(searchBuffer, sizeof(searchBuffer), "%s", m_loopSearch.c_str());
@@ -9000,10 +12268,14 @@ void LevelEditor::DrawUi(
                 }
             }
         }
-        ImGui::End();
+        if (loopLibraryOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(workspaceX, midY + loopLibraryH + pad, leftW, midH - loopLibraryH - pad);
-        if (ImGui::Begin("Loop Editor"))
+        const bool loopEditorOpen =
+            beginDockedPanel(DockPanel::LoopEditor, std::max(220.0F, midH * 0.52F), "Loop Editor");
+        if (loopEditorOpen)
         {
             ImGui::TextWrapped("Quick Guide (Loop Editor):");
             ImGui::BulletText("Add Wall/Window/Pallet/Marker.");
@@ -9143,10 +12415,13 @@ void LevelEditor::DrawUi(
                 }
             }
         }
-        ImGui::End();
+        if (loopEditorOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(rightX, midY, rightW, midH);
-        if (ImGui::Begin("Inspector"))
+        const bool loopInspectorOpen = beginDockedPanel(DockPanel::Inspector, std::max(260.0F, midH * 0.5F), "Inspector");
+        if (loopInspectorOpen)
         {
             if (m_selection.kind == SelectionKind::LoopElement &&
                 m_selection.index >= 0 && m_selection.index < static_cast<int>(m_loop.elements.size()))
@@ -9192,7 +12467,10 @@ void LevelEditor::DrawUi(
                 ImGui::TextUnformatted("Select a loop element.");
             }
         }
-        ImGui::End();
+        if (loopInspectorOpen)
+        {
+            ImGui::End();
+        }
     }
     if (showMapPanels)
     {
@@ -9200,8 +12478,8 @@ void LevelEditor::DrawUi(
         const float paletteH = std::max(160.0F, midH * 0.30F);
         const float prefabsH = std::max(120.0F, midH - mapLibraryH - paletteH - pad * 2.0F);
 
-        setPanelRect(workspaceX, midY, leftW, mapLibraryH);
-        if (ImGui::Begin("Map Library"))
+        const bool mapLibraryOpen = beginDockedPanel(DockPanel::MapLibrary, mapLibraryH, "Map Library");
+        if (mapLibraryOpen)
         {
             char searchBuffer[128]{};
             std::snprintf(searchBuffer, sizeof(searchBuffer), "%s", m_mapSearch.c_str());
@@ -9325,10 +12603,13 @@ void LevelEditor::DrawUi(
                 }
             }
         }
-        ImGui::End();
+        if (mapLibraryOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(workspaceX, midY + mapLibraryH + pad, leftW, paletteH);
-        if (ImGui::Begin("Loop Palette"))
+        const bool loopPaletteOpen = beginDockedPanel(DockPanel::LoopPalette, paletteH, "Loop Palette");
+        if (loopPaletteOpen)
         {
             if (ImGui::Button("Refresh Loops"))
             {
@@ -9368,10 +12649,13 @@ void LevelEditor::DrawUi(
                 RemovePlacementAtHoveredTile();
             }
         }
-        ImGui::End();
+        if (loopPaletteOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(workspaceX, midY + mapLibraryH + pad + paletteH + pad, leftW, prefabsH);
-        if (ImGui::Begin("Prefabs"))
+        const bool prefabsOpen = beginDockedPanel(DockPanel::Prefabs, prefabsH, "Prefabs");
+        if (prefabsOpen)
         {
             char prefabIdBuffer[128]{};
             std::snprintf(prefabIdBuffer, sizeof(prefabIdBuffer), "%s", m_prefabNewId.c_str());
@@ -9439,10 +12723,13 @@ void LevelEditor::DrawUi(
                 ReapplySelectedPrefabInstance();
             }
         }
-        ImGui::End();
+        if (prefabsOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(rightX, midY, rightW, midH * 0.52F - pad * 0.5F);
-        if (ImGui::Begin("Map Editor"))
+        const bool mapEditorOpen = beginDockedPanel(DockPanel::MapEditor, std::max(220.0F, midH * 0.52F), "Map Editor");
+        if (mapEditorOpen)
         {
             ImGui::TextWrapped("Quick Guide (Level/Map Editor):");
             ImGui::BulletText("Select loop from Loop Palette and place on hovered tile.");
@@ -9613,10 +12900,13 @@ void LevelEditor::DrawUi(
             ImGui::Separator();
             ImGui::TextWrapped("Use central Scene Viewport as drag&drop target.");
         }
-        ImGui::End();
+        if (mapEditorOpen)
+        {
+            ImGui::End();
+        }
 
-        setPanelRect(rightX, midY + midH * 0.52F + pad * 0.5F, rightW, midH * 0.48F - pad * 0.5F);
-        if (ImGui::Begin("Inspector"))
+        const bool mapInspectorOpen = beginDockedPanel(DockPanel::Inspector, std::max(220.0F, midH * 0.48F), "Inspector");
+        if (mapInspectorOpen)
         {
             if (m_selection.kind == SelectionKind::MapPlacement &&
                 m_selection.index >= 0 && m_selection.index < static_cast<int>(m_map.placements.size()))
@@ -9737,51 +13027,15 @@ void LevelEditor::DrawUi(
                 ImGui::TextUnformatted("Select map placement, prop or light.");
             }
         }
-        ImGui::End();
+        if (mapInspectorOpen)
+        {
+            ImGui::End();
+        }
     }
 
-    float contentX = workspaceX;
-    float materialsX = workspaceX;
-    float fxX = workspaceX;
-    float contentW = workspaceW;
-    float materialsW = workspaceW;
-    float fxAndModelW = workspaceW;
-    if (showContentWindow && showMaterialWindow && showFxWindow)
-    {
-        contentW = std::clamp(workspaceW * 0.36F, 320.0F, 760.0F);
-        materialsW = std::clamp(workspaceW * 0.30F, 300.0F, 620.0F);
-        fxAndModelW = std::max(260.0F, workspaceW - contentW - materialsW - pad * 2.0F);
-        contentX = workspaceX;
-        materialsX = contentX + contentW + pad;
-        fxX = materialsX + materialsW + pad;
-    }
-    else if (showContentWindow && showMaterialWindow)
-    {
-        contentW = std::max(260.0F, workspaceW * 0.5F - pad * 0.5F);
-        materialsW = std::max(260.0F, workspaceW - contentW - pad);
-        contentX = workspaceX;
-        materialsX = contentX + contentW + pad;
-    }
-    else if (showContentWindow && showFxWindow)
-    {
-        contentW = std::max(260.0F, workspaceW * 0.45F - pad * 0.5F);
-        fxAndModelW = std::max(260.0F, workspaceW - contentW - pad);
-        contentX = workspaceX;
-        fxX = contentX + contentW + pad;
-    }
-    else if (showMaterialWindow && showFxWindow)
-    {
-        materialsW = std::max(260.0F, workspaceW * 0.45F - pad * 0.5F);
-        fxAndModelW = std::max(260.0F, workspaceW - materialsW - pad);
-        materialsX = workspaceX;
-        fxX = materialsX + materialsW + pad;
-    }
-
-    if (showContentWindow)
-    {
-        setPanelRect(contentX, bottomY, contentW, bottomH);
-    }
-    if (showContentWindow && ImGui::Begin("Content Browser"))
+    const bool contentBrowserOpen =
+        showContentWindow && beginDockedPanel(DockPanel::ContentBrowser, std::max(220.0F, bottomLeftRect.w * 0.85F), "Content Browser");
+    if (contentBrowserOpen)
     {
         auto importIntoDirectory = [this](const std::string& sourcePath, const std::string& targetRelativeDir) -> bool {
             const std::string normalizedTarget = (targetRelativeDir == "." ? std::string{} : targetRelativeDir);
@@ -10244,16 +13498,15 @@ void LevelEditor::DrawUi(
             PlaceImportedAssetAtHovered(m_selectedContentPath);
         }
     }
-    if (showContentWindow)
+    if (contentBrowserOpen)
     {
         ImGui::End();
     }
 
-    if (showMaterialWindow)
-    {
-        setPanelRect(materialsX, bottomY, materialsW, bottomH);
-    }
-    if (showMaterialWindow && ImGui::Begin("Materials & Environment"))
+    const bool materialWindowOpen =
+        showMaterialWindow &&
+        beginDockedPanel(DockPanel::MaterialsEnvironment, std::max(260.0F, rightRect.w * 0.55F), "Materials & Environment");
+    if (materialWindowOpen)
     {
         if (ImGui::CollapsingHeader("Material Editor", ImGuiTreeNodeFlags_DefaultOpen))
         {
@@ -10762,16 +14015,15 @@ void LevelEditor::DrawUi(
             }
         }
     }
-    if (showMaterialWindow)
+    if (materialWindowOpen)
     {
         ImGui::End();
     }
 
-    if (showFxWindow)
-    {
-        setPanelRect(fxX, bottomY, fxAndModelW, bottomH);
-    }
-    if (showFxWindow && ImGui::Begin(workspaceMesh ? "Mesh Modeler" : "FX Editor"))
+    const bool fxWindowOpen =
+        showFxWindow &&
+        beginDockedPanel(DockPanel::FxEditor, std::max(240.0F, rightRect.w * 0.5F), workspaceMesh ? "Mesh Modeler" : "FX Editor");
+    if (fxWindowOpen)
     {
         const bool showFxCore = !workspaceMesh;
         const bool showMeshTools = !workspaceFxEnv;
@@ -11198,7 +14450,8 @@ void LevelEditor::DrawUi(
             ImGui::Checkbox("Scene Edit (click in Scene Viewport)", &m_meshModelSceneEditEnabled);
             ImGui::SameLine();
             ImGui::Checkbox("Show Mesh Gizmo", &m_meshModelShowGizmo);
-            ImGui::TextUnformatted("Hotkeys: 4=Face 5=Edge 6=Vertex J=BatchExtrude B=BatchBevel Enter=ApplyPreview L=LoopCut U=LoopSelect I=RingSelect K=Knife O=SceneLoopCut M=SceneEdit");
+            ImGui::TextUnformatted("Hotkeys: Tab=Object/Edit, 1=Vertex 2=Edge 3=Face, Alt+LMB=LoopSelect, Shift+Alt+LMB=RingSelect");
+            ImGui::TextUnformatted("Extra: 4/5/6 legacy mode switch, J batch extrude, Ctrl+B batch bevel, Enter apply preview, K knife, O scene loop cut");
             int editModeIndex = static_cast<int>(m_meshEditMode);
             const char* editModes[] = {"Face", "Edge", "Vertex"};
             if (ImGui::Combo("Edit Mode", &editModeIndex, editModes, IM_ARRAYSIZE(editModes)))
@@ -11399,6 +14652,8 @@ void LevelEditor::DrawUi(
                     if (ImGui::Selectable(label.str().c_str(), m_meshModelSelectedFace == i))
                     {
                         m_meshModelSelectedFace = i;
+                        m_meshModelFaceSelection.clear();
+                        m_meshModelFaceSelection.push_back(i);
                     }
                 }
                 ImGui::EndListBox();
@@ -11453,6 +14708,8 @@ void LevelEditor::DrawUi(
                     if (ImGui::Selectable(label.str().c_str(), m_meshModelSelectedVertex == i))
                     {
                         m_meshModelSelectedVertex = i;
+                        m_meshModelVertexSelection.clear();
+                        m_meshModelVertexSelection.push_back(i);
                     }
                 }
                 ImGui::EndListBox();
@@ -11535,9 +14792,135 @@ void LevelEditor::DrawUi(
             }
         }
     }
-    if (showFxWindow)
+
+    if (m_showStatusBar)
+    {
+        ImGui::SetNextWindowPos(ImVec2{bottomRightRect.x, bottomRightRect.y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2{bottomRightRect.z, bottomRightRect.w}, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.92F);
+        if (ImGui::Begin(
+                "Editor Status",
+                nullptr,
+                ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+        {
+            const bool editModeActive = (m_mode == Mode::LoopEditor) && m_meshModelSceneEditEnabled;
+            const char* selectionType =
+                m_meshEditMode == MeshEditMode::Vertex ? "VERTEX" :
+                (m_meshEditMode == MeshEditMode::Edge ? "EDGE" : "FACE");
+            const std::string editSuffix = editModeActive ? (" (" + std::string(selectionType) + ")") : "";
+            ImGui::Text(
+                "Mode: %s%s | Tool: %s | Snap: %s | Hint: G Move | R Rotate | S Scale | Tab Mode | Shift+Tab Snap | . Frame",
+                editModeActive ? "EDIT" : "OBJECT",
+                editSuffix.c_str(),
+                GizmoToText(m_gizmoMode),
+                m_gridSnap ? "ON" : "OFF");
+            if (m_modalTransform.active)
+            {
+                const char* constraintText =
+                    m_modalTransform.constraintMode == ModalConstraintMode::Axis
+                        ? (m_modalTransform.constraintAxis == GizmoAxis::X ? "Axis X"
+                           : (m_modalTransform.constraintAxis == GizmoAxis::Y ? "Axis Y" : "Axis Z"))
+                    : (m_modalTransform.constraintMode == ModalConstraintMode::Plane
+                           ? (m_modalTransform.constraintAxis == GizmoAxis::X ? "Plane YZ"
+                              : (m_modalTransform.constraintAxis == GizmoAxis::Y ? "Plane XZ" : "Plane XY"))
+                           : "Free");
+                ImGui::SameLine();
+                const char* orientText = m_modalTransform.orientation == TransformOrientation::Local ? "Local" : "Global";
+                const char* numericModeText =
+                    m_modalTransform.numericMode == NumericInputMode::Absolute
+                        ? "Abs"
+                        : (m_modalTransform.numericMode == NumericInputMode::Multiply ? "*" : "/");
+                ImGui::Text("| Modal: %s | %s | %s | Num[%s]:%s%s",
+                            GizmoToText(m_modalTransform.tool),
+                            constraintText,
+                            orientText,
+                            numericModeText,
+                            m_modalTransform.numericNegative ? "-" : "",
+                            m_modalTransform.numericInput.empty() ? "_" : m_modalTransform.numericInput.c_str());
+            }
+            else if (m_boxSelection.active)
+            {
+                ImGui::SameLine();
+                ImGui::Text("| Box Select");
+            }
+            else if (m_lassoSelection.active)
+            {
+                ImGui::SameLine();
+                ImGui::Text("| Lasso Select");
+            }
+        }
+        ImGui::End();
+    }
+
+    if (m_showShortcutGuide)
+    {
+        ImGui::SetNextWindowSize(ImVec2{720.0F, 520.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Shortcut Guide", &m_showShortcutGuide))
+        {
+            ImGui::TextUnformatted("Navigation");
+            ImGui::BulletText("MMB orbit");
+            ImGui::BulletText("Shift+MMB pan");
+            ImGui::BulletText("Wheel zoom");
+            ImGui::BulletText("RMB + WASD camera look/move");
+            ImGui::BulletText(". frame selection");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Selection");
+            ImGui::BulletText("LMB select");
+            ImGui::BulletText("Shift+LMB add/remove");
+            ImGui::BulletText("B box select");
+            ImGui::BulletText("Ctrl+RMB lasso");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Transform");
+            ImGui::BulletText("G move | R rotate | S scale");
+            ImGui::BulletText("X/Y/Z axis constraint");
+            ImGui::BulletText("Shift+X/Y/Z plane constraint");
+            ImGui::BulletText("Enter/LMB confirm | Esc/RMB cancel");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Modes");
+            ImGui::BulletText("Tab object/edit");
+            ImGui::BulletText("1 vertex | 2 edge | 3 face");
+            ImGui::BulletText("Shift+Tab snap toggle");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Editor");
+            ImGui::BulletText("R rotate loop placement");
+            ImGui::BulletText("P prop placement mode");
+            ImGui::BulletText("Delete remove selected | Ctrl+D duplicate");
+            ImGui::BulletText("Ctrl+Z undo | Ctrl+Y redo");
+        }
+        ImGui::End();
+    }
+
+    if (m_showEditorManual)
+    {
+        ImGui::SetNextWindowSize(ImVec2{760.0F, 560.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Editor Manual", &m_showEditorManual))
+        {
+            ImGui::TextWrapped("Top Menu: File/Edit/View/Add/Select/Help. Tool Header below controls workspace, mode, selection type and snapping.");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Basic Workflow");
+            ImGui::BulletText("Choose workspace: Layout/Modeling/Map/Lighting/FX.");
+            ImGui::BulletText("In Loop Editor use Tab for Object/Edit and 1/2/3 for V/E/F.");
+            ImGui::BulletText("Use G/R/S and constraints X/Y/Z for transforms.");
+            ImGui::BulletText("Place loops/props/lights in Map Editor and test with Playtest.");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Panel Management");
+            ImGui::BulletText("Use View menu to show/hide Toolbar, Status Bar and docked panels.");
+            ImGui::BulletText("Use Reset Layout in Edit menu if workspace gets messy.");
+            ImGui::Separator();
+            ImGui::TextWrapped("Status bar at bottom shows mode/tool/snap and active modal transform state.");
+        }
+        ImGui::End();
+    }
+
+    if (fxWindowOpen)
     {
         ImGui::End();
+    }
+    if (m_layoutNeedsSave)
+    {
+        SaveEditorLayout();
+        m_layoutNeedsSave = false;
     }
 #else
     (void)outBackToMenu;

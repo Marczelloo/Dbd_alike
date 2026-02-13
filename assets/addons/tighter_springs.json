@@ -1,0 +1,25 @@
+{
+  "applies_to": {
+    "ids": [
+      "bear_trap"
+    ],
+    "kind": "power"
+  },
+  "asset_version": 1,
+  "description": "Bear trap add-on: escape chance increases slower.",
+  "display_name": "Tighter Springs",
+  "hooks": [],
+  "id": "tighter_springs",
+  "modifiers": [
+    {
+      "op": "mul",
+      "stat": "escape_chance_step",
+      "value": 0.7799999713897705
+    },
+    {
+      "op": "add",
+      "stat": "max_escape_attempts",
+      "value": 2.0
+    }
+  ]
+}

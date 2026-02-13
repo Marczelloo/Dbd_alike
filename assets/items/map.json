@@ -1,0 +1,15 @@
+{
+  "asset_version": 1,
+  "description": "Reveals key interactables/traps around survivor.",
+  "display_name": "Map",
+  "id": "map",
+  "mesh_path": "assets/meshes/items/map.glb",
+  "max_charges": 5.0,
+  "params": {
+    "channel_seconds": 0.75,
+    "charge_per_use": 1.0,
+    "reveal_duration": 3.0,
+    "reveal_radius": 48.0
+  },
+  "use_mode": "hold"
+}

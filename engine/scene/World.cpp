@@ -19,6 +19,8 @@ void World::Clear()
     m_pallets.clear();
     m_hooks.clear();
     m_generators.clear();
+    m_bearTraps.clear();
+    m_groundItems.clear();
     m_debugColors.clear();
     m_names.clear();
 }
@@ -27,7 +29,8 @@ bool World::HasEntity(Entity entity) const
 {
     return m_transforms.contains(entity) || m_actors.contains(entity) || m_staticBoxes.contains(entity) ||
            m_windows.contains(entity) || m_pallets.contains(entity) || m_hooks.contains(entity) ||
-           m_generators.contains(entity) ||
+           m_generators.contains(entity) || m_bearTraps.contains(entity) ||
+           m_groundItems.contains(entity) ||
            m_debugColors.contains(entity) ||
            m_names.contains(entity);
 }
@@ -36,7 +39,8 @@ std::vector<Entity> World::Entities() const
 {
     std::unordered_set<Entity> dedup;
     dedup.reserve(
-        m_transforms.size() + m_actors.size() + m_staticBoxes.size() + m_windows.size() + m_pallets.size() + m_hooks.size() + m_generators.size()
+        m_transforms.size() + m_actors.size() + m_staticBoxes.size() + m_windows.size() + m_pallets.size() + m_hooks.size() +
+        m_generators.size() + m_bearTraps.size() + m_groundItems.size()
     );
 
     auto collect = [&dedup](const auto& map) {
@@ -53,6 +57,8 @@ std::vector<Entity> World::Entities() const
     collect(m_pallets);
     collect(m_hooks);
     collect(m_generators);
+    collect(m_bearTraps);
+    collect(m_groundItems);
     collect(m_debugColors);
     collect(m_names);
 

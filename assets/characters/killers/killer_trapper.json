@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Trapper",
+  "id": "killer_trapper",
+  "model_path": "assets/meshes/killer_trapper.glb",
+  "power_id": "bear_trap"
+}

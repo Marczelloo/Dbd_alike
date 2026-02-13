@@ -1,0 +1,32 @@
+{
+  "asset_version": 1,
+  "base_radius": 24.0,
+  "killer_id": "default_killer",
+  "layers": [
+    {
+      "clip": "tr_far",
+      "fade_in_end": 0.44999998807907104,
+      "fade_in_start": 0.0,
+      "gain": 0.15
+    },
+    {
+      "clip": "tr_mid",
+      "fade_in_end": 0.75,
+      "fade_in_start": 0.25,
+      "gain": 0.2
+    },
+    {
+      "clip": "tr_close",
+      "fade_in_end": 1.0,
+      "fade_in_start": 0.550000011920929,
+      "gain": 0.25
+    },
+    {
+      "chase_only": true,
+      "clip": "tr_chase",
+      "fade_in_end": 1.0,
+      "fade_in_start": 0.0,
+      "gain": 0.2
+    }
+  ]
+}

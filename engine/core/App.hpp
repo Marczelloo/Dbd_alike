@@ -10,6 +10,7 @@
 #include <glm/vec2.hpp>
 
 #include "engine/core/EventBus.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/net/LanDiscovery.hpp"
 #include "engine/net/NetworkSession.hpp"
 #include "engine/core/Time.hpp"
@@ -66,6 +67,22 @@ public:
         int antiAliasing = 0;
         int textureQuality = 0;
         bool fogEnabled = false;
+    };
+
+    struct AudioSettings
+    {
+        int assetVersion = 1;
+        float master = 1.0F;
+        float music = 0.35F;
+        float sfx = 0.9F;
+        float ui = 0.9F;
+        float ambience = 0.3F;
+        bool muted = false;
+
+        // Killer spotlight color configuration (RGB 0-1)
+        float killerLightRed = 1.0F;
+        float killerLightGreen = 0.15F;
+        float killerLightBlue = 0.1F;
     };
 
 private:
@@ -224,6 +241,13 @@ private:
     [[nodiscard]] std::optional<int> CapturePressedBindCode() const;
     [[nodiscard]] std::vector<std::pair<int, int>> AvailableResolutions() const;
     [[nodiscard]] bool LoadHudLayoutConfig();
+    [[nodiscard]] bool LoadAudioConfig();
+    [[nodiscard]] bool SaveAudioConfig() const;
+    void ApplyAudioSettings();
+    bool LoadTerrorRadiusProfile(const std::string& killerId);
+    void StopTerrorRadiusAudio();
+    void UpdateTerrorRadiusAudio(float deltaSeconds);
+    [[nodiscard]] std::string DumpTerrorRadiusState() const;
     void SendGameplayTuningToClient();
     void ApplyMapEnvironment(const std::string& mapName);
 
@@ -232,6 +256,7 @@ private:
     platform::Window m_window;
     platform::Input m_input;
     platform::ActionBindings m_actionBindings;
+    audio::AudioSystem m_audio;
     render::Renderer m_renderer;
     ui::UiSystem m_ui;
 
@@ -272,7 +297,9 @@ private:
     bool m_settingsMenuOpen = false;
     bool m_settingsOpenedFromPause = false;
     int m_settingsTabIndex = 0;
-    std::array<float, 3> m_settingsTabScroll{0.0F, 0.0F, 0.0F};
+    std::array<float, 4> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F};
+    float m_mainMenuScrollY = 0.0F;
+    bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
     bool m_showLoadingScreenTestPanel = false;
 
@@ -304,6 +331,7 @@ private:
     ControlsSettings m_controlsSettings{};
     GraphicsSettings m_graphicsApplied{};
     GraphicsSettings m_graphicsEditing{};
+    AudioSettings m_audioSettings{};
     game::gameplay::GameplaySystems::GameplayTuning m_gameplayApplied{};
     game::gameplay::GameplaySystems::GameplayTuning m_gameplayEditing{};
     bool m_serverGameplayValues = false;
@@ -320,11 +348,20 @@ private:
     int m_rebindCapturedCode = platform::ActionBindings::kUnbound;
     std::string m_controlsStatus;
     std::string m_graphicsStatus;
+    std::string m_audioStatus;
     std::string m_gameplayStatus;
 
     int m_menuRoleIndex = 0;
     int m_menuMapIndex = 0;
     int m_menuSavedMapIndex = -1;
+    int m_menuSurvivorCharacterIndex = 0;
+    int m_menuKillerCharacterIndex = 0;
+    int m_menuSurvivorItemIndex = 0;
+    int m_menuSurvivorAddonAIndex = 0;
+    int m_menuSurvivorAddonBIndex = 0;
+    int m_menuKillerPowerIndex = 0;
+    int m_menuKillerAddonAIndex = 0;
+    int m_menuKillerAddonBIndex = 0;
     int m_menuPort = 7777;
     std::string m_menuJoinIp = "127.0.0.1";
     
@@ -386,10 +423,47 @@ private:
     };
 
     std::vector<std::string> m_localIpv4Addresses;
+    std::vector<render::PointLight> m_runtimeMapPointLights;
+    std::vector<render::SpotLight> m_runtimeMapSpotLights;
     double m_lastSnapshotReceivedSeconds = 0.0;
     double m_lastInputSentSeconds = 0.0;
     double m_lastSnapshotSentSeconds = 0.0;
     std::vector<std::string> m_pendingDroppedFiles;
+    std::vector<audio::AudioSystem::SoundHandle> m_debugAudioLoops;
+    audio::AudioSystem::SoundHandle m_sessionAmbienceLoop = 0;
+
+    enum class TerrorRadiusBand
+    {
+        Outside,
+        Far,   // Outer edge of TR (0.66R < dist <= R)
+        Mid,    // Middle of TR (0.33R < dist <= 0.66R)
+        Close   // Close to killer (0 <= dist <= 0.33R)
+    };
+
+    struct TerrorRadiusLayerAudio
+    {
+        std::string clip;
+        float fadeInStart = 0.0F;
+        float fadeInEnd = 1.0F;
+        float gain = 1.0F;
+        bool chaseOnly = false;
+        audio::AudioSystem::SoundHandle handle = 0;
+        float currentVolume = 0.0F;
+    };
+
+    struct TerrorRadiusProfileAudio
+    {
+        std::string killerId = "default_killer";
+        float baseRadius = 32.0F;       // DBD-like: 32m default TR radius
+        float smoothingTime = 0.25F;      // Crossfade duration 0.15-0.35s
+        std::vector<TerrorRadiusLayerAudio> layers;
+        bool loaded = false;
+    };
+
+    TerrorRadiusProfileAudio m_terrorAudioProfile{};
+    TerrorRadiusBand m_currentBand = TerrorRadiusBand::Outside;
+    bool m_terrorAudioDebug = false;
+    bool m_chaseWasActive = false;  // Track previous frame's chase state for rapid fade-out
 
     std::ofstream m_networkLogFile;
 };

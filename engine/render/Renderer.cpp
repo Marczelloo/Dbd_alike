@@ -556,7 +556,7 @@ void Renderer::SetSpotLights(const std::vector<SpotLight>& lights)
 
 void Renderer::SetPostFxPulse(const glm::vec3& color, float intensity)
 {
-    m_postFxPulseColor = glm::clamp(color, glm::vec3{0.0F}, glm::vec3{2.0F});
+    m_postFxPulseColor = glm::clamp(color, glm::vec3{-2.0F}, glm::vec3{2.0F});
     m_postFxPulseIntensity = glm::clamp(intensity, 0.0F, 2.0F);
 }
 
@@ -1505,7 +1505,7 @@ void Renderer::AddSolidTriangle(
     }
     else
     {
-        normal = glm::normalize(normal);
+        normal = -glm::normalize(normal);
     }
 
     const glm::vec4 packedMaterial{

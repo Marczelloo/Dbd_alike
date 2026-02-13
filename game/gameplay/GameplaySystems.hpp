@@ -20,6 +20,7 @@
 #include "engine/render/Frustum.hpp"
 #include "engine/render/StaticBatcher.hpp"
 #include "engine/scene/World.hpp"
+#include "game/gameplay/LoadoutSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"
 #include "game/maps/TileGenerator.hpp"
 
@@ -50,6 +51,18 @@ struct RoleCommand;
 
 namespace game::gameplay
 {
+// Phase B4: Killer Look Light configuration
+struct KillerLookLight
+{
+    bool enabled = true;
+    float intensity = 1.1F;
+    float range = 14.0F;
+    float innerAngleDegrees = 16.0F;
+    float outerAngleDegrees = 28.0F;
+    float pitchDegrees = 35.0F;
+    glm::vec3 color{1.0F, 0.15F, 0.1F};
+};
+
 // HUD State - defined outside class for access from DeveloperConsole
 struct HudState
 {
@@ -109,6 +122,30 @@ struct HudState
     bool chaseActive = false;
     float chaseDistance = 0.0F;
     bool lineOfSight = false;
+    bool inCenterFOV = false;      // Survivor in killer's center FOV
+    bool survivorSprinting = false; // Survivor is sprinting
+    float timeInChase = 0.0F;     // Total time chase has been active
+    float timeSinceLOS = 0.0F;     // Time since killer had LOS
+    float timeSinceCenterFOV = 0.0F; // Time since survivor was in center FOV
+
+    // Bloodlust state
+    int bloodlustTier = 0;          // Current bloodlust tier (0-3)
+    float bloodlustSpeedMultiplier = 1.0F; // Speed multiplier from bloodlust
+    float killerBaseSpeed = 0.0F;    // Killer's base movement speed
+    float killerCurrentSpeed = 0.0F;  // Killer's current speed after all multipliers
+
+    // Phase B2/B3: Scratch marks and blood pools debug info
+    int scratchActiveCount = 0;
+    int bloodActiveCount = 0;
+    float scratchSpawnInterval = 0.0F;
+
+    // Phase B4: Killer look light debug info
+    bool killerLightEnabled = true;
+    float killerLightRange = 14.0F;
+    float killerLightIntensity = 1.1F;
+    float killerLightInnerAngle = 16.0F;
+    float killerLightOuterAngle = 28.0F;
+    float killerLightPitch = 10.0F;  // Pitch downward (positive = down)
 
     bool collisionEnabled = true;
     bool debugDrawEnabled = true;
@@ -124,6 +161,37 @@ struct HudState
     int fxActiveInstances = 0;
     int fxActiveParticles = 0;
     float fxCpuMs = 0.0F;
+
+    std::string survivorCharacterId = "survivor_dwight";
+    std::string killerCharacterId = "killer_trapper";
+    std::string survivorItemId = "none";
+    std::string survivorItemAddonA = "none";
+    std::string survivorItemAddonB = "none";
+    float survivorItemCharges = 0.0F;
+    float survivorItemMaxCharges = 0.0F;
+    float survivorItemCharge01 = 0.0F;
+    float survivorItemUseProgress01 = 0.0F;
+    bool survivorItemActive = false;
+    bool survivorFlashlightAiming = false;
+    float survivorFlashlightBlindBuild01 = 0.0F;
+    int survivorItemUsesRemaining = 0;
+    std::string killerPowerId = "none";
+    std::string killerPowerAddonA = "none";
+    std::string killerPowerAddonB = "none";
+    int activeTrapCount = 0;
+    int carriedTrapCount = 0;
+    float trapSetProgress01 = 0.0F;
+    bool wraithCloaked = false;
+    float wraithPostUncloakHasteSeconds = 0.0F;
+    bool trapDebugEnabled = false;
+    int trappedEscapeAttempts = 0;
+    float trappedEscapeChance = 0.0F;
+    float killerBlindRemaining = 0.0F;
+    bool killerBlindWhiteStyle = true;
+    float killerStunRemaining = 0.0F;
+    std::string trapIndicatorText;
+    float trapIndicatorTtl = 0.0F;
+    bool trapIndicatorDanger = true;
 
     // Perks debug info
     struct ActivePerkDebug
@@ -195,6 +263,10 @@ public:
         float lungeHoldMinSeconds = 0.08F;
         float lungeDurationSeconds = 0.62F;
         float lungeRecoverSeconds = 0.58F;
+
+        // Chase FOV configuration (degrees)
+        float chaseFovDegrees = 87.0F;      // DBD-like: total FOV for chase detection
+        float chaseCenterFovDegrees = 35.0F; // DBD-like: center FOV for chase gating (±35° from forward)
         float shortRecoverSeconds = 0.52F;
         float missRecoverSeconds = 0.45F;
         float lungeSpeedStart = 7.0F;
@@ -203,6 +275,40 @@ public:
         float healDurationSeconds = 12.5F;
         float skillCheckMinInterval = 2.5F;
         float skillCheckMaxInterval = 6.5F;
+        float generatorRepairSecondsBase = 90.0F;
+
+        float medkitFullHealCharges = 16.0F;
+        float medkitHealSpeedMultiplier = 1.5F;
+        float toolboxCharges = 15.0F;
+        float toolboxChargeDrainPerSecond = 1.0F;
+        float toolboxRepairSpeedBonus = 0.9F;
+
+        float flashlightMaxUseSeconds = 8.0F;
+        float flashlightBlindBuildSeconds = 1.0F;
+        float flashlightBlindDurationSeconds = 5.0F;
+        float flashlightBeamRange = 9.5F;
+        float flashlightBeamAngleDegrees = 22.0F;
+        int flashlightBlindStyle = 0; // 0=white, 1=dark
+
+        float mapChannelSeconds = 0.75F;
+        int mapUses = 5;
+        float mapRevealRangeMeters = 48.0F;
+        float mapRevealDurationSeconds = 3.0F;
+
+        int trapperStartCarryTraps = 5;
+        int trapperMaxCarryTraps = 5;
+        int trapperGroundSpawnTraps = 8;
+        float trapperSetTrapSeconds = 1.5F;
+        float trapperDisarmSeconds = 2.0F;
+        float trapEscapeBaseChance = 0.2F;
+        float trapEscapeChanceStep = 0.2F;
+        float trapEscapeChanceMax = 0.85F;
+        float trapKillerStunSeconds = 2.0F;
+
+        float wraithCloakMoveSpeedMultiplier = 1.3F;
+        float wraithCloakTransitionSeconds = 1.0F;
+        float wraithUncloakTransitionSeconds = 1.0F;
+        float wraithPostUncloakHasteSeconds = 2.0F;
 
         float weightTLWalls = 1.0F;
         float weightJungleGymLong = 1.0F;
@@ -256,6 +362,11 @@ public:
         bool attackHeld = false;
         bool attackReleased = false;
         bool lungeHeld = false;
+        bool useAltPressed = false;
+        bool useAltHeld = false;
+        bool useAltReleased = false;
+        bool dropItemPressed = false;
+        bool pickupItemPressed = false;
         bool wiggleLeftPressed = false;
         bool wiggleRightPressed = false;
     };
@@ -278,12 +389,42 @@ public:
         glm::vec3 halfExtents{0.5F};
     };
 
+    struct TrapSnapshot
+    {
+        engine::scene::Entity entity = 0;
+        std::uint8_t state = 0;
+        engine::scene::Entity trappedEntity = 0;
+        glm::vec3 position{0.0F};
+        glm::vec3 halfExtents{0.36F, 0.08F, 0.36F};
+        float escapeChance = 0.22F;
+        std::uint8_t escapeAttempts = 0;
+        std::uint8_t maxEscapeAttempts = 6;
+    };
+
+    struct GroundItemSnapshot
+    {
+        engine::scene::Entity entity = 0;
+        glm::vec3 position{0.0F};
+        float charges = 0.0F;
+        std::string itemId;
+        std::string addonAId;
+        std::string addonBId;
+    };
+
     struct Snapshot
     {
         MapType mapType = MapType::Test;
         unsigned int seed = 1337U;
         std::array<std::string, 3> survivorPerkIds = {"", "", ""};
         std::array<std::string, 3> killerPerkIds = {"", "", ""};
+        std::string survivorCharacterId = "survivor_dwight";
+        std::string killerCharacterId = "killer_trapper";
+        std::string survivorItemId;
+        std::string survivorItemAddonA;
+        std::string survivorItemAddonB;
+        std::string killerPowerId;
+        std::string killerPowerAddonA;
+        std::string killerPowerAddonB;
         ActorSnapshot survivor;
         ActorSnapshot killer;
         std::uint8_t survivorState = 0;
@@ -293,7 +434,23 @@ public:
         bool chaseActive = false;
         float chaseDistance = 0.0F;
         bool chaseLos = false;
+        bool chaseInCenterFOV = false;
+        float chaseTimeSinceLOS = 0.0F;
+        float chaseTimeSinceCenterFOV = 0.0F;
+        float chaseTimeInChase = 0.0F;
+        std::uint8_t bloodlustTier = 0;
+        float survivorItemCharges = 0.0F;
+        std::uint8_t survivorItemActive = 0;
+        std::uint8_t survivorItemUsesRemaining = 0;
+        std::uint8_t wraithCloaked = 0;
+        float wraithTransitionTimer = 0.0F;
+        float wraithPostUncloakTimer = 0.0F;
+        float killerBlindTimer = 0.0F;
+        std::uint8_t killerBlindStyleWhite = 1;
+        std::uint8_t carriedTrapCount = 0;
         std::vector<PalletSnapshot> pallets;
+        std::vector<TrapSnapshot> traps;
+        std::vector<GroundItemSnapshot> groundItems;
     };
 
     GameplaySystems();
@@ -306,6 +463,7 @@ public:
     void Render(engine::render::Renderer& renderer, float aspectRatio);
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
     [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
+    [[nodiscard]] glm::vec3 CameraForward() const { return m_cameraForward; }
     [[nodiscard]] HudState BuildHudState() const;
 
     void LoadMap(const std::string& mapName);
@@ -325,6 +483,7 @@ public:
     [[nodiscard]] engine::scene::Entity RoleEntity(const std::string& roleName) const;
     [[nodiscard]] std::string MovementStateForRole(const std::string& roleName) const;
     [[nodiscard]] glm::vec3 RolePosition(const std::string& roleName) const;
+    [[nodiscard]] glm::vec3 RoleForward(const std::string& roleName) const;
     [[nodiscard]] std::string SurvivorHealthStateText() const;
 
     void TeleportSurvivor(const glm::vec3& position);
@@ -356,6 +515,12 @@ public:
     void SetTerrorRadius(float meters);
     [[nodiscard]] bool TerrorRadiusVisualizationEnabled() const { return m_terrorRadiusVisible; }
 
+    // Bloodlust system
+    void ResetBloodlust();
+    void SetBloodlustTier(int tier);
+    [[nodiscard]] int GetBloodlustTier() const { return m_bloodlust.tier; }
+    [[nodiscard]] float GetBloodlustSpeedMultiplier() const;
+
     [[nodiscard]] bool DebugDrawEnabled() const { return m_debugDrawEnabled; }
 
     void SetNetworkAuthorityMode(bool enabled);
@@ -380,6 +545,70 @@ public:
     void SetKillerPerkLoadout(const perks::PerkLoadout& loadout);
     [[nodiscard]] perks::PerkSystem& GetPerkSystem() { return m_perkSystem; }
     [[nodiscard]] const perks::PerkSystem& GetPerkSystem() const { return m_perkSystem; }
+
+    bool SetSurvivorItemLoadout(const std::string& itemId, const std::string& addonAId, const std::string& addonBId);
+    bool SetKillerPowerLoadout(const std::string& powerId, const std::string& addonAId, const std::string& addonBId);
+    [[nodiscard]] std::string ItemDump() const;
+    [[nodiscard]] std::string PowerDump() const;
+    [[nodiscard]] std::vector<std::string> ListItemIds() const;
+    [[nodiscard]] std::vector<std::string> ListPowerIds() const;
+    [[nodiscard]] const loadout::GameplayCatalog& GetLoadoutCatalog() const { return m_loadoutCatalog; }
+    bool RespawnItemsNearPlayer(float radiusMeters = 3.0F);
+    bool SpawnGroundItemDebug(const std::string& itemId, float charges = -1.0F);
+
+    bool SetSelectedSurvivorCharacter(const std::string& characterId);
+    bool SetSelectedKillerCharacter(const std::string& characterId);
+    [[nodiscard]] std::vector<std::string> ListSurvivorCharacters() const;
+    [[nodiscard]] std::vector<std::string> ListKillerCharacters() const;
+
+    void TrapSpawnDebug(int count = 1);
+    void TrapClearDebug();
+    void SetTrapDebug(bool enabled) { m_trapDebugEnabled = enabled; }
+    [[nodiscard]] bool TrapDebugEnabled() const { return m_trapDebugEnabled; }
+
+    // Phase B2/B3: Scratch Marks and Blood Pools debug control
+    void SetScratchDebug(bool enabled);
+    void SetBloodDebug(bool enabled);
+    void SetScratchProfile(const std::string& profileName);
+    void SetBloodProfile(const std::string& profileName);
+    [[nodiscard]] int GetActiveScratchCount() const
+    {
+        int count = 0;
+        for (const auto& mark : m_scratchMarks)
+        {
+            if (mark.active) ++count;
+        }
+        return count;
+    }
+    [[nodiscard]] int GetActiveBloodPoolCount() const
+    {
+        int count = 0;
+        for (const auto& pool : m_bloodPools)
+        {
+            if (pool.active) ++count;
+        }
+        return count;
+    }
+    [[nodiscard]] bool ScratchDebugEnabled() const { return m_scratchDebugEnabled; }
+    [[nodiscard]] bool BloodDebugEnabled() const { return m_bloodDebugEnabled; }
+
+    // Phase B4: Killer Look Light control
+    void SetKillerLookLightEnabled(bool enabled) { m_killerLookLight.enabled = enabled; }
+    void SetKillerLookLightRange(float range) { m_killerLookLight.range = range; }
+    void SetKillerLookLightIntensity(float intensity) { m_killerLookLight.intensity = intensity; }
+    void SetKillerLookLightAngle(float angleDegrees) { m_killerLookLight.innerAngleDegrees = angleDegrees; }
+    void SetKillerLookLightOuterAngle(float angleDegrees) { m_killerLookLight.outerAngleDegrees = angleDegrees; }
+    void SetKillerLookLightPitch(float pitchDegrees) { m_killerLookLight.pitchDegrees = pitchDegrees; }
+    void SetKillerLookLightDebug(bool enabled) { m_killerLookLightDebug = enabled; }
+    [[nodiscard]] bool KillerLookLightEnabled() const { return m_killerLookLight.enabled; }
+    [[nodiscard]] bool KillerLookLightDebug() const { return m_killerLookLightDebug; }
+    [[nodiscard]] float KillerLightIntensity() const { return m_killerLookLight.intensity; }
+    [[nodiscard]] float KillerLightRange() const { return m_killerLookLight.range; }
+    [[nodiscard]] float KillerLightInnerAngle() const { return m_killerLookLight.innerAngleDegrees; }
+    [[nodiscard]] float KillerLightOuterAngle() const { return m_killerLookLight.outerAngleDegrees; }
+    [[nodiscard]] float KillerLightPitch() const { return m_killerLookLight.pitchDegrees; }
+
+    void SetMapSpotLightCount(std::size_t count) { m_mapSpotLightCount = count; }
 
 private:
     enum class InteractionType
@@ -408,6 +637,7 @@ private:
         Healthy,
         Injured,
         Downed,
+        Trapped,
         Carried,
         Hooked,
         Dead
@@ -457,11 +687,22 @@ private:
     {
         bool isChasing = false;
         bool hasLineOfSight = false;
+        bool inCenterFOV = false;          // Survivor in killer's center FOV (±35°)
         float distance = 0.0F;
-        float lostSightTimer = 0.0F;
-        float startDistance = 12.0F;
-        float endDistance = 18.0F;
-        float endDelay = 2.0F;
+        float timeSinceSeenLOS = 0.0F;     // Time since killer had LOS to survivor
+        float timeSinceCenterFOV = 0.0F;   // Time since survivor was in center FOV
+        float timeInChase = 0.0F;          // Total time chase has been active
+        float startDistance = 12.0F;        // Chase start distance (DBD-like)
+        float endDistance = 18.0F;          // Chase end distance (DBD-like)
+        float lostSightTimeout = 8.0F;      // DBD-like: 8s lost LOS timeout
+        float lostCenterFOVTimeout = 8.0F;  // DBD-like: 8s lost center FOV timeout
+    };
+
+    struct BloodlustState
+    {
+        int tier = 0;                          // 0-3 (0 = none, 1/2/3 = active tiers)
+        float timeInChase = 0.0F;              // Time spent in current chase (for tier thresholds)
+        float lastTierChangeTime = 0.0F;        // When the last tier change occurred
     };
 
     struct TimedMessage
@@ -532,6 +773,7 @@ private:
     void UpdateKillerAttack(const RoleCommand& killerCommand, float fixedDt);
     void UpdatePalletBreak(float fixedDt);
     void UpdateChaseState(float fixedDt);
+    void UpdateBloodlust(float fixedDt);
     void UpdateCamera(float deltaSeconds);
 
     [[nodiscard]] CameraMode ResolveCameraMode() const;
@@ -584,6 +826,38 @@ private:
     [[nodiscard]] static float DistanceXZ(const glm::vec3& a, const glm::vec3& b);
     [[nodiscard]] static float DistancePointToSegment(const glm::vec3& point, const glm::vec3& segmentA, const glm::vec3& segmentB);
     [[nodiscard]] static glm::vec3 ForwardFromYawPitch(float yaw, float pitch);
+    void InitializeLoadoutCatalog();
+    void RefreshLoadoutModifiers();
+    void ResetItemAndPowerRuntimeState();
+    void UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt);
+    void UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt);
+    void UpdateWraithPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void ApplySurvivorItemActionLock(float durationSeconds);
+    bool TryDropSurvivorItemToGround();
+    bool TryPickupSurvivorGroundItem();
+    bool TrySwapSurvivorGroundItem();
+    [[nodiscard]] engine::scene::Entity FindNearestGroundItem(const glm::vec3& fromPosition, float radiusMeters) const;
+    engine::scene::Entity SpawnGroundItemEntity(
+        const std::string& itemId,
+        const glm::vec3& position,
+        float charges,
+        const std::string& addonAId = std::string{},
+        const std::string& addonBId = std::string{},
+        bool respawnTag = false
+    );
+    void SpawnInitialTrapperGroundTraps();
+    bool TryFindNearestTrap(
+        const glm::vec3& fromPosition,
+        float radiusMeters,
+        bool requireDisarmed,
+        engine::scene::Entity* outTrapEntity
+    ) const;
+    bool ComputeTrapPlacementPreview(glm::vec3* outPosition, glm::vec3* outHalfExtents, bool* outValid = nullptr) const;
+    engine::scene::Entity SpawnBearTrap(const glm::vec3& basePosition, const glm::vec3& forward, bool emitMessage = true);
+    void ClearAllBearTraps();
+    void TryTriggerBearTraps(engine::scene::Entity survivorEntity, const glm::vec3& survivorPos);
+    void ClearTrappedSurvivorBinding(engine::scene::Entity survivorEntity, bool disarmTrap);
     static const char* CameraModeToName(CameraMode mode);
     [[nodiscard]] const char* MapTypeToName(MapType type) const;
     static std::uint8_t MapTypeToByte(MapType type);
@@ -593,6 +867,12 @@ private:
     static const char* RoleNameFromEnum(engine::scene::Role role);
     static bool IsEnemyRole(engine::scene::Role myRole, engine::scene::Role otherRole);
     static engine::scene::Role ParseRoleEnum(const std::string& roleName);
+    [[nodiscard]] static bool IsSurvivorInKillerFOV(
+        const glm::vec3& killerPos, const glm::vec3& killerForward,
+        const glm::vec3& survivorPos, float fovDegrees = 87.0F);
+    [[nodiscard]] static bool IsSurvivorInKillerCenterFOV(
+        const glm::vec3& killerPos, const glm::vec3& killerForward,
+        const glm::vec3& survivorPos); // Uses ±35° center FOV (DBD-like)
 
     engine::core::EventBus* m_eventBus = nullptr;
 
@@ -616,6 +896,7 @@ private:
 
     ChaseState m_chase;
     std::optional<bool> m_forcedChase;
+    BloodlustState m_bloodlust{};
 
     InteractionCandidate m_interactionCandidate{};
     float m_interactionPromptHoldSeconds = 0.0F;
@@ -706,7 +987,7 @@ private:
     float m_skillCheckTimeToNext = 2.0F;
     float m_survivorSpeedPercent = 1.0F;
     float m_killerSpeedPercent = 1.15F;
-    std::mt19937 m_rng;
+    mutable std::mt19937 m_rng;
 
     float m_survivorLookSensitivity = 0.0022F;
     float m_killerLookSensitivity = 0.0022F;
@@ -742,10 +1023,139 @@ private:
     perks::PerkLoadout m_survivorPerks;
     perks::PerkLoadout m_killerPerks;
 
+    loadout::GameplayCatalog m_loadoutCatalog;
+    loadout::LoadoutSurvivor m_survivorLoadout;
+    loadout::LoadoutKiller m_killerLoadout;
+    loadout::AddonModifierContext m_survivorItemModifiers;
+    loadout::AddonModifierContext m_killerPowerModifiers;
+    std::string m_selectedSurvivorCharacterId = "survivor_dwight";
+    std::string m_selectedKillerCharacterId = "killer_trapper";
+    bool m_trapDebugEnabled = false;
+
+    struct SurvivorItemRuntimeState
+    {
+        float charges = 0.0F;
+        bool active = false;
+        float cooldown = 0.0F;
+        float flashBlindAccum = 0.0F;
+        float flashlightBatterySeconds = 0.0F;
+        float flashlightSuccessFlashTimer = 0.0F;
+        float actionLockTimer = 0.0F;
+        float mapRevealTtl = 0.0F;
+        float mapChannelSeconds = 0.0F;
+        int mapUsesRemaining = 0;
+        engine::scene::Entity mapRevealLastGenerator = 0;
+        float trapDisarmProgress = 0.0F;
+        engine::scene::Entity trapDisarmTarget = 0;
+    };
+
+    struct KillerPowerRuntimeState
+    {
+        int trapperCarriedTraps = 0;
+        int trapperMaxCarryTraps = 5;
+        float trapperSetTimer = 0.0F;
+        bool trapperSetting = false;
+        bool trapperSetRequiresRelease = false;
+        engine::scene::Entity trapperFocusTrap = 0;
+
+        bool wraithCloaked = false;
+        bool wraithCloakTransition = false;
+        bool wraithUncloakTransition = false;
+        float wraithTransitionTimer = 0.0F;
+        float wraithPostUncloakTimer = 0.0F;
+
+        float killerBlindTimer = 0.0F;
+    };
+
+    SurvivorItemRuntimeState m_survivorItemState{};
+    KillerPowerRuntimeState m_killerPowerState{};
+    std::unordered_map<engine::scene::Entity, float> m_mapRevealGenerators;
+    std::string m_trapIndicatorText;
+    float m_trapIndicatorTimer = 0.0F;
+    bool m_trapIndicatorDanger = true;
+    glm::vec3 m_trapPreviewPosition{0.0F};
+    glm::vec3 m_trapPreviewHalfExtents{0.36F, 0.08F, 0.36F};
+    bool m_trapPreviewActive = false;
+    bool m_trapPreviewValid = true;
     engine::render::Frustum m_frustum{};
     engine::render::StaticBatcher m_staticBatcher{};
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
+
+    // Phase B2/B3: Scratch Marks and Blood Pools (Refactored for determinism)
+    static constexpr int kScratchMarkPoolSize = 64;
+    static constexpr int kBloodPoolPoolSize = 32;
+
+    struct ScratchMark
+    {
+        glm::vec3 position{0.0F};
+        glm::vec3 direction{0.0F, 0.0F, -1.0F};
+        glm::vec3 perpOffset{0.0F};
+        float age = 0.0F;
+        float lifetime = 30.0F;
+        float size = 0.35F;
+        bool active = false;
+    };
+
+    struct BloodPool
+    {
+        glm::vec3 position{0.0F};
+        float age = 0.0F;
+        float lifetime = 120.0F;
+        float size = 0.5F;
+        bool active = false;
+    };
+
+    struct ScratchProfile
+    {
+        float spawnIntervalMin = 0.15F;
+        float spawnIntervalMax = 0.25F;
+        float lifetime = 30.0F;
+        float sizeMin = 0.3F;
+        float sizeMax = 0.5F;
+        float jitterRadius = 0.5F;
+        float minDistanceFromLast = 0.3F;
+        bool allowSurvivorSeeOwn = false;
+    };
+
+    struct BloodProfile
+    {
+        float spawnInterval = 2.0F;
+        float lifetime = 120.0F;
+        float sizeMin = 0.4F;
+        float sizeMax = 0.7F;
+        float minDistanceFromLast = 0.5F;
+        bool onlyWhenMoving = true;
+        bool allowSurvivorSeeOwn = false;
+    };
+
+    void UpdateScratchMarks(float fixedDt, const glm::vec3& survivorPos, const glm::vec3& survivorForward, bool survivorSprinting);
+    void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
+    void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
+    void RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const;
+    [[nodiscard]] bool CanSeeScratchMarks(bool localIsKiller) const;
+    [[nodiscard]] bool CanSeeBloodPools(bool localIsKiller) const;
+
+    [[nodiscard]] static float DeterministicRandom(const glm::vec3& position, int seed);
+    [[nodiscard]] static glm::vec3 ComputePerpendicular(const glm::vec3& forward);
+
+    std::array<ScratchMark, kScratchMarkPoolSize> m_scratchMarks{};
+    std::array<BloodPool, kBloodPoolPoolSize> m_bloodPools{};
+    int m_scratchMarkHead = 0;
+    int m_bloodPoolHead = 0;
+    float m_scratchSpawnAccumulator = 0.0F;
+    float m_scratchNextInterval = 0.2F;
+    float m_bloodSpawnAccumulator = 0.0F;
+    glm::vec3 m_lastScratchSpawnPos{-10000.0F, 0.0F, -10000.0F};
+    glm::vec3 m_lastBloodSpawnPos{-10000.0F, 0.0F, -10000.0F};
+    ScratchProfile m_scratchProfile{};
+    BloodProfile m_bloodProfile{};
+    bool m_scratchDebugEnabled = false;
+    bool m_bloodDebugEnabled = false;
+
+    KillerLookLight m_killerLookLight{};
+    bool m_killerLookLightDebug = false;
+    std::size_t m_mapSpotLightCount = 0;
 };
 
 } // namespace game::gameplay

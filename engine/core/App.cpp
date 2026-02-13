@@ -70,6 +70,11 @@ constexpr std::uint16_t kButtonAttackHeld = 1 << 7;
 constexpr std::uint16_t kButtonAttackReleased = 1 << 8;
 constexpr std::uint16_t kButtonCrouchHeld = 1 << 9;
 constexpr std::uint16_t kButtonLungeHeld = 1 << 10;
+constexpr std::uint16_t kButtonUseAltPressed = 1 << 11;
+constexpr std::uint16_t kButtonUseAltHeld = 1 << 12;
+constexpr std::uint16_t kButtonUseAltReleased = 1 << 13;
+constexpr std::uint16_t kButtonDropItemPressed = 1 << 14;
+constexpr std::uint16_t kButtonPickupItemPressed = 1 << 15;
 
 std::string RenderModeToText(render::RenderMode mode)
 {
@@ -146,6 +151,27 @@ std::uint8_t RoleNameToByte(const std::string& roleName)
 std::string RoleByteToName(std::uint8_t roleByte)
 {
     return roleByte == 1U ? "killer" : "survivor";
+}
+
+audio::AudioSystem::Bus AudioBusFromName(const std::string& value)
+{
+    if (value == "music")
+    {
+        return audio::AudioSystem::Bus::Music;
+    }
+    if (value == "ui")
+    {
+        return audio::AudioSystem::Bus::Ui;
+    }
+    if (value == "ambience" || value == "ambient")
+    {
+        return audio::AudioSystem::Bus::Ambience;
+    }
+    if (value == "master")
+    {
+        return audio::AudioSystem::Bus::Master;
+    }
+    return audio::AudioSystem::Bus::Sfx;
 }
 
 glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
@@ -274,6 +300,7 @@ bool App::Run()
 
     (void)LoadControlsConfig();
     (void)LoadGraphicsConfig();
+    (void)LoadAudioConfig();
     (void)LoadGameplayConfig();
     (void)LoadHudLayoutConfig();
 
@@ -325,6 +352,13 @@ bool App::Run()
         return false;
     }
     m_ui.SetGlobalUiScale(m_hudLayout.hudScale);
+
+    if (!m_audio.Initialize("assets/audio"))
+    {
+        std::cerr << "Warning: failed to initialize audio backend.\n";
+    }
+    ApplyAudioSettings();
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_renderer.SetRenderMode(m_graphicsApplied.renderMode);
 
@@ -566,6 +600,8 @@ bool App::Run()
         {
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
+            m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
+            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()));
         }
         else if (inEditor)
         {
@@ -577,12 +613,15 @@ bool App::Run()
                 m_window.FramebufferHeight()
             );
         }
+        m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
 
         m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
         glm::mat4 viewProjection{1.0F};
         if (inGame)
         {
             m_renderer.SetLightingEnabled(true);
+            m_renderer.SetPointLights(m_runtimeMapPointLights);
+            m_renderer.SetSpotLights(m_runtimeMapSpotLights);
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
@@ -913,6 +952,16 @@ bool App::Run()
         context.playerDump = [this]() {
             return PlayerDump();
         };
+        context.sceneDump = [this]() {
+            if (m_appMode == AppMode::Editor)
+            {
+                return m_levelEditor.SceneDump();
+            }
+            std::ostringstream oss;
+            oss << "GameplaySceneDump\n";
+            oss << " mode=in_game";
+            return oss.str();
+        };
 
         context.spawnRoleHere = [this](const std::string& roleName) {
             const bool ok = m_gameplay.SpawnRoleHere(roleName);
@@ -984,6 +1033,50 @@ bool App::Run()
         context.setTerrorRadiusMeters = [this](float meters) {
             m_gameplay.SetTerrorRadius(meters);
         };
+        context.setTerrorAudioDebug = [this](bool enabled) {
+            m_terrorAudioDebug = enabled;
+            if (enabled)
+            {
+                m_statusToastMessage = "Terror audio debug ON";
+            }
+            else
+            {
+                m_statusToastMessage = "Terror audio debug OFF";
+            }
+            m_statusToastUntilSeconds = glfwGetTime() + 2.0;
+        };
+        context.terrorRadiusDump = [this]() -> std::string {
+            return DumpTerrorRadiusState();
+        };
+        context.audioPlay = [this](const std::string& clip, const std::string& busName, bool loop) {
+            const audio::AudioSystem::Bus bus = AudioBusFromName(busName);
+            const audio::AudioSystem::PlayOptions options{};
+            audio::AudioSystem::SoundHandle handle = 0;
+            if (loop)
+            {
+                handle = m_audio.PlayLoop(clip, bus, options);
+                if (handle != 0)
+                {
+                    m_debugAudioLoops.push_back(handle);
+                }
+            }
+            else
+            {
+                handle = m_audio.PlayOneShot(clip, bus, options);
+            }
+            if (handle == 0)
+            {
+                AppendNetworkLog(std::string("AUDIO play failed: clip=") + clip + " bus=" + busName);
+            }
+        };
+        context.audioStopAll = [this]() {
+            for (const audio::AudioSystem::SoundHandle handle : m_debugAudioLoops)
+            {
+                m_audio.Stop(handle);
+            }
+            m_debugAudioLoops.clear();
+            m_audio.StopAll();
+        };
 
         m_console.Render(context, currentFps, hudState);
 
@@ -1022,6 +1115,7 @@ bool App::Run()
     m_console.Shutdown();
     m_devToolbar.Shutdown();
     m_ui.Shutdown();
+    m_audio.Shutdown();
     m_renderer.Shutdown();
     CloseNetworkLogFile();
     return true;
@@ -1029,6 +1123,11 @@ bool App::Run()
 
 void App::ResetToMainMenu()
 {
+    StopTerrorRadiusAudio();
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = 0;
+
     TransitionNetworkState(NetworkState::Disconnecting, "Reset to main menu");
     m_lanDiscovery.Stop();
     m_network.Disconnect();
@@ -1044,6 +1143,11 @@ void App::ResetToMainMenu()
     m_serverGameplayValues = false;
     ApplyGameplaySettings(m_gameplayApplied, false);
 
+    m_renderer.SetPointLights({});
+    m_renderer.SetSpotLights({});
+    m_runtimeMapPointLights.clear();
+    m_runtimeMapSpotLights.clear();
+    m_gameplay.SetMapSpotLightCount(0);
     m_sessionRoleName = "survivor";
     m_remoteRoleName = "killer";
     m_sessionMapName = "main";
@@ -1073,6 +1177,17 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
 
     TransitionNetworkState(NetworkState::Offline, "Solo session");
     m_multiplayerMode = MultiplayerMode::Solo;
+    m_appMode = AppMode::InGame;
+    m_pauseMenuOpen = false;
+    m_settingsMenuOpen = false;
+    m_settingsOpenedFromPause = false;
+    m_menuNetStatus = "Solo session started.";
+    m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
+
     m_sessionMapName = mapName;
     m_sessionRoleName = NormalizeRoleName(roleName);
     m_remoteRoleName = OppositeRoleName(m_sessionRoleName);
@@ -1136,6 +1251,10 @@ bool App::StartHostSession(const std::string& mapName, const std::string& roleNa
     m_settingsMenuOpen = false;
     m_settingsOpenedFromPause = false;
     m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_sessionRoleName = NormalizeRoleName(roleName);
     m_remoteRoleName = OppositeRoleName(m_sessionRoleName);
@@ -1193,6 +1312,10 @@ bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std:
     m_settingsMenuOpen = false;
     m_settingsOpenedFromPause = false;
     m_serverGameplayValues = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
 
     m_preferredJoinRole = NormalizeRoleName(preferredRole);
     m_sessionRoleName = m_preferredJoinRole;
@@ -1319,6 +1442,11 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         command.lungeHeld = (inputPacket.buttons & kButtonLungeHeld) != 0;
         command.jumpPressed = (inputPacket.buttons & kButtonJumpPressed) != 0;
         command.crouchHeld = (inputPacket.buttons & kButtonCrouchHeld) != 0;
+        command.useAltPressed = (inputPacket.buttons & kButtonUseAltPressed) != 0;
+        command.useAltHeld = (inputPacket.buttons & kButtonUseAltHeld) != 0;
+        command.useAltReleased = (inputPacket.buttons & kButtonUseAltReleased) != 0;
+        command.dropItemPressed = (inputPacket.buttons & kButtonDropItemPressed) != 0;
+        command.pickupItemPressed = (inputPacket.buttons & kButtonPickupItemPressed) != 0;
         command.wiggleLeftPressed = (inputPacket.buttons & kButtonWiggleLeftPressed) != 0;
         command.wiggleRightPressed = (inputPacket.buttons & kButtonWiggleRightPressed) != 0;
 
@@ -1525,6 +1653,26 @@ void App::SendClientInput(const engine::platform::Input& input, bool controlsEna
         {
             packet.buttons |= kButtonLungeHeld;
         }
+        if (input.IsMousePressed(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltPressed;
+        }
+        if (input.IsMouseDown(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltHeld;
+        }
+        if (input.IsMouseReleased(GLFW_MOUSE_BUTTON_RIGHT))
+        {
+            packet.buttons |= kButtonUseAltReleased;
+        }
+        if (input.IsKeyPressed(GLFW_KEY_R))
+        {
+            packet.buttons |= kButtonDropItemPressed;
+        }
+        if (input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            packet.buttons |= kButtonPickupItemPressed;
+        }
         if (input.IsKeyPressed(GLFW_KEY_SPACE))
         {
             packet.buttons |= kButtonJumpPressed;
@@ -1641,6 +1789,21 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     writePerks(snapshot.survivorPerkIds);
     writePerks(snapshot.killerPerkIds);
 
+    auto writeString = [&](const std::string& value, std::uint16_t maxLen) {
+        const std::uint16_t length = static_cast<std::uint16_t>(std::min<std::size_t>(value.size(), maxLen));
+        AppendValue(outBuffer, length);
+        outBuffer.insert(outBuffer.end(), value.begin(), value.begin() + length);
+    };
+
+    writeString(snapshot.survivorCharacterId, 128);
+    writeString(snapshot.killerCharacterId, 128);
+    writeString(snapshot.survivorItemId, 128);
+    writeString(snapshot.survivorItemAddonA, 128);
+    writeString(snapshot.survivorItemAddonB, 128);
+    writeString(snapshot.killerPowerId, 128);
+    writeString(snapshot.killerPowerAddonA, 128);
+    writeString(snapshot.killerPowerAddonB, 128);
+
     auto writeActor = [&](const game::gameplay::GameplaySystems::ActorSnapshot& actor) {
         AppendValue(outBuffer, actor.position.x);
         AppendValue(outBuffer, actor.position.y);
@@ -1665,6 +1828,20 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
     AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseActive ? 1 : 0));
     AppendValue(outBuffer, snapshot.chaseDistance);
     AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseLos ? 1 : 0));
+    AppendValue(outBuffer, static_cast<std::uint8_t>(snapshot.chaseInCenterFOV ? 1 : 0));
+    AppendValue(outBuffer, snapshot.chaseTimeSinceLOS);
+    AppendValue(outBuffer, snapshot.chaseTimeSinceCenterFOV);
+    AppendValue(outBuffer, snapshot.chaseTimeInChase);
+    AppendValue(outBuffer, snapshot.bloodlustTier);
+    AppendValue(outBuffer, snapshot.survivorItemCharges);
+    AppendValue(outBuffer, snapshot.survivorItemActive);
+    AppendValue(outBuffer, snapshot.survivorItemUsesRemaining);
+    AppendValue(outBuffer, snapshot.wraithCloaked);
+    AppendValue(outBuffer, snapshot.wraithTransitionTimer);
+    AppendValue(outBuffer, snapshot.wraithPostUncloakTimer);
+    AppendValue(outBuffer, snapshot.killerBlindTimer);
+    AppendValue(outBuffer, snapshot.killerBlindStyleWhite);
+    AppendValue(outBuffer, snapshot.carriedTrapCount);
 
     const std::uint16_t palletCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.pallets.size(), 1024));
     AppendValue(outBuffer, palletCount);
@@ -1680,6 +1857,40 @@ bool App::SerializeSnapshot(const game::gameplay::GameplaySystems::Snapshot& sna
         AppendValue(outBuffer, pallet.halfExtents.x);
         AppendValue(outBuffer, pallet.halfExtents.y);
         AppendValue(outBuffer, pallet.halfExtents.z);
+    }
+
+    const std::uint16_t trapCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.traps.size(), 1024));
+    AppendValue(outBuffer, trapCount);
+    for (std::size_t i = 0; i < trapCount; ++i)
+    {
+        const auto& trap = snapshot.traps[i];
+        AppendValue(outBuffer, trap.entity);
+        AppendValue(outBuffer, trap.state);
+        AppendValue(outBuffer, trap.trappedEntity);
+        AppendValue(outBuffer, trap.position.x);
+        AppendValue(outBuffer, trap.position.y);
+        AppendValue(outBuffer, trap.position.z);
+        AppendValue(outBuffer, trap.halfExtents.x);
+        AppendValue(outBuffer, trap.halfExtents.y);
+        AppendValue(outBuffer, trap.halfExtents.z);
+        AppendValue(outBuffer, trap.escapeChance);
+        AppendValue(outBuffer, trap.escapeAttempts);
+        AppendValue(outBuffer, trap.maxEscapeAttempts);
+    }
+
+    const std::uint16_t groundItemCount = static_cast<std::uint16_t>(std::min<std::size_t>(snapshot.groundItems.size(), 1024));
+    AppendValue(outBuffer, groundItemCount);
+    for (std::size_t i = 0; i < groundItemCount; ++i)
+    {
+        const auto& groundItem = snapshot.groundItems[i];
+        AppendValue(outBuffer, groundItem.entity);
+        AppendValue(outBuffer, groundItem.position.x);
+        AppendValue(outBuffer, groundItem.position.y);
+        AppendValue(outBuffer, groundItem.position.z);
+        AppendValue(outBuffer, groundItem.charges);
+        writeString(groundItem.itemId, 128);
+        writeString(groundItem.addonAId, 128);
+        writeString(groundItem.addonBId, 128);
     }
 
     return true;
@@ -1730,6 +1941,33 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         return false;
     }
 
+    auto readString = [&](std::string& outValue) {
+        std::uint16_t length = 0;
+        if (!ReadValue(buffer, offset, length))
+        {
+            return false;
+        }
+        if (offset + length > buffer.size())
+        {
+            return false;
+        }
+        outValue.assign(reinterpret_cast<const char*>(buffer.data() + offset), length);
+        offset += length;
+        return true;
+    };
+
+    if (!readString(outSnapshot.survivorCharacterId) ||
+        !readString(outSnapshot.killerCharacterId) ||
+        !readString(outSnapshot.survivorItemId) ||
+        !readString(outSnapshot.survivorItemAddonA) ||
+        !readString(outSnapshot.survivorItemAddonB) ||
+        !readString(outSnapshot.killerPowerId) ||
+        !readString(outSnapshot.killerPowerAddonA) ||
+        !readString(outSnapshot.killerPowerAddonB))
+    {
+        return false;
+    }
+
     auto readActor = [&](game::gameplay::GameplaySystems::ActorSnapshot& actor) {
         return ReadValue(buffer, offset, actor.position.x) &&
                ReadValue(buffer, offset, actor.position.y) &&
@@ -1751,19 +1989,35 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
 
     std::uint8_t chaseActiveByte = 0;
     std::uint8_t chaseLosByte = 0;
+    std::uint8_t chaseInCenterFOVByte = 0;
     if (!ReadValue(buffer, offset, outSnapshot.survivorState) ||
         !ReadValue(buffer, offset, outSnapshot.killerAttackState) ||
         !ReadValue(buffer, offset, outSnapshot.killerAttackStateTimer) ||
         !ReadValue(buffer, offset, outSnapshot.killerLungeCharge) ||
         !ReadValue(buffer, offset, chaseActiveByte) ||
         !ReadValue(buffer, offset, outSnapshot.chaseDistance) ||
-        !ReadValue(buffer, offset, chaseLosByte))
+        !ReadValue(buffer, offset, chaseLosByte) ||
+        !ReadValue(buffer, offset, chaseInCenterFOVByte) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceLOS) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeSinceCenterFOV) ||
+        !ReadValue(buffer, offset, outSnapshot.chaseTimeInChase) ||
+        !ReadValue(buffer, offset, outSnapshot.bloodlustTier) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemCharges) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemActive) ||
+        !ReadValue(buffer, offset, outSnapshot.survivorItemUsesRemaining) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithCloaked) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithTransitionTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.wraithPostUncloakTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.killerBlindTimer) ||
+        !ReadValue(buffer, offset, outSnapshot.killerBlindStyleWhite) ||
+        !ReadValue(buffer, offset, outSnapshot.carriedTrapCount))
     {
         return false;
     }
 
     outSnapshot.chaseActive = chaseActiveByte != 0;
     outSnapshot.chaseLos = chaseLosByte != 0;
+    outSnapshot.chaseInCenterFOV = chaseInCenterFOVByte != 0;
 
     std::uint16_t palletCount = 0;
     if (!ReadValue(buffer, offset, palletCount))
@@ -1791,6 +2045,61 @@ bool App::DeserializeSnapshot(const std::vector<std::uint8_t>& buffer, game::gam
         }
 
         outSnapshot.pallets.push_back(pallet);
+    }
+
+    std::uint16_t trapCount = 0;
+    if (!ReadValue(buffer, offset, trapCount))
+    {
+        return false;
+    }
+    outSnapshot.traps.clear();
+    outSnapshot.traps.reserve(trapCount);
+    for (std::uint16_t i = 0; i < trapCount; ++i)
+    {
+        game::gameplay::GameplaySystems::TrapSnapshot trap;
+        if (!ReadValue(buffer, offset, trap.entity) ||
+            !ReadValue(buffer, offset, trap.state) ||
+            !ReadValue(buffer, offset, trap.trappedEntity) ||
+            !ReadValue(buffer, offset, trap.position.x) ||
+            !ReadValue(buffer, offset, trap.position.y) ||
+            !ReadValue(buffer, offset, trap.position.z) ||
+            !ReadValue(buffer, offset, trap.halfExtents.x) ||
+            !ReadValue(buffer, offset, trap.halfExtents.y) ||
+            !ReadValue(buffer, offset, trap.halfExtents.z) ||
+            !ReadValue(buffer, offset, trap.escapeChance) ||
+            !ReadValue(buffer, offset, trap.escapeAttempts) ||
+            !ReadValue(buffer, offset, trap.maxEscapeAttempts))
+        {
+            return false;
+        }
+        outSnapshot.traps.push_back(trap);
+    }
+
+    std::uint16_t groundItemCount = 0;
+    if (!ReadValue(buffer, offset, groundItemCount))
+    {
+        return false;
+    }
+    outSnapshot.groundItems.clear();
+    outSnapshot.groundItems.reserve(groundItemCount);
+    for (std::uint16_t i = 0; i < groundItemCount; ++i)
+    {
+        game::gameplay::GameplaySystems::GroundItemSnapshot groundItem;
+        if (!ReadValue(buffer, offset, groundItem.entity) ||
+            !ReadValue(buffer, offset, groundItem.position.x) ||
+            !ReadValue(buffer, offset, groundItem.position.y) ||
+            !ReadValue(buffer, offset, groundItem.position.z) ||
+            !ReadValue(buffer, offset, groundItem.charges))
+        {
+            return false;
+        }
+        if (!readString(groundItem.itemId) ||
+            !readString(groundItem.addonAId) ||
+            !readString(groundItem.addonBId))
+        {
+            return false;
+        }
+        outSnapshot.groundItems.push_back(groundItem);
     }
 
     return true;
@@ -1833,6 +2142,35 @@ bool App::SerializeGameplayTuning(
     AppendValue(outBuffer, tuning.healDurationSeconds);
     AppendValue(outBuffer, tuning.skillCheckMinInterval);
     AppendValue(outBuffer, tuning.skillCheckMaxInterval);
+    AppendValue(outBuffer, tuning.generatorRepairSecondsBase);
+    AppendValue(outBuffer, tuning.medkitFullHealCharges);
+    AppendValue(outBuffer, tuning.medkitHealSpeedMultiplier);
+    AppendValue(outBuffer, tuning.toolboxCharges);
+    AppendValue(outBuffer, tuning.toolboxChargeDrainPerSecond);
+    AppendValue(outBuffer, tuning.toolboxRepairSpeedBonus);
+    AppendValue(outBuffer, tuning.flashlightMaxUseSeconds);
+    AppendValue(outBuffer, tuning.flashlightBlindBuildSeconds);
+    AppendValue(outBuffer, tuning.flashlightBlindDurationSeconds);
+    AppendValue(outBuffer, tuning.flashlightBeamRange);
+    AppendValue(outBuffer, tuning.flashlightBeamAngleDegrees);
+    AppendValue(outBuffer, tuning.flashlightBlindStyle);
+    AppendValue(outBuffer, tuning.mapChannelSeconds);
+    AppendValue(outBuffer, tuning.mapUses);
+    AppendValue(outBuffer, tuning.mapRevealRangeMeters);
+    AppendValue(outBuffer, tuning.mapRevealDurationSeconds);
+    AppendValue(outBuffer, tuning.trapperStartCarryTraps);
+    AppendValue(outBuffer, tuning.trapperMaxCarryTraps);
+    AppendValue(outBuffer, tuning.trapperGroundSpawnTraps);
+    AppendValue(outBuffer, tuning.trapperSetTrapSeconds);
+    AppendValue(outBuffer, tuning.trapperDisarmSeconds);
+    AppendValue(outBuffer, tuning.trapEscapeBaseChance);
+    AppendValue(outBuffer, tuning.trapEscapeChanceStep);
+    AppendValue(outBuffer, tuning.trapEscapeChanceMax);
+    AppendValue(outBuffer, tuning.trapKillerStunSeconds);
+    AppendValue(outBuffer, tuning.wraithCloakMoveSpeedMultiplier);
+    AppendValue(outBuffer, tuning.wraithCloakTransitionSeconds);
+    AppendValue(outBuffer, tuning.wraithUncloakTransitionSeconds);
+    AppendValue(outBuffer, tuning.wraithPostUncloakHasteSeconds);
     AppendValue(outBuffer, tuning.weightTLWalls);
     AppendValue(outBuffer, tuning.weightJungleGymLong);
     AppendValue(outBuffer, tuning.weightJungleGymShort);
@@ -1899,6 +2237,35 @@ bool App::DeserializeGameplayTuning(
            ReadValue(buffer, offset, outTuning.healDurationSeconds) &&
            ReadValue(buffer, offset, outTuning.skillCheckMinInterval) &&
            ReadValue(buffer, offset, outTuning.skillCheckMaxInterval) &&
+           ReadValue(buffer, offset, outTuning.generatorRepairSecondsBase) &&
+           ReadValue(buffer, offset, outTuning.medkitFullHealCharges) &&
+           ReadValue(buffer, offset, outTuning.medkitHealSpeedMultiplier) &&
+           ReadValue(buffer, offset, outTuning.toolboxCharges) &&
+           ReadValue(buffer, offset, outTuning.toolboxChargeDrainPerSecond) &&
+           ReadValue(buffer, offset, outTuning.toolboxRepairSpeedBonus) &&
+           ReadValue(buffer, offset, outTuning.flashlightMaxUseSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindBuildSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindDurationSeconds) &&
+           ReadValue(buffer, offset, outTuning.flashlightBeamRange) &&
+           ReadValue(buffer, offset, outTuning.flashlightBeamAngleDegrees) &&
+           ReadValue(buffer, offset, outTuning.flashlightBlindStyle) &&
+           ReadValue(buffer, offset, outTuning.mapChannelSeconds) &&
+           ReadValue(buffer, offset, outTuning.mapUses) &&
+           ReadValue(buffer, offset, outTuning.mapRevealRangeMeters) &&
+           ReadValue(buffer, offset, outTuning.mapRevealDurationSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapperStartCarryTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperMaxCarryTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperGroundSpawnTraps) &&
+           ReadValue(buffer, offset, outTuning.trapperSetTrapSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapperDisarmSeconds) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeBaseChance) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeChanceStep) &&
+           ReadValue(buffer, offset, outTuning.trapEscapeChanceMax) &&
+           ReadValue(buffer, offset, outTuning.trapKillerStunSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithCloakMoveSpeedMultiplier) &&
+           ReadValue(buffer, offset, outTuning.wraithCloakTransitionSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithUncloakTransitionSeconds) &&
+           ReadValue(buffer, offset, outTuning.wraithPostUncloakHasteSeconds) &&
            ReadValue(buffer, offset, outTuning.weightTLWalls) &&
            ReadValue(buffer, offset, outTuning.weightJungleGymLong) &&
            ReadValue(buffer, offset, outTuning.weightJungleGymShort) &&
@@ -2818,6 +3185,92 @@ bool App::SaveGraphicsConfig() const
     return true;
 }
 
+bool App::LoadAudioConfig()
+{
+    m_audioSettings = AudioSettings{};
+
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "audio.json";
+    if (!std::filesystem::exists(path))
+    {
+        return SaveAudioConfig();
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        m_audioStatus = "Failed to open audio config.";
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        m_audioStatus = "Invalid audio config. Using defaults.";
+        return SaveAudioConfig();
+    }
+
+    auto readFloat = [&](const char* key, float& target) {
+        if (root.contains(key) && root[key].is_number())
+        {
+            target = root[key].get<float>();
+        }
+    };
+    auto readBool = [&](const char* key, bool& target) {
+        if (root.contains(key) && root[key].is_boolean())
+        {
+            target = root[key].get<bool>();
+        }
+    };
+
+    readFloat("master", m_audioSettings.master);
+    readFloat("music", m_audioSettings.music);
+    readFloat("sfx", m_audioSettings.sfx);
+    readFloat("ui", m_audioSettings.ui);
+    readFloat("ambience", m_audioSettings.ambience);
+    readBool("muted", m_audioSettings.muted);
+    readFloat("killer_light_red", m_audioSettings.killerLightRed);
+    readFloat("killer_light_green", m_audioSettings.killerLightGreen);
+    readFloat("killer_light_blue", m_audioSettings.killerLightBlue);
+
+    m_audioSettings.master = glm::clamp(m_audioSettings.master, 0.0F, 1.0F);
+    m_audioSettings.music = glm::clamp(m_audioSettings.music, 0.0F, 1.0F);
+    m_audioSettings.sfx = glm::clamp(m_audioSettings.sfx, 0.0F, 1.0F);
+    m_audioSettings.ui = glm::clamp(m_audioSettings.ui, 0.0F, 1.0F);
+    m_audioSettings.ambience = glm::clamp(m_audioSettings.ambience, 0.0F, 1.0F);
+    return true;
+}
+
+bool App::SaveAudioConfig() const
+{
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "audio.json";
+
+    json root;
+    root["asset_version"] = m_audioSettings.assetVersion;
+    root["master"] = m_audioSettings.master;
+    root["music"] = m_audioSettings.music;
+    root["sfx"] = m_audioSettings.sfx;
+    root["ui"] = m_audioSettings.ui;
+    root["ambience"] = m_audioSettings.ambience;
+    root["muted"] = m_audioSettings.muted;
+    root["killer_light_red"] = m_audioSettings.killerLightRed;
+    root["killer_light_green"] = m_audioSettings.killerLightGreen;
+    root["killer_light_blue"] = m_audioSettings.killerLightBlue;
+
+    std::ofstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+    stream << root.dump(2) << "\n";
+    return true;
+}
+
 bool App::LoadGameplayConfig()
 {
     m_gameplayApplied = game::gameplay::GameplaySystems::GameplayTuning{};
@@ -2890,6 +3343,35 @@ bool App::LoadGameplayConfig()
     readFloat("heal_duration", m_gameplayApplied.healDurationSeconds);
     readFloat("skillcheck_interval_min", m_gameplayApplied.skillCheckMinInterval);
     readFloat("skillcheck_interval_max", m_gameplayApplied.skillCheckMaxInterval);
+    readFloat("generator_repair_seconds_base", m_gameplayApplied.generatorRepairSecondsBase);
+    readFloat("medkit_full_heal_charges", m_gameplayApplied.medkitFullHealCharges);
+    readFloat("medkit_heal_speed_multiplier", m_gameplayApplied.medkitHealSpeedMultiplier);
+    readFloat("toolbox_charges", m_gameplayApplied.toolboxCharges);
+    readFloat("toolbox_charge_drain_per_second", m_gameplayApplied.toolboxChargeDrainPerSecond);
+    readFloat("toolbox_repair_speed_bonus", m_gameplayApplied.toolboxRepairSpeedBonus);
+    readFloat("flashlight_max_use_seconds", m_gameplayApplied.flashlightMaxUseSeconds);
+    readFloat("flashlight_blind_build_seconds", m_gameplayApplied.flashlightBlindBuildSeconds);
+    readFloat("flashlight_blind_duration_seconds", m_gameplayApplied.flashlightBlindDurationSeconds);
+    readFloat("flashlight_beam_range", m_gameplayApplied.flashlightBeamRange);
+    readFloat("flashlight_beam_angle_degrees", m_gameplayApplied.flashlightBeamAngleDegrees);
+    readInt("flashlight_blind_style", m_gameplayApplied.flashlightBlindStyle);
+    readFloat("map_channel_seconds", m_gameplayApplied.mapChannelSeconds);
+    readInt("map_uses", m_gameplayApplied.mapUses);
+    readFloat("map_reveal_range_meters", m_gameplayApplied.mapRevealRangeMeters);
+    readFloat("map_reveal_duration_seconds", m_gameplayApplied.mapRevealDurationSeconds);
+    readInt("trapper_start_carry_traps", m_gameplayApplied.trapperStartCarryTraps);
+    readInt("trapper_max_carry_traps", m_gameplayApplied.trapperMaxCarryTraps);
+    readInt("trapper_ground_spawn_traps", m_gameplayApplied.trapperGroundSpawnTraps);
+    readFloat("trapper_set_trap_seconds", m_gameplayApplied.trapperSetTrapSeconds);
+    readFloat("trapper_disarm_seconds", m_gameplayApplied.trapperDisarmSeconds);
+    readFloat("trap_escape_base_chance", m_gameplayApplied.trapEscapeBaseChance);
+    readFloat("trap_escape_chance_step", m_gameplayApplied.trapEscapeChanceStep);
+    readFloat("trap_escape_chance_max", m_gameplayApplied.trapEscapeChanceMax);
+    readFloat("trap_killer_stun_seconds", m_gameplayApplied.trapKillerStunSeconds);
+    readFloat("wraith_cloak_move_speed_multiplier", m_gameplayApplied.wraithCloakMoveSpeedMultiplier);
+    readFloat("wraith_cloak_transition_seconds", m_gameplayApplied.wraithCloakTransitionSeconds);
+    readFloat("wraith_uncloak_transition_seconds", m_gameplayApplied.wraithUncloakTransitionSeconds);
+    readFloat("wraith_post_uncloak_haste_seconds", m_gameplayApplied.wraithPostUncloakHasteSeconds);
     readFloat("weight_tl", m_gameplayApplied.weightTLWalls);
     readFloat("weight_jungle_long", m_gameplayApplied.weightJungleGymLong);
     readFloat("weight_jungle_short", m_gameplayApplied.weightJungleGymShort);
@@ -2943,6 +3425,35 @@ bool App::SaveGameplayConfig() const
     root["heal_duration"] = t.healDurationSeconds;
     root["skillcheck_interval_min"] = t.skillCheckMinInterval;
     root["skillcheck_interval_max"] = t.skillCheckMaxInterval;
+    root["generator_repair_seconds_base"] = t.generatorRepairSecondsBase;
+    root["medkit_full_heal_charges"] = t.medkitFullHealCharges;
+    root["medkit_heal_speed_multiplier"] = t.medkitHealSpeedMultiplier;
+    root["toolbox_charges"] = t.toolboxCharges;
+    root["toolbox_charge_drain_per_second"] = t.toolboxChargeDrainPerSecond;
+    root["toolbox_repair_speed_bonus"] = t.toolboxRepairSpeedBonus;
+    root["flashlight_max_use_seconds"] = t.flashlightMaxUseSeconds;
+    root["flashlight_blind_build_seconds"] = t.flashlightBlindBuildSeconds;
+    root["flashlight_blind_duration_seconds"] = t.flashlightBlindDurationSeconds;
+    root["flashlight_beam_range"] = t.flashlightBeamRange;
+    root["flashlight_beam_angle_degrees"] = t.flashlightBeamAngleDegrees;
+    root["flashlight_blind_style"] = t.flashlightBlindStyle;
+    root["map_channel_seconds"] = t.mapChannelSeconds;
+    root["map_uses"] = t.mapUses;
+    root["map_reveal_range_meters"] = t.mapRevealRangeMeters;
+    root["map_reveal_duration_seconds"] = t.mapRevealDurationSeconds;
+    root["trapper_start_carry_traps"] = t.trapperStartCarryTraps;
+    root["trapper_max_carry_traps"] = t.trapperMaxCarryTraps;
+    root["trapper_ground_spawn_traps"] = t.trapperGroundSpawnTraps;
+    root["trapper_set_trap_seconds"] = t.trapperSetTrapSeconds;
+    root["trapper_disarm_seconds"] = t.trapperDisarmSeconds;
+    root["trap_escape_base_chance"] = t.trapEscapeBaseChance;
+    root["trap_escape_chance_step"] = t.trapEscapeChanceStep;
+    root["trap_escape_chance_max"] = t.trapEscapeChanceMax;
+    root["trap_killer_stun_seconds"] = t.trapKillerStunSeconds;
+    root["wraith_cloak_move_speed_multiplier"] = t.wraithCloakMoveSpeedMultiplier;
+    root["wraith_cloak_transition_seconds"] = t.wraithCloakTransitionSeconds;
+    root["wraith_uncloak_transition_seconds"] = t.wraithUncloakTransitionSeconds;
+    root["wraith_post_uncloak_haste_seconds"] = t.wraithPostUncloakHasteSeconds;
     root["weight_tl"] = t.weightTLWalls;
     root["weight_jungle_long"] = t.weightJungleGymLong;
     root["weight_jungle_short"] = t.weightJungleGymShort;
@@ -2973,6 +3484,445 @@ void App::ApplyControlsSettings()
         m_controlsSettings.killerSensitivity,
         m_controlsSettings.invertY
     );
+}
+
+void App::ApplyAudioSettings()
+{
+    m_audioSettings.master = glm::clamp(m_audioSettings.master, 0.0F, 1.0F);
+    m_audioSettings.music = glm::clamp(m_audioSettings.music, 0.0F, 1.0F);
+    m_audioSettings.sfx = glm::clamp(m_audioSettings.sfx, 0.0F, 1.0F);
+    m_audioSettings.ui = glm::clamp(m_audioSettings.ui, 0.0F, 1.0F);
+    m_audioSettings.ambience = glm::clamp(m_audioSettings.ambience, 0.0F, 1.0F);
+
+    const float muteMul = m_audioSettings.muted ? 0.0F : 1.0F;
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Master, m_audioSettings.master * muteMul);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Music, m_audioSettings.music);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Sfx, m_audioSettings.sfx);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Ui, m_audioSettings.ui);
+    m_audio.SetBusVolume(audio::AudioSystem::Bus::Ambience, m_audioSettings.ambience);
+}
+
+bool App::LoadTerrorRadiusProfile(const std::string& killerId)
+{
+    StopTerrorRadiusAudio();
+    m_terrorAudioProfile = TerrorRadiusProfileAudio{};
+    m_terrorAudioProfile.killerId = killerId.empty() ? "default_killer" : killerId;
+
+    const std::filesystem::path dir = std::filesystem::path("assets") / "terror_radius";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / (m_terrorAudioProfile.killerId + ".json");
+
+    if (!std::filesystem::exists(path))
+    {
+        json defaults;
+        defaults["asset_version"] = 1;
+        defaults["killer_id"] = m_terrorAudioProfile.killerId;
+        defaults["base_radius"] = 32.0F;  // DBD-like: 32m default TR radius
+        defaults["smoothing_time"] = 0.25F; // Crossfade duration 0.15-0.35s
+        defaults["layers"] = json::array({
+            json{{"clip", "tr_far"}, {"fade_in_start", 0.0F}, {"fade_in_end", 0.45F}, {"gain", 0.15F}},
+            json{{"clip", "tr_mid"}, {"fade_in_start", 0.25F}, {"fade_in_end", 0.75F}, {"gain", 0.2F}},
+            json{{"clip", "tr_close"}, {"fade_in_start", 0.55F}, {"fade_in_end", 1.0F}, {"gain", 0.25F}},
+            json{{"clip", "tr_chase"}, {"fade_in_start", 0.0F}, {"fade_in_end", 1.0F}, {"gain", 0.25F}, {"chase_only", true}},
+        });
+        std::ofstream out(path);
+        if (out.is_open())
+        {
+            out << defaults.dump(2) << "\n";
+        }
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+
+    if (root.contains("base_radius") && root["base_radius"].is_number())
+    {
+        m_terrorAudioProfile.baseRadius = glm::clamp(root["base_radius"].get<float>(), 4.0F, 120.0F);
+    }
+    if (root.contains("smoothing_time") && root["smoothing_time"].is_number())
+    {
+        m_terrorAudioProfile.smoothingTime = glm::clamp(root["smoothing_time"].get<float>(), 0.15F, 0.35F);
+    }
+    if (root.contains("layers") && root["layers"].is_array())
+    {
+        for (const auto& layerJson : root["layers"])
+        {
+            if (!layerJson.is_object())
+            {
+                continue;
+            }
+            TerrorRadiusLayerAudio layer{};
+            if (layerJson.contains("clip") && layerJson["clip"].is_string())
+            {
+                layer.clip = layerJson["clip"].get<std::string>();
+            }
+            if (layer.clip.empty())
+            {
+                continue;
+            }
+            if (layerJson.contains("fade_in_start") && layerJson["fade_in_start"].is_number())
+            {
+                layer.fadeInStart = glm::clamp(layerJson["fade_in_start"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layerJson.contains("fade_in_end") && layerJson["fade_in_end"].is_number())
+            {
+                layer.fadeInEnd = glm::clamp(layerJson["fade_in_end"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layer.fadeInEnd < layer.fadeInStart)
+            {
+                std::swap(layer.fadeInEnd, layer.fadeInStart);
+            }
+            if (layerJson.contains("gain") && layerJson["gain"].is_number())
+            {
+                layer.gain = glm::clamp(layerJson["gain"].get<float>(), 0.0F, 1.0F);
+            }
+            if (layerJson.contains("chase_only") && layerJson["chase_only"].is_boolean())
+            {
+                layer.chaseOnly = layerJson["chase_only"].get<bool>();
+            }
+            m_terrorAudioProfile.layers.push_back(layer);
+        }
+    }
+
+    // First pass: Start all TR layers at 0 volume
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        const audio::AudioSystem::PlayOptions options{};
+        layer.handle = m_audio.PlayLoop(layer.clip, audio::AudioSystem::Bus::Music, options);
+        layer.currentVolume = 0.0F;
+        std::cout << "[TR Load] clip=" << layer.clip << " handle=" << layer.handle << "\n";
+        if (layer.handle != 0)
+        {
+            (void)m_audio.SetHandleVolume(layer.handle, 0.0F);
+        }
+        else
+        {
+            std::cerr << "[TR Load] Failed to load layer: " << layer.clip << "\n";
+        }
+    }
+
+    // Second pass: Sync all layers to the same playback cursor
+    // This prevents phase jumps when switching to chase music
+    audio::AudioSystem::SoundHandle firstHandle = 0;
+    std::uint64_t referenceCursor = 0;
+
+    for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        if (layer.handle != 0)
+        {
+            if (firstHandle == 0)
+            {
+                // Use first successfully loaded layer as reference
+                firstHandle = layer.handle;
+                referenceCursor = m_audio.GetSoundCursorInPcmFrames(layer.handle);
+                std::cout << "[TR Load] Reference handle=" << layer.handle << " cursor=" << referenceCursor << "\n";
+            }
+            else
+            {
+                // Sync all other layers to the reference cursor
+                (void)m_audio.SeekSoundToPcmFrame(layer.handle, referenceCursor);
+                std::cout << "[TR Load] Synced " << layer.clip << " to cursor=" << referenceCursor << "\n";
+            }
+        }
+    }
+
+    m_terrorAudioProfile.loaded = !m_terrorAudioProfile.layers.empty();
+    std::cout << "[TR Load] Loaded " << m_terrorAudioProfile.layers.size() << " layers, loaded=" << m_terrorAudioProfile.loaded << "\n";
+    return m_terrorAudioProfile.loaded;
+}
+
+void App::StopTerrorRadiusAudio()
+{
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        if (layer.handle != 0)
+        {
+            m_audio.Stop(layer.handle);
+            layer.handle = 0;
+        }
+        layer.currentVolume = 0.0F;
+    }
+    m_terrorAudioProfile.layers.clear();
+    m_terrorAudioProfile.loaded = false;
+}
+
+void App::UpdateTerrorRadiusAudio(float deltaSeconds)
+{
+    if (!m_terrorAudioProfile.loaded || m_appMode != AppMode::InGame)
+    {
+        return;
+    }
+
+    // Phase B1: Audio routing based on local player role
+    // Survivor hears: TR bands (far/mid/close) + chase override
+    // Killer hears: ONLY chase music when in chase
+    const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+    const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+    (void)localPlayerIsSurvivor;  // Used for early-exit logic clarity
+
+    const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
+    const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
+
+    if (!hasSurvivor || !hasKiller)
+    {
+        // Fade out all layers if one entity is missing
+        for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            layer.currentVolume = 0.0F;
+            if (layer.handle != 0)
+            {
+                (void)m_audio.SetHandleVolume(layer.handle, 0.0F);
+            }
+        }
+        m_currentBand = TerrorRadiusBand::Outside;
+        m_chaseWasActive = false;
+        return;
+    }
+
+    // Early exit for Killer: only chase layer matters
+    if (localPlayerIsKiller)
+    {
+        const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+        const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
+
+        for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            float targetVolume = 0.0F;
+            // Killer only hears chase music when actively chasing
+            if (layer.chaseOnly && chaseActive)
+            {
+                targetVolume = layer.gain;
+            }
+            // All TR distance-based bands are silent for killer
+            layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, smooth);
+            if (layer.handle != 0)
+            {
+                (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
+            }
+        }
+        // Don't update band state for killer (not relevant)
+        return;
+    }
+
+    // Calculate XZ (horizontal) distance from Survivor to Killer
+    const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
+    const glm::vec3 killer = m_gameplay.RolePosition("killer");
+    const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
+    const float distance = glm::length(delta);
+    const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
+    const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+
+    // Track chase state transitions for anti-leak guard
+    const bool justEnteredChase = chaseActive && !m_chaseWasActive;
+    m_chaseWasActive = chaseActive;
+
+    // DBD-like stepped bands (no gradient!)
+    // FAR:  0.66R < dist <= R       (outer edge, weakest)
+    // MID:  0.33R < dist <= 0.66R   (middle)
+    // CLOSE: 0 <= dist <= 0.33R       (closest, strongest)
+    TerrorRadiusBand newBand = TerrorRadiusBand::Outside;
+    if (distance <= radius * 0.333333F)
+    {
+        newBand = TerrorRadiusBand::Close;
+    }
+    else if (distance <= radius * 0.666667F)
+    {
+        newBand = TerrorRadiusBand::Mid;
+    }
+    else if (distance <= radius)
+    {
+        newBand = TerrorRadiusBand::Far;
+    }
+    else
+    {
+        newBand = TerrorRadiusBand::Outside;
+    }
+
+    m_currentBand = newBand;
+
+    // Normal smoothing factor (0.15-0.35s)
+    const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
+
+    // Anti-leak rapid fade-out for entering chase (0.05s instead of normal smoothing)
+    const float rapidSmooth = glm::clamp(deltaSeconds / 0.05F, 0.0F, 1.0F);
+
+    // Update each layer based on stepped band logic and chase override
+    for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        float targetVolume = 0.0F;
+
+        // ============================================================
+        // MUTUALLY EXCLUSIVE: Chase suppression logic BEFORE band logic
+        // ============================================================
+        if (layer.chaseOnly)
+        {
+            // Chase layer (tr_chase): ON during chase, OFF otherwise
+            targetVolume = chaseActive ? layer.gain : 0.0F;
+        }
+        else
+        {
+            // Distance-based layers (tr_far, tr_mid, tr_close)
+
+            // Stepped band logic - each layer is fully ON or OFF based on its designated band
+            // Layer names must contain "far", "mid", "close" to identify their band
+            const std::string lowerClip = [&layer]() {
+                std::string lower = layer.clip;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return lower;
+            }();
+
+            if (lowerClip.find("far") != std::string::npos)
+            {
+                // FAR layer: ON only in FAR band (continues during chase for ambience)
+                targetVolume = (newBand == TerrorRadiusBand::Far) ? layer.gain : 0.0F;
+            }
+            else if (lowerClip.find("mid") != std::string::npos)
+            {
+                // MID layer: ON only in MID band (continues during chase)
+                targetVolume = (newBand == TerrorRadiusBand::Mid) ? layer.gain : 0.0F;
+            }
+            else if (lowerClip.find("close") != std::string::npos)
+            {
+                // CLOSE layer: MUST BE SUPPRESSED during chase (replaced by chase music)
+                // This suppression is based ONLY on chaseActive, NOT on LOS/FOV timers
+                if (chaseActive)
+                {
+                    targetVolume = 0.0F; // FORCE SUPPRESS CLOSE during chase
+                }
+                else
+                {
+                    targetVolume = (newBand == TerrorRadiusBand::Close) ? layer.gain : 0.0F;
+                }
+            }
+            else
+            {
+                // Unknown layer - use old gradient behavior as fallback
+                const float intensity = glm::clamp(1.0F - distance / radius, 0.0F, 1.0F);
+                if (layer.fadeInEnd <= layer.fadeInStart + 1.0e-4F)
+                {
+                    targetVolume = intensity >= layer.fadeInStart ? layer.gain : 0.0F;
+                }
+                else
+                {
+                    targetVolume = glm::clamp((intensity - layer.fadeInStart) / (layer.fadeInEnd - layer.fadeInStart), 0.0F, 1.0F) * layer.gain;
+                }
+            }
+        }
+
+        // ============================================================
+        // Apply smoothing with anti-leak guard for chase transitions
+        // ============================================================
+        float actualSmooth = smooth;
+
+        // Anti-leak: When entering chase, fade out non-chase layers rapidly
+        if (justEnteredChase && !layer.chaseOnly)
+        {
+            actualSmooth = rapidSmooth;
+        }
+
+        // Apply smoothing (AFTER suppression logic)
+        layer.currentVolume = glm::mix(layer.currentVolume, targetVolume, actualSmooth);
+        if (layer.handle != 0)
+        {
+            (void)m_audio.SetHandleVolume(layer.handle, layer.currentVolume);
+        }
+    }
+}
+
+std::string App::DumpTerrorRadiusState() const
+{
+    std::string out = "=== Terror Radius State ===\n";
+
+    // Phase B1: Local role and audio routing info
+    out += "Local Role: " + m_localPlayer.controlledRole + "\n";
+    const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+    const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+    out += "TR Enabled: " + std::string(localPlayerIsSurvivor ? "YES" : "NO") + "\n";
+    if (localPlayerIsKiller)
+    {
+        const auto hudState = m_gameplay.BuildHudState();
+        out += "Chase Enabled for Killer: " + std::string(hudState.chaseActive ? "YES" : "NO") + "\n";
+    }
+
+    // Band name
+    const char* bandName = "OUTSIDE";
+    switch (m_currentBand)
+    {
+        case TerrorRadiusBand::Outside: bandName = "OUTSIDE"; break;
+        case TerrorRadiusBand::Far: bandName = "FAR"; break;
+        case TerrorRadiusBand::Mid: bandName = "MID"; break;
+        case TerrorRadiusBand::Close: bandName = "CLOSE"; break;
+    }
+    out += "Band: ";
+    out += bandName;
+    out += "\n";
+
+    // Radius
+    out += "Base Radius: " + std::to_string(m_terrorAudioProfile.baseRadius) + " m\n";
+    out += "Smoothing Time: " + std::to_string(m_terrorAudioProfile.smoothingTime) + " s\n";
+
+    // Distance info
+    const bool hasSurvivor = m_gameplay.RoleEntity("survivor") != 0;
+    const bool hasKiller = m_gameplay.RoleEntity("killer") != 0;
+    if (hasSurvivor && hasKiller)
+    {
+        const glm::vec3 survivor = m_gameplay.RolePosition("survivor");
+        const glm::vec3 killer = m_gameplay.RolePosition("killer");
+        const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
+        const float distance = glm::length(delta);
+        out += "Distance: " + std::to_string(distance) + " m\n";
+    }
+
+    // Chase state
+    const auto hudState = m_gameplay.BuildHudState();
+    out += std::string("Chase Active: ") + (hudState.chaseActive ? "YES" : "NO") + "\n";
+
+    // Bus volume
+    const float musicBusVol = m_audio.GetBusVolume(audio::AudioSystem::Bus::Music);
+    out += "Music Bus Volume: " + std::to_string(musicBusVol) + "\n";
+
+    // Per-layer volumes with detailed breakdown
+    out += "Layer Volumes:\n";
+    for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+    {
+        const float finalApplied = layer.currentVolume * layer.gain * musicBusVol;
+        out += "  [" + layer.clip + "]";
+        if (layer.chaseOnly)
+        {
+            out += " (chase_only)";
+        }
+        out += "\n";
+
+        // Check if this is the close layer and if it's suppressed by chase
+        bool isCloseLayer = (layer.clip.find("close") != std::string::npos ||
+                           layer.clip.find("Close") != std::string::npos ||
+                           layer.clip.find("CLOSE") != std::string::npos);
+        if (isCloseLayer && hudState.chaseActive)
+        {
+            out += "    SUPPRESSED_BY_CHASE\n";
+        }
+
+        out += "    profileGain=" + std::to_string(layer.gain) + "\n";
+        out += "    currentVolume=" + std::to_string(layer.currentVolume) + "\n";
+        out += "    busVolume=" + std::to_string(musicBusVol) + "\n";
+        out += "    finalApplied=" + std::to_string(finalApplied) + "\n";
+    }
+
+    return out;
 }
 
 void App::ApplyGraphicsSettings(const GraphicsSettings& settings, bool startAutoConfirm)
@@ -3040,6 +3990,7 @@ void App::ApplyMapEnvironment(const std::string& mapName)
         m_renderer.SetEnvironmentSettings(settings);
         m_renderer.SetPointLights({});
         m_renderer.SetSpotLights({});
+        m_gameplay.SetMapSpotLightCount(0);
         return;
     }
 
@@ -3078,8 +4029,11 @@ void App::ApplyMapEnvironment(const std::string& mapName)
             });
         }
     }
-    m_renderer.SetPointLights(pointLights);
-    m_renderer.SetSpotLights(spotLights);
+    m_runtimeMapPointLights = pointLights;
+    m_runtimeMapSpotLights = spotLights;
+    m_renderer.SetPointLights(m_runtimeMapPointLights);
+    m_renderer.SetSpotLights(m_runtimeMapSpotLights);
+    m_gameplay.SetMapSpotLightCount(m_runtimeMapSpotLights.size());
 
     game::editor::EnvironmentAsset envAsset;
     if (!game::editor::LevelAssetIO::LoadEnvironment(mapAsset.environmentAssetId, &envAsset, &error))
@@ -3443,6 +4397,54 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     const std::vector<std::string> roleItems{"Survivor", "Killer"};
     const std::vector<std::string> mapItems{"Test", "Collision Test", "Random Generation"};
     const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
+    const auto survivorCharacters = m_gameplay.ListSurvivorCharacters();
+    const auto killerCharacters = m_gameplay.ListKillerCharacters();
+    const auto survivorItems = m_gameplay.GetLoadoutCatalog().ListItemIds();
+    const auto killerPowers = m_gameplay.GetLoadoutCatalog().ListPowerIds();
+
+    auto makeWithNone = [](const std::vector<std::string>& source) {
+        std::vector<std::string> out;
+        out.reserve(source.size() + 1);
+        out.push_back("none");
+        out.insert(out.end(), source.begin(), source.end());
+        return out;
+    };
+
+    const std::string selectedItemId =
+        (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0 && m_menuSurvivorItemIndex < static_cast<int>(survivorItems.size()))
+            ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+            : (survivorItems.empty() ? std::string{} : survivorItems.front());
+    const std::string selectedPowerId =
+        (!killerPowers.empty() && m_menuKillerPowerIndex >= 0 && m_menuKillerPowerIndex < static_cast<int>(killerPowers.size()))
+            ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+            : (killerPowers.empty() ? std::string{} : killerPowers.front());
+    const std::vector<std::string> survivorAddonOptions = makeWithNone(
+        m_gameplay.GetLoadoutCatalog().ListAddonIdsForTarget(game::gameplay::loadout::TargetKind::Item, selectedItemId)
+    );
+    const std::vector<std::string> killerAddonOptions = makeWithNone(
+        m_gameplay.GetLoadoutCatalog().ListAddonIdsForTarget(game::gameplay::loadout::TargetKind::Power, selectedPowerId)
+    );
+
+    auto clampDropdownIndex = [](int& index, std::size_t count) {
+        if (count == 0)
+        {
+            index = -1;
+            return;
+        }
+        if (index < 0 || index >= static_cast<int>(count))
+        {
+            index = 0;
+        }
+    };
+    clampDropdownIndex(m_menuSurvivorCharacterIndex, survivorCharacters.size());
+    clampDropdownIndex(m_menuKillerCharacterIndex, killerCharacters.size());
+    clampDropdownIndex(m_menuSurvivorItemIndex, survivorItems.size());
+    clampDropdownIndex(m_menuKillerPowerIndex, killerPowers.size());
+    clampDropdownIndex(m_menuSurvivorAddonAIndex, survivorAddonOptions.size());
+    clampDropdownIndex(m_menuSurvivorAddonBIndex, survivorAddonOptions.size());
+    clampDropdownIndex(m_menuKillerAddonAIndex, killerAddonOptions.size());
+    clampDropdownIndex(m_menuKillerAddonBIndex, killerAddonOptions.size());
+
     if (m_menuSavedMapIndex >= static_cast<int>(savedMaps.size()))
     {
         m_menuSavedMapIndex = savedMaps.empty() ? -1 : 0;
@@ -3492,17 +4494,127 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     // Session settings
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
+    if (!survivorCharacters.empty())
+    {
+        m_ui.Dropdown("survivor_character", "Survivor Character", &m_menuSurvivorCharacterIndex, survivorCharacters);
+    }
+    if (!killerCharacters.empty())
+    {
+        if (m_ui.Dropdown("killer_character", "Killer Character", &m_menuKillerCharacterIndex, killerCharacters))
+        {
+            const std::string& killerId = killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)];
+            m_gameplay.SetSelectedKillerCharacter(killerId);
+            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(killerId);
+            if (killerDef != nullptr && !killerDef->powerId.empty() && !killerPowers.empty())
+            {
+                const auto it = std::find(killerPowers.begin(), killerPowers.end(), killerDef->powerId);
+                if (it != killerPowers.end())
+                {
+                    m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
+                }
+            }
+        }
+    }
+    if (!survivorItems.empty())
+    {
+        m_ui.Dropdown("survivor_item", "Survivor Item", &m_menuSurvivorItemIndex, survivorItems);
+    }
+    if (!survivorAddonOptions.empty())
+    {
+        m_ui.Dropdown("survivor_item_addon_a", "Survivor Addon A", &m_menuSurvivorAddonAIndex, survivorAddonOptions);
+        m_ui.Dropdown("survivor_item_addon_b", "Survivor Addon B", &m_menuSurvivorAddonBIndex, survivorAddonOptions);
+    }
+    if (!killerPowers.empty())
+    {
+        m_ui.Dropdown("killer_power", "Killer Power", &m_menuKillerPowerIndex, killerPowers);
+    }
+    if (!killerAddonOptions.empty())
+    {
+        m_ui.Dropdown("killer_power_addon_a", "Killer Addon A", &m_menuKillerAddonAIndex, killerAddonOptions);
+        m_ui.Dropdown("killer_power_addon_b", "Killer Addon B", &m_menuKillerAddonBIndex, killerAddonOptions);
+    }
 
     const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
+    auto applyMenuGameplaySelections = [&]() {
+        if (!survivorCharacters.empty())
+        {
+            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+        }
+        if (!killerCharacters.empty())
+        {
+            m_gameplay.SetSelectedKillerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+        }
+
+        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
+                                       ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+                                       : std::string{};
+        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
+                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
+                                           : std::string{"none"};
+        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
+                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
+                                           : std::string{"none"};
+        m_gameplay.SetSurvivorItemLoadout(
+            itemId,
+            itemAddonA == "none" ? "" : itemAddonA,
+            itemAddonB == "none" ? "" : itemAddonB
+        );
+
+        std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
+                                  ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+                                  : std::string{};
+        bool powerForcedByCharacter = false;
+        if (!killerCharacters.empty() && m_menuKillerCharacterIndex >= 0 &&
+            m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+        {
+            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(
+                killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]
+            );
+            if (killerDef != nullptr && !killerDef->powerId.empty())
+            {
+                powerId = killerDef->powerId;
+                powerForcedByCharacter = true;
+                if (!killerPowers.empty())
+                {
+                    const auto it = std::find(killerPowers.begin(), killerPowers.end(), powerId);
+                    if (it != killerPowers.end())
+                    {
+                        m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
+                    }
+                }
+            }
+        }
+
+        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
+                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
+                                            : std::string{"none"};
+        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
+                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
+                                            : std::string{"none"};
+        const std::string resolvedPowerAddonA = powerForcedByCharacter ? std::string{"none"} : powerAddonA;
+        const std::string resolvedPowerAddonB = powerForcedByCharacter ? std::string{"none"} : powerAddonB;
+        if (powerForcedByCharacter)
+        {
+            m_menuKillerAddonAIndex = 0;
+            m_menuKillerAddonBIndex = 0;
+        }
+        m_gameplay.SetKillerPowerLoadout(
+            powerId,
+            resolvedPowerAddonA == "none" ? "" : resolvedPowerAddonA,
+            resolvedPowerAddonB == "none" ? "" : resolvedPowerAddonB
+        );
+    };
 
     m_ui.Spacer(12.0F * scale);
     if (m_ui.Button("play_solo", "PLAY", true, &m_ui.Theme().colorAccent))
     {
+        applyMenuGameplaySelections();
         StartSoloSession(mapName, roleName);
     }
     if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
     {
+        applyMenuGameplaySelections();
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
         localPlayer.netId = 1;
@@ -3522,6 +4634,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_ui.Dropdown("saved_maps", "Saved Map", &m_menuSavedMapIndex, savedMaps);
         if (m_ui.Button("play_saved", "PLAY SAVED"))
         {
+            applyMenuGameplaySelections();
             StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
         }
     }
@@ -3546,6 +4659,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Spacer(8.0F * scale);
     if (m_ui.Button("host_btn", "HOST GAME"))
     {
+        applyMenuGameplaySelections();
         // Host goes to lobby
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
@@ -3579,6 +4693,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     if (m_ui.Button("join_btn", "JOIN GAME"))
     {
+        applyMenuGameplaySelections();
         // Join goes to lobby (simulated for now)
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer hostPlayer;
@@ -3699,6 +4814,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
             m_ui.PushIdScope("lan_" + std::to_string(i));
             if (m_ui.Button("join_lan", "JOIN", canJoin))
             {
+                applyMenuGameplaySelections();
                 StartJoinSession(entry.ip, entry.port, roleName);
             }
             m_ui.PopIdScope();
@@ -3796,11 +4912,11 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         }
         m_ui.PopIdScope();
     }
+    m_ui.EndScrollRegion();
 
     m_ui.Spacer(10.0F * scale);
     m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
     m_ui.Label("F7 Load", m_ui.Theme().colorTextMuted, 0.8F);
-
     m_ui.EndPanel();
 }
 
@@ -3892,7 +5008,7 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
     m_ui.PopLayout();
     m_ui.Label("Tabs + scroll region. Use drag scrollbar on the right in long sections.", m_ui.Theme().colorTextMuted);
 
-    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 2);
+    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 3);
     m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
     {
         const glm::vec4 tabColor = m_ui.Theme().colorAccent;
@@ -3904,9 +5020,13 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         {
             m_settingsTabIndex = 1;
         }
-        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_audio", "Audio", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, 200.0F))
         {
             m_settingsTabIndex = 2;
+        }
+        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 3 ? &tabColor : nullptr, 200.0F))
+        {
+            m_settingsTabIndex = 3;
         }
     }
     m_ui.PopLayout();
@@ -4016,6 +5136,57 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
             m_ui.Label(m_graphicsStatus, m_ui.Theme().colorTextMuted);
         }
     }
+    else if (m_settingsTabIndex == 2)
+    {
+        bool changed = false;
+        changed |= m_ui.SliderFloat("audio_master", "Master", &m_audioSettings.master, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_music", "Music", &m_audioSettings.music, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_sfx", "SFX", &m_audioSettings.sfx, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_ui", "UI", &m_audioSettings.ui, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.SliderFloat("audio_amb", "Ambience", &m_audioSettings.ambience, 0.0F, 1.0F, "%.2f");
+        changed |= m_ui.Checkbox("audio_mute", "Mute All", &m_audioSettings.muted);
+        if (changed)
+        {
+            ApplyAudioSettings();
+        }
+
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("audio_apply_btn", "Apply", true, &m_ui.Theme().colorSuccess, 170.0F))
+        {
+            ApplyAudioSettings();
+            m_audioStatus = "Applied audio volumes.";
+        }
+        if (m_ui.Button("audio_save_btn", "Save To File", true, nullptr, 170.0F))
+        {
+            ApplyAudioSettings();
+            m_audioStatus = SaveAudioConfig() ? "Saved to config/audio.json." : "Failed to save audio config.";
+        }
+        if (m_ui.Button("audio_load_btn", "Load From File", true, nullptr, 170.0F))
+        {
+            if (LoadAudioConfig())
+            {
+                ApplyAudioSettings();
+                m_audioStatus = "Loaded audio config.";
+            }
+            else
+            {
+                m_audioStatus = "Failed to load audio config.";
+            }
+        }
+        if (m_ui.Button("audio_defaults_btn", "Defaults", true, &m_ui.Theme().colorDanger, 170.0F))
+        {
+            m_audioSettings = AudioSettings{};
+            ApplyAudioSettings();
+            m_audioStatus = "Audio defaults applied.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("Clips are resolved from assets/audio by name or explicit file path.", m_ui.Theme().colorTextMuted);
+        if (!m_audioStatus.empty())
+        {
+            m_ui.Label(m_audioStatus, m_ui.Theme().colorTextMuted);
+        }
+    }
     else
     {
         const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
@@ -4108,10 +5279,103 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         m_ui.SliderFloat("gp_lunge_speed_start", "Lunge Speed Start", &t.lungeSpeedStart, 1.0F, 20.0F, "%.2f");
         m_ui.SliderFloat("gp_lunge_speed_end", "Lunge Speed End", &t.lungeSpeedEnd, 1.0F, 20.0F, "%.2f");
 
-        m_ui.Label("Healing + Skill Checks", m_ui.Theme().colorAccent);
+        m_ui.Label("Killer Light", m_ui.Theme().colorAccent);
+        {
+            bool killerLightEnabled = m_gameplay.KillerLookLightEnabled();
+            if (m_ui.Checkbox("gp_killer_light_enabled", "Enabled", &killerLightEnabled))
+            {
+                m_gameplay.SetKillerLookLightEnabled(killerLightEnabled);
+            }
+        }
+        {
+            float intensity = m_gameplay.KillerLightIntensity();
+            if (m_ui.SliderFloat("gp_killer_light_intensity", "Intensity", &intensity, 0.0F, 5.0F, "%.2f"))
+            {
+                m_gameplay.SetKillerLookLightIntensity(intensity);
+            }
+        }
+        {
+            float range = m_gameplay.KillerLightRange();
+            if (m_ui.SliderFloat("gp_killer_light_range", "Range (m)", &range, 1.0F, 50.0F, "%.1f"))
+            {
+                m_gameplay.SetKillerLookLightRange(range);
+            }
+        }
+        {
+            float innerAngle = m_gameplay.KillerLightInnerAngle();
+            if (m_ui.SliderFloat("gp_killer_light_inner", "Inner Angle (deg)", &innerAngle, 2.0F, 60.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightAngle(innerAngle);
+            }
+        }
+        {
+            float outerAngle = m_gameplay.KillerLightOuterAngle();
+            if (m_ui.SliderFloat("gp_killer_light_outer", "Outer Angle (deg)", &outerAngle, 5.0F, 90.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightOuterAngle(outerAngle);
+            }
+        }
+        {
+            float pitch = m_gameplay.KillerLightPitch();
+            if (m_ui.SliderFloat("gp_killer_light_pitch", "Pitch (deg, 0=horiz, 90=down)", &pitch, 0.0F, 90.0F, "%.0f"))
+            {
+                m_gameplay.SetKillerLookLightPitch(pitch);
+            }
+        }
+        {
+            bool debug = m_gameplay.KillerLookLightDebug();
+            if (m_ui.Checkbox("gp_killer_light_debug", "Debug Overlay", &debug))
+            {
+                m_gameplay.SetKillerLookLightDebug(debug);
+            }
+        }
+
+        m_ui.Label("Repair + Healing", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_gen_base_seconds", "Generator Base Seconds", &t.generatorRepairSecondsBase, 20.0F, 180.0F, "%.1f");
         m_ui.SliderFloat("gp_heal_duration", "Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
         m_ui.SliderFloat("gp_skillcheck_min", "Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
         m_ui.SliderFloat("gp_skillcheck_max", "Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
+
+        m_ui.Label("Items: Medkit + Toolbox", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_medkit_full_heal_charges", "Medkit Full Heal Charges", &t.medkitFullHealCharges, 4.0F, 64.0F, "%.1f");
+        m_ui.SliderFloat("gp_medkit_heal_mult", "Medkit Heal Speed Mult", &t.medkitHealSpeedMultiplier, 0.5F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_toolbox_charges", "Toolbox Charges", &t.toolboxCharges, 1.0F, 120.0F, "%.1f");
+        m_ui.SliderFloat("gp_toolbox_drain", "Toolbox Drain / sec", &t.toolboxChargeDrainPerSecond, 0.05F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_toolbox_bonus", "Toolbox Repair Bonus", &t.toolboxRepairSpeedBonus, 0.0F, 3.0F, "%.2f");
+
+        m_ui.Label("Items: Flashlight + Map", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("gp_flashlight_max_use", "Flashlight Max Use (s)", &t.flashlightMaxUseSeconds, 1.0F, 30.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_blind_build", "Flashlight Blind Build (s)", &t.flashlightBlindBuildSeconds, 0.1F, 6.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_blind_dur", "Flashlight Blind Duration (s)", &t.flashlightBlindDurationSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_flashlight_range", "Flashlight Range", &t.flashlightBeamRange, 2.0F, 25.0F, "%.1f");
+        m_ui.SliderFloat("gp_flashlight_angle", "Flashlight Angle", &t.flashlightBeamAngleDegrees, 5.0F, 80.0F, "%.1f");
+        {
+            int blindStyle = glm::clamp(t.flashlightBlindStyle, 0, 1);
+            std::vector<std::string> blindStyles{"White", "Dark"};
+            if (m_ui.Dropdown("gp_flashlight_blind_style", "Flashlight Blind Style", &blindStyle, blindStyles))
+            {
+                t.flashlightBlindStyle = glm::clamp(blindStyle, 0, 1);
+            }
+        }
+        m_ui.SliderFloat("gp_map_channel", "Map Channel (s)", &t.mapChannelSeconds, 0.05F, 4.0F, "%.2f");
+        m_ui.SliderInt("gp_map_uses", "Map Uses", &t.mapUses, 0, 20);
+        m_ui.SliderFloat("gp_map_reveal_range", "Map Reveal Range (m)", &t.mapRevealRangeMeters, 4.0F, 120.0F, "%.1f");
+        m_ui.SliderFloat("gp_map_reveal_duration", "Map Reveal Duration (s)", &t.mapRevealDurationSeconds, 0.2F, 12.0F, "%.2f");
+
+        m_ui.Label("Killer Powers: Trapper + Wraith", m_ui.Theme().colorAccent);
+        m_ui.SliderInt("gp_trapper_start", "Trapper Start Carry", &t.trapperStartCarryTraps, 0, 16);
+        m_ui.SliderInt("gp_trapper_max", "Trapper Max Carry", &t.trapperMaxCarryTraps, 1, 16);
+        m_ui.SliderInt("gp_trapper_ground", "Trapper Ground Spawn", &t.trapperGroundSpawnTraps, 0, 48);
+        m_ui.SliderFloat("gp_trapper_set", "Trapper Set Time (s)", &t.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
+        m_ui.SliderFloat("gp_trapper_disarm", "Trapper Disarm Time (s)", &t.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_base", "Trap Escape Base Chance", &t.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_step", "Trap Escape Step", &t.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
+        m_ui.SliderFloat("gp_trap_escape_max", "Trap Escape Max", &t.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
+        m_ui.SliderFloat("gp_trap_killer_stun", "Trap Killer Stun (s)", &t.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_cloak_speed", "Wraith Cloak Speed Mult", &t.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_cloak_trans", "Wraith Cloak Transition (s)", &t.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_uncloak_trans", "Wraith Uncloak Transition (s)", &t.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("gp_wraith_haste", "Wraith Post-Uncloak Haste (s)", &t.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
 
         m_ui.Label("Map Generation", m_ui.Theme().colorAccent);
         m_ui.SliderFloat("gp_weight_tl", "Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
@@ -4164,6 +5428,57 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         return true;
     };
 
+    const engine::ui::UiRect topLeft{
+        m_hudLayout.topLeftOffset.x * scale,
+        m_hudLayout.topLeftOffset.y * scale,
+        420.0F * scale,
+        260.0F * scale,
+    };
+    m_ui.BeginPanel("hud_top_left_custom", topLeft, true);
+    m_ui.Label(hudState.roleName + " | " + hudState.cameraModeName, 1.05F);
+    m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
+    m_ui.Label("Render: " + hudState.renderModeName + " | FPS: " + std::to_string(static_cast<int>(fps)), m_ui.Theme().colorTextMuted);
+    m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed) + " | Grounded: " + (hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
+    m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+    m_ui.Label(
+        "Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal),
+        m_ui.Theme().colorAccent
+    );
+    m_ui.Label(
+        "Survivor: " + hudState.survivorCharacterId + " | Killer: " + hudState.killerCharacterId,
+        m_ui.Theme().colorTextMuted
+    );
+    m_ui.Label(
+        "Item: " + hudState.survivorItemId +
+            " [" + hudState.survivorItemAddonA + ", " + hudState.survivorItemAddonB + "]"
+            " charges=" + std::to_string(hudState.survivorItemCharges) +
+            " uses=" + std::to_string(hudState.survivorItemUsesRemaining),
+        hudState.survivorItemActive ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
+    );
+    m_ui.Label(
+        "Power: " + hudState.killerPowerId +
+            " [" + hudState.killerPowerAddonA + ", " + hudState.killerPowerAddonB + "]"
+            " traps=" + std::to_string(hudState.activeTrapCount) +
+            " carry=" + std::to_string(hudState.carriedTrapCount),
+        m_ui.Theme().colorTextMuted
+    );
+    if (hudState.killerPowerId == "wraith_cloak")
+    {
+        m_ui.Label(
+            std::string("Wraith: ") + (hudState.wraithCloaked ? "CLOAKED" : "VISIBLE") +
+                " haste=" + std::to_string(hudState.wraithPostUncloakHasteSeconds),
+            hudState.wraithCloaked ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
+        );
+    }
+    if (hudState.survivorStateName == "Trapped")
+    {
+        m_ui.Label(
+            "TRAPPED attempts: " + std::to_string(hudState.trappedEscapeAttempts) +
+                " chance: " + std::to_string(static_cast<int>(hudState.trappedEscapeChance * 100.0F)) + "%",
+            m_ui.Theme().colorDanger
+        );
+    }
+    m_ui.EndPanel();
     const bool showOverlay = m_showDebugOverlay;
     const bool showMovement = m_showMovementWindow && showOverlay;
     const bool showStats = m_showStatsWindow && showOverlay;
@@ -4495,54 +5810,300 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.EndPanel();
     }
 
-    const bool showBottomPanel = hudState.selfHealing || hudState.skillCheckActive ||
-                                 hudState.carryEscapeProgress > 0.0F || hudState.hookStage > 0;
-    if (!showBottomPanel)
+    if (hudState.roleName == "Survivor" && hudState.survivorItemId != "none")
     {
-        return;
-    }
-
-    const engine::ui::UiRect bottom{
-        (static_cast<float>(m_ui.ScreenWidth()) - 620.0F * scale) * 0.5F + m_hudLayout.bottomCenterOffset.x * scale,
-        static_cast<float>(m_ui.ScreenHeight()) - 240.0F * scale - m_hudLayout.bottomCenterOffset.y * scale,
-        620.0F * scale,
-        240.0F * scale,
-    };
-    m_ui.BeginPanel("hud_bottom_custom", bottom, true);
-
-    if (hudState.selfHealing)
-    {
-        m_ui.Label("Self Heal", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_heal_progress", hudState.selfHealProgress, std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%");
-    }
-    if (hudState.carryEscapeProgress > 0.0F)
-    {
-        m_ui.Label("Wiggle Escape: Alternate A/D", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_wiggle_progress", hudState.carryEscapeProgress, std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%");
-    }
-    if (hudState.hookStage > 0)
-    {
-        m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorDanger);
-        m_ui.ProgressBar(
-            "hud_hook_progress",
-            hudState.hookStageProgress,
-            std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
-        );
-        if (hudState.hookStage == 1)
+        const engine::ui::UiRect itemPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 156.0F * scale,
+            300.0F * scale,
+            138.0F * scale,
+        };
+        m_ui.BeginPanel("hud_item_corner", itemPanel, true);
+        m_ui.Label("Item: " + hudState.survivorItemId, m_ui.Theme().colorAccent);
+        const std::string chargeText =
+            std::to_string(static_cast<int>(std::round(hudState.survivorItemCharges))) + " / " +
+            std::to_string(static_cast<int>(std::round(hudState.survivorItemMaxCharges)));
+        m_ui.ProgressBar("hud_item_charges", hudState.survivorItemCharge01, chargeText);
+        if (hudState.survivorItemUseProgress01 > 0.0F)
         {
-            const int attemptsLeft = std::max(0, hudState.hookEscapeAttemptsMax - hudState.hookEscapeAttemptsUsed);
-            m_ui.Label(
-                "E: Attempt self-unhook (" + std::to_string(static_cast<int>(hudState.hookEscapeChance * 100.0F)) + "%), attempts left: " +
-                    std::to_string(attemptsLeft),
-                m_ui.Theme().colorTextMuted
+            m_ui.ProgressBar(
+                "hud_item_use_progress",
+                hudState.survivorItemUseProgress01,
+                std::to_string(static_cast<int>(hudState.survivorItemUseProgress01 * 100.0F)) + "%"
             );
         }
-        else if (hudState.hookStage == 2)
+        if (hudState.survivorFlashlightAiming)
         {
-            m_ui.Label("Struggle: hit SPACE during skill checks", m_ui.Theme().colorTextMuted);
+            m_ui.Label("Flashlight aiming", m_ui.Theme().colorSuccess, 0.95F);
         }
+        m_ui.EndPanel();
     }
-    m_ui.EndPanel();
+
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "bear_trap")
+    {
+        const engine::ui::UiRect trapPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 132.0F * scale,
+            300.0F * scale,
+            112.0F * scale,
+        };
+        m_ui.BeginPanel("hud_trap_corner", trapPanel, true);
+        m_ui.Label(
+            "Traps: carried " + std::to_string(hudState.carriedTrapCount) + " | active " + std::to_string(hudState.activeTrapCount),
+            m_ui.Theme().colorAccent
+        );
+        if (hudState.trapSetProgress01 > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_trap_set_progress",
+                hudState.trapSetProgress01,
+                "Setting " + std::to_string(static_cast<int>(hudState.trapSetProgress01 * 100.0F)) + "%"
+            );
+        }
+        if (hudState.killerStunRemaining > 0.01F)
+        {
+            m_ui.Label(
+                "STUNNED: " + std::to_string(hudState.killerStunRemaining).substr(0, 4) + "s",
+                m_ui.Theme().colorDanger
+            );
+        }
+        m_ui.EndPanel();
+    }
+
+    if (hudState.trapIndicatorTtl > 0.0F && !hudState.trapIndicatorText.empty())
+    {
+        const engine::ui::UiRect trapIndicator{
+            (static_cast<float>(m_ui.ScreenWidth()) - 460.0F * scale) * 0.5F,
+            90.0F * scale,
+            460.0F * scale,
+            52.0F * scale,
+        };
+        m_ui.BeginPanel("hud_trap_indicator", trapIndicator, true);
+        m_ui.Label(
+            hudState.trapIndicatorText,
+            hudState.trapIndicatorDanger ? m_ui.Theme().colorDanger : m_ui.Theme().colorSuccess,
+            1.02F
+        );
+        m_ui.EndPanel();
+    }
+
+    if (hudState.roleName == "Survivor" && hudState.survivorFlashlightAiming)
+    {
+        const float cx = static_cast<float>(m_ui.ScreenWidth()) * 0.5F;
+        const float cy = static_cast<float>(m_ui.ScreenHeight()) * 0.5F;
+        const glm::vec4 color{1.0F, 0.95F, 0.55F, 0.92F};
+        m_ui.FillRect(engine::ui::UiRect{cx - 1.0F * scale, cy - 15.0F * scale, 2.0F * scale, 30.0F * scale}, color);
+        m_ui.FillRect(engine::ui::UiRect{cx - 15.0F * scale, cy - 1.0F * scale, 30.0F * scale, 2.0F * scale}, color);
+    }
+
+    const bool showBottomPanel = hudState.repairingGenerator || hudState.selfHealing || hudState.skillCheckActive ||
+                                 hudState.carryEscapeProgress > 0.0F || hudState.hookStage > 0;
+    if (showBottomPanel)
+    {
+        const engine::ui::UiRect bottom{
+            (static_cast<float>(m_ui.ScreenWidth()) - 620.0F * scale) * 0.5F + m_hudLayout.bottomCenterOffset.x * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 240.0F * scale - m_hudLayout.bottomCenterOffset.y * scale,
+            620.0F * scale,
+            240.0F * scale,
+        };
+        m_ui.BeginPanel("hud_bottom_custom", bottom, true);
+
+        if (hudState.repairingGenerator)
+        {
+            m_ui.Label("Generator Repair", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_gen_progress", hudState.activeGeneratorProgress, std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%");
+        }
+        if (hudState.selfHealing)
+        {
+            m_ui.Label("Self Heal", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_heal_progress", hudState.selfHealProgress, std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%");
+        }
+        if (hudState.skillCheckActive)
+        {
+            m_ui.Label("Skill Check active: SPACE", m_ui.Theme().colorDanger);
+            m_ui.SkillCheckBar(
+                "hud_skillcheck_progress",
+                hudState.skillCheckNeedle,
+                hudState.skillCheckSuccessStart,
+                hudState.skillCheckSuccessEnd
+            );
+        }
+        if (hudState.carryEscapeProgress > 0.0F)
+        {
+            m_ui.Label("Wiggle Escape: Alternate A/D", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar("hud_wiggle_progress", hudState.carryEscapeProgress, std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%");
+        }
+        if (hudState.hookStage > 0)
+        {
+            m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorDanger);
+            m_ui.ProgressBar(
+                "hud_hook_progress",
+                hudState.hookStageProgress,
+                std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
+            );
+            if (hudState.hookStage == 1)
+            {
+                const int attemptsLeft = std::max(0, hudState.hookEscapeAttemptsMax - hudState.hookEscapeAttemptsUsed);
+                m_ui.Label(
+                    "E: Attempt self-unhook (" + std::to_string(static_cast<int>(hudState.hookEscapeChance * 100.0F)) + "%), attempts left: " +
+                        std::to_string(attemptsLeft),
+                    m_ui.Theme().colorTextMuted
+                );
+            }
+            else if (hudState.hookStage == 2)
+            {
+                m_ui.Label("Struggle: hit SPACE during skill checks", m_ui.Theme().colorTextMuted);
+            }
+        }
+        m_ui.EndPanel();
+    }
+
+    if (hudState.roleName == "Killer" && hudState.killerBlindRemaining > 0.0F)
+    {
+        const float blind01 = glm::clamp(hudState.killerBlindRemaining / 2.0F, 0.0F, 1.0F);
+        const glm::vec4 overlayColor = hudState.killerBlindWhiteStyle
+            ? glm::vec4{1.0F, 1.0F, 1.0F, 0.82F * blind01}
+            : glm::vec4{0.0F, 0.0F, 0.0F, 0.78F * blind01};
+        m_ui.FillRect(
+            engine::ui::UiRect{
+                0.0F,
+                0.0F,
+                static_cast<float>(m_ui.ScreenWidth()),
+                static_cast<float>(m_ui.ScreenHeight()),
+            },
+            overlayColor
+        );
+    }
+
+    // Draw TR debug overlay if enabled
+    if (m_terrorAudioDebug && m_terrorAudioProfile.loaded)
+    {
+        const float scale = m_ui.Scale();
+        const engine::ui::UiRect trDebugPanel{
+            (static_cast<float>(m_ui.ScreenWidth()) - 420.0F * scale) * 0.5F,
+            200.0F * scale,
+            420.0F * scale,
+            320.0F * scale,
+        };
+        m_ui.BeginPanel("tr_debug_overlay", trDebugPanel, true);
+        m_ui.Label("Terror Radius Audio Debug", m_ui.Theme().colorAccent, 1.05F);
+
+        // Phase B1: Audio routing info
+        const bool localPlayerIsSurvivor = (m_localPlayer.controlledRole == "survivor");
+        const bool localPlayerIsKiller = (m_localPlayer.controlledRole == "killer");
+        const bool trEnabled = localPlayerIsSurvivor; // TR only for survivor
+        const bool chaseEnabledForKiller = localPlayerIsKiller && hudState.chaseActive; // Chase only for killer in chase
+
+        m_ui.Label("Local Role: " + m_localPlayer.controlledRole, localPlayerIsSurvivor ? m_ui.Theme().colorSuccess : m_ui.Theme().colorDanger);
+        m_ui.Label("TR Enabled: " + std::string(trEnabled ? "YES" : "NO"), trEnabled ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+        if (localPlayerIsKiller)
+        {
+            m_ui.Label("Chase Enabled for Killer: " + std::string(chaseEnabledForKiller ? "YES" : "NO"), chaseEnabledForKiller ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+        }
+
+        // Band name
+        const char* bandName = "OUTSIDE";
+        switch (m_currentBand)
+        {
+            case TerrorRadiusBand::Outside: bandName = "OUTSIDE"; break;
+            case TerrorRadiusBand::Far: bandName = "FAR"; break;
+            case TerrorRadiusBand::Mid: bandName = "MID"; break;
+            case TerrorRadiusBand::Close: bandName = "CLOSE"; break;
+        }
+        m_ui.Label("Band: " + std::string(bandName));
+
+        // Distance and radius
+        const glm::vec3 survivorPos = m_gameplay.RolePosition("survivor");
+        const glm::vec3 killerPos = m_gameplay.RolePosition("killer");
+        const glm::vec2 delta{survivorPos.x - killerPos.x, survivorPos.z - killerPos.z};
+        const float distance = glm::length(delta);
+        m_ui.Label("Distance: " + std::to_string(distance) + " m (Radius: " + std::to_string(m_terrorAudioProfile.baseRadius) + " m)");
+
+        // Chase state
+        m_ui.Label("Chase Active: " + std::string(hudState.chaseActive ? "YES" : "NO"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+
+        // Bus volumes
+        const float musicBusVol = m_audio.GetBusVolume(audio::AudioSystem::Bus::Music);
+        m_ui.Label("Music Bus: " + std::to_string(musicBusVol), m_ui.Theme().colorTextMuted);
+
+        // Per-layer volumes
+        m_ui.Label("Layer Volumes:", m_ui.Theme().colorAccent);
+        for (const TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            const float busVol = musicBusVol;
+            const float finalApplied = layer.currentVolume * layer.gain * busVol;
+
+            std::string layerInfo = layer.clip;
+            if (layer.chaseOnly)
+            {
+                layerInfo += " [chase]";
+            }
+            layerInfo += ": " + std::to_string(finalApplied);
+
+            // Color code: red if suppressed (near 0), green if audible
+            if (finalApplied < 0.01F)
+            {
+                m_ui.Label(layerInfo, m_ui.Theme().colorTextMuted);
+            }
+            else
+            {
+                m_ui.Label(layerInfo, m_ui.Theme().colorSuccess);
+            }
+
+            // Detailed breakdown (smaller)
+            m_ui.Label(
+                "  gain=" + std::to_string(layer.gain) +
+                " cur=" + std::to_string(layer.currentVolume) +
+                " bus=" + std::to_string(busVol) +
+                " final=" + std::to_string(finalApplied),
+                m_ui.Theme().colorTextMuted, 0.85F
+            );
+        }
+
+        m_ui.EndPanel();
+    }
+
+    // Phase B2/B3: Scratch marks and blood pools debug overlays
+    if (m_gameplay.ScratchDebugEnabled() || m_gameplay.BloodDebugEnabled())
+    {
+        const float scale = m_ui.Scale();
+        const engine::ui::UiRect debugPanel{
+            (static_cast<float>(m_ui.ScreenWidth()) - 300.0F * scale) * 0.5F,
+            540.0F * scale,  // Below TR debug panel
+            300.0F * scale,
+            180.0F * scale,
+        };
+        m_ui.BeginPanel("scratch_blood_debug", debugPanel, true);
+        m_ui.Label("VFX Debug", m_ui.Theme().colorAccent, 1.05F);
+
+        if (m_gameplay.ScratchDebugEnabled())
+        {
+            m_ui.Label("=== Scratch Marks ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Active Count: " + std::to_string(hudState.scratchActiveCount));
+            m_ui.Label("Spawn Interval: " + std::to_string(hudState.scratchSpawnInterval) + " s");
+            m_ui.Label("(Visible only to Killer)", m_ui.Theme().colorTextMuted, 0.9F);
+        }
+
+        if (m_gameplay.BloodDebugEnabled())
+        {
+            m_ui.Label("=== Blood Pools ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Active Count: " + std::to_string(hudState.bloodActiveCount));
+            m_ui.Label("(Visible only to Killer)", m_ui.Theme().colorTextMuted, 0.9F);
+        }
+
+        // Phase B4: Killer Look Light debug
+        if (m_gameplay.KillerLookLightDebug())
+        {
+            m_ui.Label("=== Killer Light ===", m_ui.Theme().colorAccent);
+            m_ui.Label("Enabled: " + std::string(hudState.killerLightEnabled ? "YES" : "NO"), hudState.killerLightEnabled ? m_ui.Theme().colorSuccess : m_ui.Theme().colorTextMuted);
+            m_ui.Label("Range: " + std::to_string(hudState.killerLightRange) + " m");
+            m_ui.Label("Intensity: " + std::to_string(hudState.killerLightIntensity));
+            m_ui.Label("Inner Angle: " + std::to_string(hudState.killerLightInnerAngle) + "°");
+            m_ui.Label("Outer Angle: " + std::to_string(hudState.killerLightOuterAngle) + "°");
+        }
+
+        m_ui.EndPanel();
+    }
 }
 
 void App::DrawUiTestPanel()

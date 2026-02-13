@@ -1,0 +1,7 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Dwight",
+  "id": "survivor_dwight",
+  "model_path": "assets/meshes/survivor_dwight.glb"
+}
