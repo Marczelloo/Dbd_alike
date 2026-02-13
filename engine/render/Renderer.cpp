@@ -763,39 +763,36 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         profiler.StatsMut().texturedVboBytes = texturedBytes;
     }
 
-    // ─── Line pass ───
-    if (!m_lineVertices.empty())
+    // ─── Line pass (combined: lines + overlay lines) ───
+    const bool hasLines = !m_lineVertices.empty();
+    const bool hasOverlay = !m_overlayLineVertices.empty();
+    if (hasLines || hasOverlay)
     {
         glUseProgram(m_lineProgram);
         glUniformMatrix4fv(m_lineViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-
         glBindVertexArray(m_lineVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
-        const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
-        ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, lineBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
 
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
-        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
-        profiler.StatsMut().lineVboBytes = lineBytes;
-    }
+        if (hasLines)
+        {
+            const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
+            ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, lineBytes);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
+            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
+            profiler.StatsMut().lineVboBytes = lineBytes;
+        }
 
-    // ─── Overlay line pass ───
-    if (!m_overlayLineVertices.empty())
-    {
-        glDisable(GL_DEPTH_TEST);
-        glUseProgram(m_lineProgram);
-        glUniformMatrix4fv(m_lineViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-
-        glBindVertexArray(m_lineVao);
-        glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
-        const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
-        ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, overlayBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
-
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
-        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
-        glEnable(GL_DEPTH_TEST);
+        if (hasOverlay)
+        {
+            glDisable(GL_DEPTH_TEST);
+            const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
+            ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, overlayBytes);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
+            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
+            glEnable(GL_DEPTH_TEST);
+        }
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -1291,33 +1288,49 @@ void Renderer::AddSolidBox(
     const MaterialParams& material
 )
 {
-    const std::array<glm::vec3, 8> corners = {
-        center + glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z},
+    const glm::vec3 c0 = center + glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c1 = center + glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c2 = center + glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c3 = center + glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c4 = center + glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c5 = center + glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c6 = center + glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z};
+    const glm::vec3 c7 = center + glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z};
+
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
     };
 
-    const auto tri = [&](int a, int b, int c) {
-        AddSolidTriangle(
-            corners[static_cast<size_t>(a)],
-            corners[static_cast<size_t>(b)],
-            corners[static_cast<size_t>(c)],
-            color,
-            material
-        );
-    };
+    // Pre-size to avoid internal reallocations.
+    auto& v = m_solidVertices;
 
-    tri(0, 2, 1); tri(0, 3, 2);
-    tri(4, 5, 6); tri(4, 6, 7);
-    tri(0, 1, 5); tri(0, 5, 4);
-    tri(3, 7, 6); tri(3, 6, 2);
-    tri(0, 4, 7); tri(0, 7, 3);
-    tri(1, 2, 6); tri(1, 6, 5);
+    // Bottom  (normal: 0,-1,0)
+    const glm::vec3 nBot{0,-1,0};
+    v.push_back({c0,nBot,color,mat}); v.push_back({c2,nBot,color,mat}); v.push_back({c1,nBot,color,mat});
+    v.push_back({c0,nBot,color,mat}); v.push_back({c3,nBot,color,mat}); v.push_back({c2,nBot,color,mat});
+    // Top     (normal: 0,+1,0)
+    const glm::vec3 nTop{0,1,0};
+    v.push_back({c4,nTop,color,mat}); v.push_back({c5,nTop,color,mat}); v.push_back({c6,nTop,color,mat});
+    v.push_back({c4,nTop,color,mat}); v.push_back({c6,nTop,color,mat}); v.push_back({c7,nTop,color,mat});
+    // Front   (normal: 0,0,-1)
+    const glm::vec3 nFront{0,0,-1};
+    v.push_back({c0,nFront,color,mat}); v.push_back({c1,nFront,color,mat}); v.push_back({c5,nFront,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c5,nFront,color,mat}); v.push_back({c4,nFront,color,mat});
+    // Back    (normal: 0,0,+1)
+    const glm::vec3 nBack{0,0,1};
+    v.push_back({c3,nBack,color,mat}); v.push_back({c7,nBack,color,mat}); v.push_back({c6,nBack,color,mat});
+    v.push_back({c3,nBack,color,mat}); v.push_back({c6,nBack,color,mat}); v.push_back({c2,nBack,color,mat});
+    // Left    (normal: -1,0,0)
+    const glm::vec3 nLeft{-1,0,0};
+    v.push_back({c0,nLeft,color,mat}); v.push_back({c4,nLeft,color,mat}); v.push_back({c7,nLeft,color,mat});
+    v.push_back({c0,nLeft,color,mat}); v.push_back({c7,nLeft,color,mat}); v.push_back({c3,nLeft,color,mat});
+    // Right   (normal: +1,0,0)
+    const glm::vec3 nRight{1,0,0};
+    v.push_back({c1,nRight,color,mat}); v.push_back({c2,nRight,color,mat}); v.push_back({c6,nRight,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c6,nRight,color,mat}); v.push_back({c5,nRight,color,mat});
 }
 
 void Renderer::AddWireOrientedBox(
@@ -1360,39 +1373,43 @@ void Renderer::AddSolidOrientedBox(
 )
 {
     const glm::mat3 rotation = RotationMatrixFromEulerDegrees(rotationEulerDegrees);
-    const std::array<glm::vec3, 8> localCorners = {
-        glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z},
+    const glm::vec3 c0 = center + rotation * glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c1 = center + rotation * glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c2 = center + rotation * glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c3 = center + rotation * glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c4 = center + rotation * glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c5 = center + rotation * glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c6 = center + rotation * glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z};
+    const glm::vec3 c7 = center + rotation * glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z};
+
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
     };
 
-    std::array<glm::vec3, 8> corners{};
-    for (std::size_t i = 0; i < localCorners.size(); ++i)
-    {
-        corners[i] = center + rotation * localCorners[i];
-    }
+    // Rotated face normals (cheaper than per-tri cross product).
+    const glm::vec3 nBot   = rotation * glm::vec3{0,-1, 0};
+    const glm::vec3 nTop   = rotation * glm::vec3{0, 1, 0};
+    const glm::vec3 nFront = rotation * glm::vec3{0, 0,-1};
+    const glm::vec3 nBack  = rotation * glm::vec3{0, 0, 1};
+    const glm::vec3 nLeft  = rotation * glm::vec3{-1,0, 0};
+    const glm::vec3 nRight = rotation * glm::vec3{1, 0, 0};
 
-    const auto tri = [&](int a, int b, int c) {
-        AddSolidTriangle(
-            corners[static_cast<std::size_t>(a)],
-            corners[static_cast<std::size_t>(b)],
-            corners[static_cast<std::size_t>(c)],
-            color,
-            material
-        );
-    };
-
-    tri(0, 2, 1); tri(0, 3, 2);
-    tri(4, 5, 6); tri(4, 6, 7);
-    tri(0, 1, 5); tri(0, 5, 4);
-    tri(3, 7, 6); tri(3, 6, 2);
-    tri(0, 4, 7); tri(0, 7, 3);
-    tri(1, 2, 6); tri(1, 6, 5);
+    auto& v = m_solidVertices;
+    v.push_back({c0,nBot,color,mat});   v.push_back({c2,nBot,color,mat});   v.push_back({c1,nBot,color,mat});
+    v.push_back({c0,nBot,color,mat});   v.push_back({c3,nBot,color,mat});   v.push_back({c2,nBot,color,mat});
+    v.push_back({c4,nTop,color,mat});   v.push_back({c5,nTop,color,mat});   v.push_back({c6,nTop,color,mat});
+    v.push_back({c4,nTop,color,mat});   v.push_back({c6,nTop,color,mat});   v.push_back({c7,nTop,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c1,nFront,color,mat}); v.push_back({c5,nFront,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c5,nFront,color,mat}); v.push_back({c4,nFront,color,mat});
+    v.push_back({c3,nBack,color,mat});  v.push_back({c7,nBack,color,mat});  v.push_back({c6,nBack,color,mat});
+    v.push_back({c3,nBack,color,mat});  v.push_back({c6,nBack,color,mat});  v.push_back({c2,nBack,color,mat});
+    v.push_back({c0,nLeft,color,mat});  v.push_back({c4,nLeft,color,mat});  v.push_back({c7,nLeft,color,mat});
+    v.push_back({c0,nLeft,color,mat});  v.push_back({c7,nLeft,color,mat});  v.push_back({c3,nLeft,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c2,nRight,color,mat}); v.push_back({c6,nRight,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c6,nRight,color,mat}); v.push_back({c5,nRight,color,mat});
 }
 
 void Renderer::AddWireCapsule(const glm::vec3& center, float height, float radius, const glm::vec3& color)
