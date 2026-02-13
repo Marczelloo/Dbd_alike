@@ -1,12 +1,16 @@
 #include "engine/render/StaticBatcher.hpp"
+#include "engine/core/JobSystem.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 
 #include <glad/glad.h>
 
 #include <glm/common.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include "engine/core/Profiler.hpp"
 
 namespace engine::render
 {
@@ -21,6 +25,8 @@ void StaticBatcher::BeginBuild()
 {
     m_buildVertices.clear();
     m_chunks.clear();
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
     m_built = false;
     m_vertexCount = 0;
     m_visibleCount = 0;
@@ -135,7 +141,8 @@ void StaticBatcher::Render(
     const glm::mat4& viewProjection,
     const Frustum& frustum,
     unsigned int shaderProgram,
-    int viewProjLocation
+    int viewProjLocation,
+    int modelLocation
 )
 {
     if (!m_built || m_vao == 0 || m_chunks.empty())
@@ -144,33 +151,82 @@ void StaticBatcher::Render(
     }
 
     m_visibleCount = 0;
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
+    m_cachedFirsts.reserve(m_chunks.size());
+    m_cachedCounts.reserve(m_chunks.size());
 
-    std::vector<GLint> firsts;
-    std::vector<GLsizei> counts;
-    firsts.reserve(m_chunks.size());
-    counts.reserve(m_chunks.size());
-
-    for (const auto& chunk : m_chunks)
+    // Use parallel culling for large chunk counts
+    const std::size_t chunkCount = m_chunks.size();
+    auto& jobSystem = engine::core::JobSystem::Instance();
+    
+    if (jobSystem.IsInitialized() && jobSystem.IsEnabled() && chunkCount > 256)
     {
-        if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+        // Parallel culling
+        std::vector<std::int8_t> visibleFlags(chunkCount, 0);
+        engine::core::JobCounter cullCounter;
+        
+        jobSystem.ParallelFor(chunkCount, 64, [&frustum, &visibleFlags, this](std::size_t idx) {
+            const auto& chunk = m_chunks[idx];
+            if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+            {
+                visibleFlags[idx] = 1;
+            }
+        }, engine::core::JobPriority::High, &cullCounter);
+        
+        jobSystem.WaitForCounter(cullCounter);
+        
+        // Collect visible chunks
+        for (std::size_t i = 0; i < chunkCount; ++i)
         {
-            firsts.push_back(static_cast<GLint>(chunk.firstVertex));
-            counts.push_back(static_cast<GLsizei>(chunk.vertexCount));
-            m_visibleCount += chunk.vertexCount;
+            if (visibleFlags[i])
+            {
+                m_cachedFirsts.push_back(static_cast<GLint>(m_chunks[i].firstVertex));
+                m_cachedCounts.push_back(static_cast<GLsizei>(m_chunks[i].vertexCount));
+                m_visibleCount += m_chunks[i].vertexCount;
+            }
+        }
+    }
+    else
+    {
+        // Sequential culling (fallback)
+        for (const auto& chunk : m_chunks)
+        {
+            if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
+            {
+                m_cachedFirsts.push_back(static_cast<GLint>(chunk.firstVertex));
+                m_cachedCounts.push_back(static_cast<GLsizei>(chunk.vertexCount));
+                m_visibleCount += chunk.vertexCount;
+            }
         }
     }
 
-    if (firsts.empty())
+    if (m_cachedFirsts.empty())
     {
         return;
     }
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(viewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+    if (modelLocation >= 0)
+    {
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(identity));
+    }
 
     glBindVertexArray(m_vao);
-    glMultiDrawArrays(GL_TRIANGLES, firsts.data(), counts.data(), static_cast<GLsizei>(firsts.size()));
-    glBindVertexArray(0);
+    glMultiDrawArrays(
+        GL_TRIANGLES,
+        m_cachedFirsts.data(),
+        m_cachedCounts.data(),
+        static_cast<GLsizei>(m_cachedFirsts.size())
+    );
+
+    // Record stats in profiler.
+    auto& profiler = engine::core::Profiler::Instance();
+    profiler.RecordDrawCall(static_cast<std::uint32_t>(m_visibleCount), static_cast<std::uint32_t>(m_visibleCount / 3));
+    profiler.StatsMut().staticBatchChunksVisible = static_cast<std::uint32_t>(m_cachedFirsts.size());
+    profiler.StatsMut().staticBatchChunksTotal = static_cast<std::uint32_t>(m_chunks.size());
 }
 
 void StaticBatcher::Clear()
@@ -187,6 +243,8 @@ void StaticBatcher::Clear()
     }
     m_buildVertices.clear();
     m_chunks.clear();
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
     m_vertexCount = 0;
     m_visibleCount = 0;
     m_built = false;

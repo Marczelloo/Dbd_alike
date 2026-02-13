@@ -76,71 +76,17 @@ void ScreenEffects::TriggerDamageFlash()
 
 void ScreenEffects::DrawVignette(float intensity, float r, float g, float b, float pulse)
 {
-    const int screenWidth = m_ui->ScreenWidth();
-    const int screenHeight = m_ui->ScreenHeight();
-    
     intensity = std::clamp(intensity, 0.0F, 1.0F);
-    
+
     if (intensity < 0.01F)
     {
         return;
     }
-    
-    // Smooth oval vignette using distance-based alpha on a grid
-    const float w = static_cast<float>(screenWidth);
-    const float h = static_cast<float>(screenHeight);
-    const float centerX = w * 0.5F;
-    const float centerY = h * 0.5F;
-    const float maxDist = std::sqrt(centerX * centerX + centerY * centerY);
-    
+
     // Pulse effect for chase
     const float pulseBoost = pulse > 0.5F ? std::sin(m_internalPulseTime * 4.0F) * 0.15F : 0.0F;
-    const float baseAlpha = (intensity + pulseBoost) * 0.75F;
-    
-    // Vignette parameters - how far from center it starts to fade
-    const float vignetteStart = 0.35F;  // 0 = center, 1 = corner
-    const float vignetteEnd = 1.15F;    // Full intensity at this distance
-    
-    // Draw grid of rectangles with alpha based on elliptical distance
-    constexpr int kGridX = 96;
-    constexpr int kGridY = 72;
-    const float cellW = w / static_cast<float>(kGridX);
-    const float cellH = h / static_cast<float>(kGridY);
-    
-    for (int iy = 0; iy < kGridY; ++iy)
-    {
-        for (int ix = 0; ix < kGridX; ++ix)
-        {
-            // Center of this cell
-            const float cx = (static_cast<float>(ix) + 0.5F) * cellW;
-            const float cy = (static_cast<float>(iy) + 0.5F) * cellH;
-            
-            // Normalized elliptical distance from center (0 = center, 1 = edge)
-            const float dx = (cx - centerX) / centerX;
-            const float dy = (cy - centerY) / centerY;
-            const float dist = std::sqrt(dx * dx + dy * dy);
-            
-            // Only draw cells in the vignette zone
-            if (dist < vignetteStart)
-            {
-                continue;
-            }
-            
-            // Calculate alpha based on distance
-            float alpha = std::clamp((dist - vignetteStart) / (vignetteEnd - vignetteStart), 0.0F, 1.0F);
-            alpha = std::pow(alpha, 1.2F);  // Smooth curve
-            alpha *= baseAlpha;
-            
-            if (alpha < 0.01F)
-            {
-                continue;
-            }
-            
-            engine::ui::UiRect rect{cx - cellW * 0.5F, cy - cellH * 0.5F, cellW, cellH};
-            glm::vec4 color(r, g, b, alpha);
-            m_ui->DrawRect(rect, color);
-        }
-    }
+    const float baseAlpha = std::clamp((intensity + pulseBoost) * 0.75F, 0.0F, 1.0F);
+    m_ui->DrawFullscreenVignette(glm::vec4(r, g, b, baseAlpha));
 }
 
 void ScreenEffects::DrawDamageFlash(float alpha)

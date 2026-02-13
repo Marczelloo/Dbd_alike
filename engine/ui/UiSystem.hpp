@@ -125,6 +125,7 @@ public:
     void DrawRect(const UiRect& rect, const glm::vec4& color);
     void DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color);
     void DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
+    void DrawFullscreenVignette(const glm::vec4& color);
 
 private:
     struct QuadVertex
@@ -224,7 +225,7 @@ private:
         float v0,
         float u1,
         float v1,
-        bool textured
+        float mode
     );
     void EmitTexturedQuad(
         float x0,
@@ -261,6 +262,7 @@ private:
     std::vector<LayoutState> m_layoutStack;
     std::vector<ScrollState> m_scrollStack;
     std::vector<std::string> m_idScopeStack;
+    mutable std::string m_idScratch; // reusable buffer for BuildId (avoids ostringstream allocs)
     std::vector<ClipRect> m_clipStack;
 
     std::unordered_map<std::string, WidgetState> m_widgetState;

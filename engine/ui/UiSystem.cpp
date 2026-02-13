@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -54,6 +53,12 @@ void main() {
     if (vTextured > 0.5) {
         float alpha = texture(uFontTexture, vUv).r;
         FragColor = vec4(vColor.rgb, vColor.a * alpha);
+    } else if (vTextured < -0.5) {
+        vec2 center = vec2(0.5, 0.5);
+        float dist = length(vUv - center);
+        float vignette = smoothstep(0.35, 1.0, dist);
+        vignette = pow(clamp(vignette, 0.0, 1.0), 1.2);
+        FragColor = vec4(vColor.rgb, vColor.a * vignette);
     } else {
         FragColor = vColor;
     }
@@ -411,6 +416,7 @@ bool UiSystem::IsShiftDown() const
 std::string UiSystem::CollectTypedCharacters() const
 {
     std::string result;
+    result.reserve(16);
     if (m_input == nullptr)
     {
         return result;
@@ -529,21 +535,44 @@ void UiSystem::EndFrame()
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
 
+    // Consolidate all batch vertices into one upload to reduce driver overhead.
+    std::size_t totalVertices = 0;
     for (const DrawBatch& batch : m_batches)
     {
-        if (batch.vertices.empty())
+        totalVertices += batch.vertices.size();
+    }
+    if (totalVertices > 0)
+    {
+        // Upload all vertices in one glBufferData call.
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(totalVertices * sizeof(QuadVertex)), nullptr, GL_DYNAMIC_DRAW);
+        GLintptr offset = 0;
+        for (const DrawBatch& batch : m_batches)
         {
-            continue;
+            if (!batch.vertices.empty())
+            {
+                glBufferSubData(GL_ARRAY_BUFFER, offset, static_cast<GLsizeiptr>(batch.vertices.size() * sizeof(QuadVertex)), batch.vertices.data());
+                offset += static_cast<GLintptr>(batch.vertices.size() * sizeof(QuadVertex));
+            }
         }
-        const int sx = batch.clip.x;
-        const int syTop = batch.clip.y;
-        const int sw = batch.clip.w;
-        const int sh = batch.clip.h;
-        const int sy = m_screenHeight - (syTop + sh);
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(sx, std::max(0, sy), sw, sh);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(batch.vertices.size() * sizeof(QuadVertex)), batch.vertices.data());
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batch.vertices.size()));
+
+        // Draw each batch as a sub-range with its scissor rect.
+        GLint vertexOffset = 0;
+        for (const DrawBatch& batch : m_batches)
+        {
+            if (batch.vertices.empty())
+            {
+                continue;
+            }
+            const int sx = batch.clip.x;
+            const int syTop = batch.clip.y;
+            const int sw = batch.clip.w;
+            const int sh = batch.clip.h;
+            const int sy = m_screenHeight - (syTop + sh);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(sx, std::max(0, sy), sw, sh);
+            glDrawArrays(GL_TRIANGLES, vertexOffset, static_cast<GLsizei>(batch.vertices.size()));
+            vertexOffset += static_cast<GLint>(batch.vertices.size());
+        }
     }
 
     glDisable(GL_SCISSOR_TEST);
@@ -1227,13 +1256,14 @@ std::string UiSystem::BuildId(const std::string& localId) const
     {
         return localId;
     }
-    std::ostringstream oss;
+    m_idScratch.clear();
     for (const std::string& scope : m_idScopeStack)
     {
-        oss << scope << "/";
+        m_idScratch += scope;
+        m_idScratch += '/';
     }
-    oss << localId;
-    return oss.str();
+    m_idScratch += localId;
+    return m_idScratch;
 }
 
 void UiSystem::PushIdScope(const std::string& scopeId)
@@ -1251,7 +1281,18 @@ void UiSystem::PopIdScope()
 
 void UiSystem::DrawRect(const UiRect& rect, const glm::vec4& color)
 {
-    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, false);
+    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
+}
+
+void UiSystem::DrawFullscreenVignette(const glm::vec4& color)
+{
+    if (m_screenWidth <= 0 || m_screenHeight <= 0)
+    {
+        return;
+    }
+
+    const UiRect fullScreen{0.0F, 0.0F, static_cast<float>(m_screenWidth), static_cast<float>(m_screenHeight)};
+    EmitQuad(fullScreen, color, 0.0F, 0.0F, 1.0F, 1.0F, -1.0F);
 }
 
 void UiSystem::DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color)
@@ -1389,11 +1430,11 @@ UiSystem::DrawBatch& UiSystem::ActiveBatch()
     return last;
 }
 
-void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, bool textured)
+void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, float mode)
 {
     DrawBatch& batch = ActiveBatch();
     auto push = [&](float x, float y, float u, float v) {
-        batch.vertices.push_back(QuadVertex{x, y, u, v, color.r, color.g, color.b, color.a, textured ? 1.0F : 0.0F});
+        batch.vertices.push_back(QuadVertex{x, y, u, v, color.r, color.g, color.b, color.a, mode});
     };
     const float x0 = rect.x;
     const float y0 = rect.y;
@@ -1409,7 +1450,7 @@ void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, fl
 
 void UiSystem::EmitTexturedQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const glm::vec4& color)
 {
-    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, true);
+    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, 1.0F);
 }
 
 std::uint32_t UiSystem::HashString(const std::string& value) const

@@ -1,5 +1,9 @@
 #define NOMINMAX
 #include "engine/core/App.hpp"
+#include "engine/core/Profiler.hpp"
+#include "engine/core/JobSystem.hpp"
+#include "engine/assets/AsyncAssetLoader.hpp"
+#include "engine/render/RenderThread.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +18,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <iomanip>
 #include <thread>
 
 #include <glad/glad.h>
@@ -360,6 +365,20 @@ bool App::Run()
     ApplyAudioSettings();
     (void)LoadTerrorRadiusProfile("default_killer");
 
+    // Initialize threading systems
+    if (!JobSystem::Instance().Initialize())
+    {
+        std::cerr << "Warning: failed to initialize JobSystem.\n";
+    }
+    if (!assets::AsyncAssetLoader::Instance().Initialize("assets"))
+    {
+        std::cerr << "Warning: failed to initialize AsyncAssetLoader.\n";
+    }
+    if (!render::RenderThread::Instance().Initialize())
+    {
+        std::cerr << "Warning: failed to initialize RenderThread.\n";
+    }
+
     m_renderer.SetRenderMode(m_graphicsApplied.renderMode);
 
     m_window.SetResizeCallback([this](int width, int height) { m_renderer.SetViewport(width, height); });
@@ -436,6 +455,49 @@ bool App::Run()
                 m_menuKillerPerks[i] = perkArray[i];
             }
         }
+        
+        // Apply character/item/power selections from lobby
+        const auto& lobbyState = m_lobbyScene.GetState();
+        if (!lobbyState.selectedCharacter.empty())
+        {
+            if (role == "survivor")
+            {
+                m_gameplay.SetSelectedSurvivorCharacter(lobbyState.selectedCharacter);
+            }
+            else
+            {
+                m_gameplay.SetSelectedKillerCharacter(lobbyState.selectedCharacter);
+            }
+        }
+        
+        // Apply item/power loadouts from lobby
+        if (role == "survivor")
+        {
+            m_gameplay.SetSurvivorItemLoadout(
+                lobbyState.selectedItem,
+                lobbyState.selectedAddonA,
+                lobbyState.selectedAddonB
+            );
+        }
+        else
+        {
+            // For killer, get the power from selected character or use the selected power
+            std::string powerId = lobbyState.selectedPower;
+            if (!lobbyState.selectedCharacter.empty())
+            {
+                const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(lobbyState.selectedCharacter);
+                if (killerDef != nullptr && !killerDef->powerId.empty())
+                {
+                    powerId = killerDef->powerId;
+                }
+            }
+            m_gameplay.SetKillerPowerLoadout(
+                powerId,
+                lobbyState.selectedAddonA,
+                lobbyState.selectedAddonB
+            );
+        }
+        
         m_lobbyScene.ExitLobby();
         StartSoloSession(map, role);
     });
@@ -495,6 +557,18 @@ bool App::Run()
     m_lobbyScene.SetPowerChangedCallback([this](const std::string& powerId, const std::string& addonA, const std::string& addonB) {
         m_gameplay.SetKillerPowerLoadout(powerId, addonA, addonB);
     });
+    m_lobbyScene.SetCharacterChangedCallback([this](const std::string& characterId) {
+        // Update character selection in gameplay systems
+        const bool isSurvivor = (m_sessionRoleName == "survivor");
+        if (isSurvivor)
+        {
+            m_gameplay.SetSelectedSurvivorCharacter(characterId);
+        }
+        else
+        {
+            m_gameplay.SetSelectedKillerCharacter(characterId);
+        }
+    });
 
     if (!m_console.Initialize(m_window))
     {
@@ -513,10 +587,16 @@ bool App::Run()
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
+        auto& profiler = engine::core::Profiler::Instance();
+        profiler.BeginFrame();
+
         const double frameStart = glfwGetTime();
 
-        m_window.PollEvents();
-        m_input.Update(m_window.NativeHandle());
+        {
+            PROFILE_SCOPE("Input");
+            m_window.PollEvents();
+            m_input.Update(m_window.NativeHandle());
+        }
         if (!m_pendingDroppedFiles.empty())
         {
             m_levelEditor.QueueExternalDroppedFiles(m_pendingDroppedFiles);
@@ -608,7 +688,10 @@ bool App::Run()
             SendClientInput(m_input, controlsEnabled);
         }
 
-        PollNetwork();
+        {
+            PROFILE_SCOPE("Network");
+            PollNetwork();
+        }
         if ((m_networkState == NetworkState::ClientConnecting || m_networkState == NetworkState::ClientHandshaking) &&
             !m_network.IsConnected())
         {
@@ -646,12 +729,16 @@ bool App::Run()
             m_time.ConsumeFixedStep();
         }
 
+        std::optional<game::gameplay::HudState> frameHudState;
         if (inGame)
         {
+            PROFILE_SCOPE("Update");
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
+            
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
             m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
-            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()));
+            frameHudState = m_gameplay.BuildHudState();
+            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()), *frameHudState);
         }
         else if (inEditor)
         {
@@ -663,18 +750,24 @@ bool App::Run()
                 m_window.FramebufferHeight()
             );
         }
-        m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
+        {
+            PROFILE_SCOPE("Audio");
+            m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
+        }
 
-        m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
+        {
+            PROFILE_SCOPE("Render");
+            m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
         glm::mat4 viewProjection{1.0F};
+        const float aspect = m_window.FramebufferHeight() > 0
+                                 ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
+                                 : (16.0F / 9.0F);
+
         if (inGame)
         {
             m_renderer.SetLightingEnabled(true);
             m_renderer.SetPointLights(m_runtimeMapPointLights);
             m_renderer.SetSpotLights(m_runtimeMapSpotLights);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             m_gameplay.Render(m_renderer, aspect);
             viewProjection = m_gameplay.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_gameplay.CameraPosition());
@@ -684,18 +777,12 @@ bool App::Run()
             m_renderer.SetLightingEnabled(m_levelEditor.EditorLightingEnabled());
             m_renderer.SetEnvironmentSettings(m_levelEditor.CurrentEnvironmentSettings());
             m_levelEditor.Render(m_renderer);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
         }
         else if (inLobby)
         {
             m_renderer.SetLightingEnabled(true);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             viewProjection = m_lobbyScene.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_lobbyScene.CameraPosition());
             m_lobbyScene.Render3D();
@@ -706,6 +793,7 @@ bool App::Run()
             m_renderer.SetCameraWorldPosition(glm::vec3{0.0F, 2.0F, 0.0F});
         }
         m_renderer.EndFrame(viewProjection);
+        } // end PROFILE_SCOPE("Render")
 
         bool shouldQuit = false;
         bool closePauseMenu = false;
@@ -802,9 +890,9 @@ bool App::Run()
             m_window.SetShouldClose(true);
         }
 
-        if (m_appMode == AppMode::InGame)
+        if (m_appMode == AppMode::InGame && frameHudState.has_value())
         {
-            const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+            const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
             
             m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
@@ -914,7 +1002,7 @@ bool App::Run()
         m_ui.EndFrame();
 
         // Build HUD state before rendering toolbar (needed for game stats display)
-        game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        game::gameplay::HudState hudState = frameHudState.has_value() ? std::move(*frameHudState) : m_gameplay.BuildHudState();
         hudState.isInGame = (m_appMode == AppMode::InGame);
 
         // Render developer toolbar LAST to be on top of everything
@@ -927,6 +1015,7 @@ bool App::Run()
             toolbarContext.showMovementWindow = &m_showMovementWindow;
             toolbarContext.showStatsWindow = &m_showStatsWindow;
             toolbarContext.showControlsWindow = &m_showControlsWindow;
+            toolbarContext.profilerToggle = [this]() { m_profilerOverlay.Toggle(); };
             toolbarContext.showUiTestPanel = &m_showUiTestPanel;
             toolbarContext.showLoadingScreenTestPanel = &m_showLoadingScreenTestPanel;
             toolbarContext.fps = currentFps;
@@ -1128,9 +1217,120 @@ bool App::Run()
             m_audio.StopAll();
         };
 
+        // Profiler callbacks.
+        context.profilerToggle = [this]() {
+            m_profilerOverlay.Toggle();
+        };
+        context.profilerSetPinned = [this](bool pinned) {
+            m_profilerOverlay.SetPinned(pinned);
+        };
+        context.profilerSetCompact = [this](bool compact) {
+            m_profilerOverlay.SetCompactMode(compact);
+        };
+        context.profilerBenchmark = [](int frames) {
+            engine::core::Profiler::Instance().StartBenchmark(frames);
+        };
+        context.profilerBenchmarkStop = []() {
+            engine::core::Profiler::Instance().StopBenchmark();
+        };
+        context.profilerDraw = [this, &profiler]() {
+            m_profilerOverlay.Draw(profiler);
+        };
+
+        // Automated perf test callbacks.
+        context.perfTest = [this](const std::string& mapName, int frames) {
+            // Start a solo session on the specified map, then begin benchmark.
+            std::string normalizedMap = mapName;
+            if (normalizedMap == "random" || normalizedMap == "random_generation" || normalizedMap == "main_map")
+            {
+                normalizedMap = "main";
+            }
+            StartSoloSession(normalizedMap, m_sessionRoleName);
+            engine::core::Profiler::Instance().StartBenchmark(frames);
+        };
+
+        context.perfReport = []() -> std::string {
+            const auto& result = engine::core::Profiler::Instance().LastBenchmark();
+            if (result.totalFrames == 0)
+            {
+                return "";
+            }
+            std::ostringstream ss;
+            ss << "=== Benchmark Results ===\n"
+               << "  Frames:        " << result.totalFrames << "\n"
+               << "  Duration:      " << std::fixed << std::setprecision(2) << result.durationSeconds << "s\n"
+               << "  Avg FPS:       " << std::fixed << std::setprecision(1) << result.avgFps << "\n"
+               << "  Min FPS:       " << std::fixed << std::setprecision(1) << result.minFps << "\n"
+               << "  Max FPS:       " << std::fixed << std::setprecision(1) << result.maxFps << "\n"
+               << "  1% Low FPS:    " << std::fixed << std::setprecision(1) << result.onePercentLow << "\n"
+               << "  Avg Frame:     " << std::fixed << std::setprecision(3) << result.avgFrameTimeMs << "ms\n"
+               << "  P99 Frame:     " << std::fixed << std::setprecision(3) << result.p99FrameTimeMs << "ms\n"
+               << "=========================";
+            return ss.str();
+        };
+
+        // Threading callbacks
+        context.jobStats = []() -> std::string {
+            auto& js = engine::core::JobSystem::Instance();
+            auto stats = js.GetStats();
+            std::ostringstream ss;
+            ss << "=== Job System Stats ===\n"
+               << "  Workers:       " << stats.totalWorkers << "\n"
+               << "  Active Jobs:   " << stats.activeWorkers << "\n"
+               << "  Pending Jobs:  " << stats.pendingJobs << "\n"
+               << "  Completed:     " << stats.completedJobs << "\n"
+               << "  High Priority: " << stats.highPriorityPending << "\n"
+               << "  Normal:        " << stats.normalPriorityPending << "\n"
+               << "  Low Priority:  " << stats.lowPriorityPending << "\n"
+               << "=========================";
+            return ss.str();
+        };
+
+        context.jobEnabled = [](bool enabled) {
+            engine::core::JobSystem::Instance().SetEnabled(enabled);
+        };
+
+        context.testParallel = [](int iterations) {
+            auto& js = engine::core::JobSystem::Instance();
+            std::atomic<int> counter{0};
+            auto start = std::chrono::high_resolution_clock::now();
+            
+            js.ParallelFor(static_cast<std::size_t>(iterations), 100, [&counter](std::size_t i) {
+                // Simulate some work
+                volatile int x = static_cast<int>(i * i);
+                (void)x;
+                counter.fetch_add(1);
+            }, engine::core::JobPriority::Normal);
+            
+            js.WaitForAll();
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            
+            std::cout << "[JobTest] Completed " << counter.load() << " iterations in " << ms << "ms\n";
+        };
+
+        context.assetLoaderStats = []() -> std::string {
+            auto& loader = engine::assets::AsyncAssetLoader::Instance();
+            auto stats = loader.GetStats();
+            std::ostringstream ss;
+            ss << "=== Asset Loader Stats ===\n"
+               << "  Total Loaded:  " << stats.totalLoaded << "\n"
+               << "  Total Failed:  " << stats.totalFailed << "\n"
+               << "  Loading Now:   " << stats.currentlyLoading << "\n"
+               << "  Pending Queue: " << stats.pendingInQueue << "\n"
+               << "==========================";
+            return ss.str();
+        };
+
         m_console.Render(context, currentFps, hudState);
 
-        m_window.SwapBuffers();
+        {
+            PROFILE_SCOPE("Swap");
+            m_window.SwapBuffers();
+        }
+
+        profiler.EndFrame();
 
         const double frameEnd = glfwGetTime();
         const double frameDelta = frameEnd - frameStart;
@@ -1143,13 +1343,38 @@ bool App::Run()
             fpsFrames = 0;
         }
 
-        if (!m_vsyncEnabled && m_fpsLimit > 0)
+        int effectiveFpsLimit = m_fpsLimit;
+        if (m_appMode == AppMode::Lobby && !m_vsyncEnabled)
         {
-            const double targetSeconds = 1.0 / static_cast<double>(m_fpsLimit);
-            const double elapsed = glfwGetTime() - frameStart;
+            effectiveFpsLimit = 60;
+        }
+
+        static bool dbgPrinted = false;
+        if (!dbgPrinted)
+        {
+            std::cout << "[FPS DEBUG] m_vsyncEnabled=" << m_vsyncEnabled 
+                      << " m_fpsLimit=" << m_fpsLimit 
+                      << " effectiveFpsLimit=" << effectiveFpsLimit << std::endl;
+            dbgPrinted = true;
+        }
+
+        if (!m_vsyncEnabled && effectiveFpsLimit > 0)
+        {
+            const double targetSeconds = 1.0 / static_cast<double>(effectiveFpsLimit);
+            double elapsed = glfwGetTime() - frameStart;
+            
             if (elapsed < targetSeconds)
             {
-                std::this_thread::sleep_for(std::chrono::duration<double>(targetSeconds - elapsed));
+                const double sleepThreshold = 0.002;
+                const double remaining = targetSeconds - elapsed;
+                if (remaining > sleepThreshold)
+                {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(remaining - sleepThreshold));
+                }
+                
+                while ((elapsed = glfwGetTime() - frameStart) < targetSeconds)
+                {
+                }
             }
         }
     }
@@ -1167,6 +1392,12 @@ bool App::Run()
     m_ui.Shutdown();
     m_audio.Shutdown();
     m_renderer.Shutdown();
+    
+    // Shutdown threading systems
+    render::RenderThread::Instance().Shutdown();
+    assets::AsyncAssetLoader::Instance().Shutdown();
+    JobSystem::Instance().Shutdown();
+    
     CloseNetworkLogFile();
     return true;
 }
@@ -1219,6 +1450,7 @@ void App::ResetToMainMenu()
         TransitionNetworkState(NetworkState::Offline, "Main menu");
     }
 }
+
 
 void App::StartSoloSession(const std::string& mapName, const std::string& roleName)
 {
@@ -3709,7 +3941,7 @@ void App::StopTerrorRadiusAudio()
     m_terrorAudioProfile.loaded = false;
 }
 
-void App::UpdateTerrorRadiusAudio(float deltaSeconds)
+void App::UpdateTerrorRadiusAudio(float deltaSeconds, const game::gameplay::HudState& hudState)
 {
     if (!m_terrorAudioProfile.loaded || m_appMode != AppMode::InGame)
     {
@@ -3745,7 +3977,7 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
     // Early exit for Killer: only chase layer matters
     if (localPlayerIsKiller)
     {
-        const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+        const bool chaseActive = hudState.chaseActive;
         const float smooth = glm::clamp(deltaSeconds / m_terrorAudioProfile.smoothingTime, 0.0F, 1.0F);
 
         for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
@@ -3773,7 +4005,7 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
     const glm::vec2 delta{survivor.x - killer.x, survivor.z - killer.z};
     const float distance = glm::length(delta);
     const float radius = std::max(1.0F, m_terrorAudioProfile.baseRadius);
-    const bool chaseActive = m_gameplay.BuildHudState().chaseActive;
+    const bool chaseActive = hudState.chaseActive;
 
     // Track chase state transitions for anti-leak guard
     const bool justEnteredChase = chaseActive && !m_chaseWasActive;
@@ -3896,6 +4128,7 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
 std::string App::DumpTerrorRadiusState() const
 {
     std::string out = "=== Terror Radius State ===\n";
+    const auto hudState = m_gameplay.BuildHudState();
 
     // Phase B1: Local role and audio routing info
     out += "Local Role: " + m_localPlayer.controlledRole + "\n";
@@ -3904,7 +4137,6 @@ std::string App::DumpTerrorRadiusState() const
     out += "TR Enabled: " + std::string(localPlayerIsSurvivor ? "YES" : "NO") + "\n";
     if (localPlayerIsKiller)
     {
-        const auto hudState = m_gameplay.BuildHudState();
         out += "Chase Enabled for Killer: " + std::string(hudState.chaseActive ? "YES" : "NO") + "\n";
     }
 
@@ -3938,7 +4170,6 @@ std::string App::DumpTerrorRadiusState() const
     }
 
     // Chase state
-    const auto hudState = m_gameplay.BuildHudState();
     out += std::string("Chase Active: ") + (hudState.chaseActive ? "YES" : "NO") + "\n";
 
     // Bus volume
@@ -4561,82 +4792,30 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.Spacer(24.0F * scale);
 
-    // Session settings
+    // Session settings - simplified to role and map only
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
 
     const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
+    
+    // Apply default selections for PLAY button (defaults only - lobby handles custom selections)
     auto applyMenuGameplaySelections = [&]() {
+        // Use first available character as default
         if (!survivorCharacters.empty())
         {
-            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters.front());
         }
         if (!killerCharacters.empty())
         {
-            m_gameplay.SetSelectedKillerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            m_gameplay.SetSelectedKillerCharacter(killerCharacters.front());
         }
-
-        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
-                                       ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
-                                       : std::string{};
-        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
-                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
-                                           : std::string{"none"};
-        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
-                                           ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
-                                           : std::string{"none"};
-        m_gameplay.SetSurvivorItemLoadout(
-            itemId,
-            itemAddonA == "none" ? "" : itemAddonA,
-            itemAddonB == "none" ? "" : itemAddonB
-        );
-
-        std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
-                                  ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
-                                  : std::string{};
-        bool powerForcedByCharacter = false;
-        if (!killerCharacters.empty() && m_menuKillerCharacterIndex >= 0 &&
-            m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
-        {
-            const auto* killerDef = m_gameplay.GetLoadoutCatalog().FindKiller(
-                killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]
-            );
-            if (killerDef != nullptr && !killerDef->powerId.empty())
-            {
-                powerId = killerDef->powerId;
-                powerForcedByCharacter = true;
-                if (!killerPowers.empty())
-                {
-                    const auto it = std::find(killerPowers.begin(), killerPowers.end(), powerId);
-                    if (it != killerPowers.end())
-                    {
-                        m_menuKillerPowerIndex = static_cast<int>(std::distance(killerPowers.begin(), it));
-                    }
-                }
-            }
-        }
-
-        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
-                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
-                                            : std::string{"none"};
-        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
-                                            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
-                                            : std::string{"none"};
-        const std::string resolvedPowerAddonA = powerForcedByCharacter ? std::string{"none"} : powerAddonA;
-        const std::string resolvedPowerAddonB = powerForcedByCharacter ? std::string{"none"} : powerAddonB;
-        if (powerForcedByCharacter)
-        {
-            m_menuKillerAddonAIndex = 0;
-            m_menuKillerAddonBIndex = 0;
-        }
-        m_gameplay.SetKillerPowerLoadout(
-            powerId,
-            resolvedPowerAddonA == "none" ? "" : resolvedPowerAddonA,
-            resolvedPowerAddonB == "none" ? "" : resolvedPowerAddonB
-        );
+        // Clear item/power loadouts (let gameplay systems use defaults)
+        m_gameplay.SetSurvivorItemLoadout("", "", "");
+        m_gameplay.SetKillerPowerLoadout("", "", "");
     };
 
+    // Configure lobby UI selections based on role (perks, characters, items, powers, addons)
     auto configureLobbyUiSelections = [&](const std::string& currentRoleName) {
         const bool isSurvivor = (currentRoleName == "survivor");
 
@@ -4661,48 +4840,50 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         const auto lobbyAddonIds = collectLobbyAddons();
         m_lobbyScene.SetAvailableAddons(lobbyAddonIds, lobbyAddonIds);
 
-        if (m_menuSurvivorCharacterIndex >= 0 && m_menuSurvivorCharacterIndex < static_cast<int>(survivorCharacters.size()))
+        if (isSurvivor)
         {
-            m_lobbyScene.SetLocalPlayerCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            if (m_menuSurvivorCharacterIndex >= 0 && m_menuSurvivorCharacterIndex < static_cast<int>(survivorCharacters.size()))
+            {
+                m_lobbyScene.SetLocalPlayerCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            }
+
+            const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
+                ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+                : std::string{};
+            const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
+                ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
+                : std::string{"none"};
+            const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
+                ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
+                : std::string{"none"};
+            m_lobbyScene.SetLocalPlayerItem(
+                itemId,
+                itemAddonA == "none" ? "" : itemAddonA,
+                itemAddonB == "none" ? "" : itemAddonB
+            );
         }
-        else if (m_menuKillerCharacterIndex >= 0 && m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+        else
         {
-            m_lobbyScene.SetLocalPlayerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            if (m_menuKillerCharacterIndex >= 0 && m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+            {
+                m_lobbyScene.SetLocalPlayerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            }
+
+            const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
+                ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+                : std::string{};
+            const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
+                ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
+                : std::string{"none"};
+            const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
+                ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
+                : std::string{"none"};
+            m_lobbyScene.SetLocalPlayerPower(
+                powerId,
+                powerAddonA == "none" ? "" : powerAddonA,
+                powerAddonB == "none" ? "" : powerAddonB
+            );
         }
-
-        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
-            ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
-            : std::string{};
-        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
-            ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
-            : std::string{"none"};
-        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
-            ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
-            : std::string{"none"};
-        m_lobbyScene.SetLocalPlayerItem(
-            itemId,
-            itemAddonA == "none" ? "" : itemAddonA,
-            itemAddonB == "none" ? "" : itemAddonB
-        );
-
-        const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
-            ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
-            : std::string{};
-        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
-            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
-            : std::string{"none"};
-        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
-            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
-            : std::string{"none"};
-        m_lobbyScene.SetLocalPlayerPower(
-            powerId,
-            powerAddonA == "none" ? "" : powerAddonA,
-            powerAddonB == "none" ? "" : powerAddonB
-        );
-
-        m_lobbyScene.SetLocalPlayerPerks(isSurvivor
-            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
-            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
     };
 
     m_ui.Spacer(12.0F * scale);
@@ -4713,7 +4894,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
     {
-        applyMenuGameplaySelections();
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
         localPlayer.netId = 1;
@@ -4721,6 +4901,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         localPlayer.selectedRole = roleName;
         localPlayer.isHost = true;
         localPlayer.isConnected = true;
+        
         m_lobbyScene.SetPlayers({localPlayer});
         m_lobbyScene.SetLocalPlayerRole(roleName);
         configureLobbyUiSelections(roleName);
@@ -4758,7 +4939,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Spacer(8.0F * scale);
     if (m_ui.Button("host_btn", "HOST GAME"))
     {
-        applyMenuGameplaySelections();
         // Host goes to lobby
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer localPlayer;
@@ -4776,7 +4956,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
     if (m_ui.Button("join_btn", "JOIN GAME"))
     {
-        applyMenuGameplaySelections();
         // Join goes to lobby (simulated for now)
         m_appMode = AppMode::Lobby;
         game::ui::LobbyPlayer hostPlayer;
@@ -5494,57 +5673,6 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         return true;
     };
 
-    const engine::ui::UiRect topLeft{
-        m_hudLayout.topLeftOffset.x * scale,
-        m_hudLayout.topLeftOffset.y * scale,
-        420.0F * scale,
-        260.0F * scale,
-    };
-    m_ui.BeginPanel("hud_top_left_custom", topLeft, true);
-    m_ui.Label(hudState.roleName + " | " + hudState.cameraModeName, 1.05F);
-    m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
-    m_ui.Label("Render: " + hudState.renderModeName + " | FPS: " + std::to_string(static_cast<int>(fps)), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed) + " | Grounded: " + (hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
-    m_ui.Label(
-        "Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal),
-        m_ui.Theme().colorAccent
-    );
-    m_ui.Label(
-        "Survivor: " + hudState.survivorCharacterId + " | Killer: " + hudState.killerCharacterId,
-        m_ui.Theme().colorTextMuted
-    );
-    m_ui.Label(
-        "Item: " + hudState.survivorItemId +
-            " [" + hudState.survivorItemAddonA + ", " + hudState.survivorItemAddonB + "]"
-            " charges=" + std::to_string(hudState.survivorItemCharges) +
-            " uses=" + std::to_string(hudState.survivorItemUsesRemaining),
-        hudState.survivorItemActive ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
-    );
-    m_ui.Label(
-        "Power: " + hudState.killerPowerId +
-            " [" + hudState.killerPowerAddonA + ", " + hudState.killerPowerAddonB + "]"
-            " traps=" + std::to_string(hudState.activeTrapCount) +
-            " carry=" + std::to_string(hudState.carriedTrapCount),
-        m_ui.Theme().colorTextMuted
-    );
-    if (hudState.killerPowerId == "wraith_cloak")
-    {
-        m_ui.Label(
-            std::string("Wraith: ") + (hudState.wraithCloaked ? "CLOAKED" : "VISIBLE") +
-                " haste=" + std::to_string(hudState.wraithPostUncloakHasteSeconds),
-            hudState.wraithCloaked ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
-        );
-    }
-    if (hudState.survivorStateName == "Trapped")
-    {
-        m_ui.Label(
-            "TRAPPED attempts: " + std::to_string(hudState.trappedEscapeAttempts) +
-                " chance: " + std::to_string(static_cast<int>(hudState.trappedEscapeChance * 100.0F)) + "%",
-            m_ui.Theme().colorDanger
-        );
-    }
-    m_ui.EndPanel();
     const bool showOverlay = m_showDebugOverlay;
     const bool showMovement = m_showMovementWindow && showOverlay;
     const bool showStats = m_showStatsWindow && showOverlay;

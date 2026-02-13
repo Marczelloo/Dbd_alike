@@ -35,22 +35,50 @@ float HorizontalDistance(const glm::vec3& a, const glm::vec3& b)
     const glm::vec2 d{a.x - b.x, a.z - b.z};
     return glm::length(d);
 }
+
+int CellCoord(float value, float cellSize)
+{
+    return static_cast<int>(std::floor(value / std::max(0.001F, cellSize)));
+}
 } // namespace
 
 void PhysicsWorld::Clear()
 {
     m_solids.clear();
+    m_solids.shrink_to_fit();
     m_triggers.clear();
+    m_triggers.shrink_to_fit();
+    m_spatialCells.clear();
+    m_spatialScratch.clear();
+    m_spatialScratch.shrink_to_fit();
+    m_spatialVisitStamp.clear();
+    m_spatialVisitStamp.shrink_to_fit();
+    m_spatialCurrentStamp = 1;
+    m_spatialDirty = true;
 }
 
 void PhysicsWorld::AddSolidBox(const SolidBox& box)
 {
     m_solids.push_back(box);
+    m_spatialDirty = true;
 }
 
 void PhysicsWorld::AddTrigger(const TriggerVolume& trigger)
 {
     m_triggers.push_back(trigger);
+}
+
+bool PhysicsWorld::UpdateTriggerCenter(engine::scene::Entity entity, const glm::vec3& newCenter)
+{
+    for (TriggerVolume& trigger : m_triggers)
+    {
+        if (trigger.entity == entity)
+        {
+            trigger.center = newCenter;
+            return true;
+        }
+    }
+    return false;
 }
 
 MoveResult PhysicsWorld::MoveCapsule(
@@ -115,18 +143,23 @@ MoveResult PhysicsWorld::MoveCapsule(
 
 bool PhysicsWorld::HasLineOfSight(const glm::vec3& from, const glm::vec3& to, engine::scene::Entity ignoreEntity) const
 {
-    for (const SolidBox& box : m_solids)
+    const glm::vec3 minBounds = glm::min(from, to);
+    const glm::vec3 maxBounds = glm::max(from, to);
+    AppendSolidCandidates(minBounds, maxBounds, m_spatialScratch);
+
+    for (const std::size_t index : m_spatialScratch)
     {
+        const SolidBox& box = m_solids[index];
         if (!box.blocksSight || box.entity == ignoreEntity)
         {
             continue;
         }
 
-        const glm::vec3 minBounds = box.center - box.halfExtents;
-        const glm::vec3 maxBounds = box.center + box.halfExtents;
+        const glm::vec3 solidMinBounds = box.center - box.halfExtents;
+        const glm::vec3 solidMaxBounds = box.center + box.halfExtents;
         float hitT = 1.0F;
         glm::vec3 hitNormal{0.0F, 1.0F, 0.0F};
-        if (SegmentIntersectsAabb3D(from, to, minBounds, maxBounds, &hitT, &hitNormal))
+        if (SegmentIntersectsAabb3D(from, to, solidMinBounds, solidMaxBounds, &hitT, &hitNormal))
         {
             return false;
         }
@@ -148,8 +181,13 @@ std::optional<RaycastHit> PhysicsWorld::RaycastNearest(
 {
     std::optional<RaycastHit> best;
 
-    for (const SolidBox& box : m_solids)
+    const glm::vec3 queryMinBounds = glm::min(from, to);
+    const glm::vec3 queryMaxBounds = glm::max(from, to);
+    AppendSolidCandidates(queryMinBounds, queryMaxBounds, m_spatialScratch);
+
+    for (const std::size_t index : m_spatialScratch)
     {
+        const SolidBox& box = m_solids[index];
         if (box.entity == ignoreEntity)
         {
             continue;
@@ -187,6 +225,19 @@ std::vector<TriggerHit> PhysicsWorld::QueryCapsuleTriggers(
 ) const
 {
     std::vector<TriggerHit> result;
+    QueryCapsuleTriggers(result, position, radius, capsuleHeight, kind);
+    return result;
+}
+
+void PhysicsWorld::QueryCapsuleTriggers(
+    std::vector<TriggerHit>& result,
+    const glm::vec3& position,
+    float radius,
+    float capsuleHeight,
+    TriggerKind kind
+) const
+{
+    result.clear();
     const float capsuleHalfSegment = std::max(0.0F, capsuleHeight * 0.5F - radius);
 
     for (const TriggerVolume& trigger : m_triggers)
@@ -206,8 +257,6 @@ std::vector<TriggerHit> PhysicsWorld::QueryCapsuleTriggers(
             result.push_back(TriggerHit{trigger.entity, trigger.kind});
         }
     }
-
-    return result;
 }
 
 std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(
@@ -217,6 +266,18 @@ std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(
 ) const
 {
     std::vector<TriggerCastHit> hits;
+    SphereCastTriggers(hits, from, to, radius);
+    return hits;
+}
+
+void PhysicsWorld::SphereCastTriggers(
+    std::vector<TriggerCastHit>& out,
+    const glm::vec3& from,
+    const glm::vec3& to,
+    float radius
+) const
+{
+    out.clear();
 
     for (const TriggerVolume& trigger : m_triggers)
     {
@@ -235,14 +296,12 @@ std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(
         hit.kind = trigger.kind;
         hit.t = hitT;
         hit.position = from + (to - from) * hitT;
-        hits.push_back(hit);
+        out.push_back(hit);
     }
 
-    std::sort(hits.begin(), hits.end(), [](const TriggerCastHit& lhs, const TriggerCastHit& rhs) {
+    std::sort(out.begin(), out.end(), [](const TriggerCastHit& lhs, const TriggerCastHit& rhs) {
         return lhs.t < rhs.t;
     });
-
-    return hits;
 }
 
 bool PhysicsWorld::SphereIntersectsExpandedAabb(
@@ -409,8 +468,12 @@ MoveResult PhysicsWorld::ResolveCapsulePosition(const glm::vec3& candidatePositi
     {
         bool hadPenetration = false;
 
-        for (const SolidBox& box : m_solids)
+        const glm::vec3 queryHalfExtents{radius, radius + capsuleHalfSegment, radius};
+        AppendSolidCandidates(result.position - queryHalfExtents, result.position + queryHalfExtents, m_spatialScratch);
+
+        for (const std::size_t index : m_spatialScratch)
         {
+            const SolidBox& box = m_solids[index];
             glm::vec3 normal{0.0F, 1.0F, 0.0F};
             float penetration = 0.0F;
             if (!SphereIntersectsExpandedAabb(result.position, radius, box, capsuleHalfSegment, &normal, &penetration))
@@ -438,8 +501,11 @@ MoveResult PhysicsWorld::ResolveCapsulePosition(const glm::vec3& candidatePositi
     if (!result.grounded)
     {
         const glm::vec3 probePosition = result.position + glm::vec3{0.0F, -kGroundProbeDistance, 0.0F};
-        for (const SolidBox& box : m_solids)
+        const glm::vec3 probeHalfExtents{radius, radius + capsuleHalfSegment, radius};
+        AppendSolidCandidates(probePosition - probeHalfExtents, probePosition + probeHalfExtents, m_spatialScratch);
+        for (const std::size_t index : m_spatialScratch)
         {
+            const SolidBox& box = m_solids[index];
             glm::vec3 normal{0.0F, 1.0F, 0.0F};
             float penetration = 0.0F;
             if (!SphereIntersectsExpandedAabb(probePosition, radius, box, capsuleHalfSegment, &normal, &penetration))
@@ -456,5 +522,113 @@ MoveResult PhysicsWorld::ResolveCapsulePosition(const glm::vec3& candidatePositi
     }
 
     return result;
+}
+
+void PhysicsWorld::RebuildSpatialIndex() const
+{
+    if (!m_spatialDirty)
+    {
+        return;
+    }
+
+    m_spatialCells.clear();
+    m_spatialVisitStamp.assign(m_solids.size(), 0U);
+
+    if (m_solids.empty())
+    {
+        m_spatialDirty = false;
+        return;
+    }
+
+    for (std::size_t index = 0; index < m_solids.size(); ++index)
+    {
+        const SolidBox& box = m_solids[index];
+        const glm::vec3 minBounds = box.center - box.halfExtents;
+        const glm::vec3 maxBounds = box.center + box.halfExtents;
+
+        const int minX = CellCoord(minBounds.x, m_spatialCellSize);
+        const int minY = CellCoord(minBounds.y, m_spatialCellSize);
+        const int minZ = CellCoord(minBounds.z, m_spatialCellSize);
+        const int maxX = CellCoord(maxBounds.x, m_spatialCellSize);
+        const int maxY = CellCoord(maxBounds.y, m_spatialCellSize);
+        const int maxZ = CellCoord(maxBounds.z, m_spatialCellSize);
+
+        for (int z = minZ; z <= maxZ; ++z)
+        {
+            for (int y = minY; y <= maxY; ++y)
+            {
+                for (int x = minX; x <= maxX; ++x)
+                {
+                    m_spatialCells[CellKey{x, y, z}].push_back(index);
+                }
+            }
+        }
+    }
+
+    m_spatialCurrentStamp = 1;
+    m_spatialDirty = false;
+}
+
+void PhysicsWorld::AppendSolidCandidates(
+    const glm::vec3& minBounds,
+    const glm::vec3& maxBounds,
+    std::vector<std::size_t>& outIndices
+) const
+{
+    RebuildSpatialIndex();
+    outIndices.clear();
+
+    if (m_solids.empty())
+    {
+        return;
+    }
+
+    if (m_spatialVisitStamp.size() != m_solids.size())
+    {
+        m_spatialVisitStamp.assign(m_solids.size(), 0U);
+    }
+
+    ++m_spatialCurrentStamp;
+    if (m_spatialCurrentStamp == 0)
+    {
+        std::fill(m_spatialVisitStamp.begin(), m_spatialVisitStamp.end(), 0U);
+        m_spatialCurrentStamp = 1;
+    }
+
+    const int minX = CellCoord(minBounds.x, m_spatialCellSize);
+    const int minY = CellCoord(minBounds.y, m_spatialCellSize);
+    const int minZ = CellCoord(minBounds.z, m_spatialCellSize);
+    const int maxX = CellCoord(maxBounds.x, m_spatialCellSize);
+    const int maxY = CellCoord(maxBounds.y, m_spatialCellSize);
+    const int maxZ = CellCoord(maxBounds.z, m_spatialCellSize);
+
+    for (int z = minZ; z <= maxZ; ++z)
+    {
+        for (int y = minY; y <= maxY; ++y)
+        {
+            for (int x = minX; x <= maxX; ++x)
+            {
+                const auto cellIt = m_spatialCells.find(CellKey{x, y, z});
+                if (cellIt == m_spatialCells.end())
+                {
+                    continue;
+                }
+
+                for (const std::size_t solidIndex : cellIt->second)
+                {
+                    if (solidIndex >= m_spatialVisitStamp.size())
+                    {
+                        continue;
+                    }
+                    if (m_spatialVisitStamp[solidIndex] == m_spatialCurrentStamp)
+                    {
+                        continue;
+                    }
+                    m_spatialVisitStamp[solidIndex] = m_spatialCurrentStamp;
+                    outIndices.push_back(solidIndex);
+                }
+            }
+        }
+    }
 }
 } // namespace engine::physics

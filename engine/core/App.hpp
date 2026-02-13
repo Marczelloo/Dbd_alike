@@ -27,6 +27,7 @@
 #include "game/ui/ScreenEffects.hpp"
 #include "game/ui/PerkLoadoutEditor.hpp"
 #include "game/ui/LobbyScene.hpp"
+#include "engine/ui/ProfilerOverlay.hpp"
 #include "ui/DeveloperConsole.hpp"
 #include "ui/DeveloperToolbar.hpp"
 
@@ -247,7 +248,7 @@ private:
     void ApplyAudioSettings();
     bool LoadTerrorRadiusProfile(const std::string& killerId);
     void StopTerrorRadiusAudio();
-    void UpdateTerrorRadiusAudio(float deltaSeconds);
+    void UpdateTerrorRadiusAudio(float deltaSeconds, const game::gameplay::HudState& hudState);
     [[nodiscard]] std::string DumpTerrorRadiusState() const;
     void SendGameplayTuningToClient();
     void ApplyMapEnvironment(const std::string& mapName);
@@ -272,6 +273,7 @@ private:
     game::ui::ScreenEffects m_screenEffects;
     game::ui::PerkLoadoutEditor m_perkLoadoutEditor;
     game::ui::LobbyScene m_lobbyScene;
+    engine::ui::ProfilerOverlay m_profilerOverlay;
     ::ui::DeveloperConsole m_console;
     ::ui::DeveloperToolbar m_devToolbar;
     net::NetworkSession m_network;

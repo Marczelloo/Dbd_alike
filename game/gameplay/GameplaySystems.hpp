@@ -18,6 +18,7 @@
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
 #include "engine/render/Frustum.hpp"
+#include "engine/render/Renderer.hpp"
 #include "engine/render/StaticBatcher.hpp"
 #include "engine/scene/World.hpp"
 #include "game/gameplay/LoadoutSystem.hpp"
@@ -340,7 +341,8 @@ public:
     {
         Test,
         Main,
-        CollisionTest
+        CollisionTest,
+        Benchmark
     };
 
     enum class CameraMode
@@ -875,6 +877,7 @@ private:
         const glm::vec3& survivorPos); // Uses ±35° center FOV (DBD-like)
 
     engine::core::EventBus* m_eventBus = nullptr;
+    engine::render::Renderer* m_rendererPtr = nullptr;  // Set on first Render call, used for GPU resource cleanup.
 
     engine::scene::World m_world;
     engine::physics::PhysicsWorld m_physics;
@@ -900,6 +903,7 @@ private:
 
     InteractionCandidate m_interactionCandidate{};
     float m_interactionPromptHoldSeconds = 0.0F;
+    mutable std::vector<engine::physics::TriggerCastHit> m_sphereCastScratch;
 
     bool m_collisionEnabled = true;
     bool m_debugDrawEnabled = true;
@@ -1078,6 +1082,8 @@ private:
     bool m_trapPreviewActive = false;
     bool m_trapPreviewValid = true;
     engine::render::Frustum m_frustum{};
+    bool m_physicsDirty = false; // Set when interactions change collision geometry; triggers deferred RebuildPhysicsWorld.
+    mutable std::vector<engine::physics::TriggerHit> m_triggerHitBuf; // Reusable buffer for trigger queries (avoids per-call heap alloc).
     engine::render::StaticBatcher m_staticBatcher{};
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
@@ -1094,6 +1100,7 @@ private:
         float age = 0.0F;
         float lifetime = 30.0F;
         float size = 0.35F;
+        float yawDeg = 0.0F; // cached atan2(direction.x, direction.z) in degrees
         bool active = false;
     };
 
@@ -1133,6 +1140,7 @@ private:
     void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
     void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
     void RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const;
+    void RenderHighPolyMeshes(engine::render::Renderer& renderer);
     [[nodiscard]] bool CanSeeScratchMarks(bool localIsKiller) const;
     [[nodiscard]] bool CanSeeBloodPools(bool localIsKiller) const;
 
@@ -1156,6 +1164,26 @@ private:
     KillerLookLight m_killerLookLight{};
     bool m_killerLookLightDebug = false;
     std::size_t m_mapSpotLightCount = 0;
+
+    // Cached vector to avoid per-frame heap allocation in Render().
+    std::vector<engine::render::SpotLight> m_runtimeSpotLights;
+
+    // High-poly meshes for GPU stress testing (benchmark map)
+    struct HighPolyMesh
+    {
+        engine::render::MeshGeometry geometry;
+        engine::render::MeshGeometry mediumLodGeometry;
+        engine::render::Renderer::GpuMeshId gpuFullLod = engine::render::Renderer::kInvalidGpuMesh;
+        engine::render::Renderer::GpuMeshId gpuMediumLod = engine::render::Renderer::kInvalidGpuMesh;
+        glm::vec3 position{0.0F};
+        glm::vec3 rotation{0.0F};
+        glm::vec3 scale{1.0F};
+        glm::vec3 color{1.0F};
+        glm::vec3 halfExtents{1.0F};  // For frustum culling
+    };
+    std::vector<HighPolyMesh> m_highPolyMeshes;
+    bool m_highPolyMeshesGenerated = false;
+    bool m_highPolyMeshesUploaded = false;
 };
 
 } // namespace game::gameplay

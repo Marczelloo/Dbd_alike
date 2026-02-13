@@ -73,9 +73,12 @@ set(ENGINE_SOURCES
     engine/audio/AudioSystem.cpp
     engine/core/App.cpp
     engine/core/EventBus.cpp
+    engine/core/Profiler.cpp
     engine/core/Time.cpp
+    engine/core/JobSystem.cpp
     engine/assets/AssetRegistry.cpp
     engine/assets/MeshLibrary.cpp
+    engine/assets/AsyncAssetLoader.cpp
     engine/fx/FxSystem.cpp
     engine/platform/Window.cpp
     engine/platform/Input.cpp
@@ -85,9 +88,11 @@ set(ENGINE_SOURCES
     engine/render/Renderer.cpp
     engine/render/Frustum.cpp
     engine/render/StaticBatcher.cpp
+    engine/render/RenderThread.cpp
     engine/physics/PhysicsWorld.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
+    engine/ui/ProfilerOverlay.cpp
     game/ui/LoadingScreen.cpp
     game/ui/LoadingManager.cpp
     game/ui/SkillCheckWheel.cpp

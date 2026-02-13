@@ -69,6 +69,24 @@ struct ConsoleContext
     std::function<void(float)> setKillerLookLightAngle;
     std::function<void(float)> setKillerLookLightPitch;
     std::function<void(bool)> setKillerLookLightDebug;
+
+    // Profiler callbacks.
+    std::function<void()> profilerToggle;
+    std::function<void(bool)> profilerSetPinned;
+    std::function<void(bool)> profilerSetCompact;
+    std::function<void(int)> profilerBenchmark;
+    std::function<void()> profilerBenchmarkStop;
+    std::function<void()> profilerDraw;  // Draw profiler overlay (called before ImGui::Render)
+
+    // Automated perf test callbacks.
+    std::function<void(const std::string&, int)> perfTest; // (mapName, frames)
+    std::function<std::string()> perfReport;               // returns last benchmark report
+
+    // Threading callbacks
+    std::function<std::string()> jobStats;                 // returns job system stats
+    std::function<void(bool)> jobEnabled;                  // enable/disable job system
+    std::function<void(int)> testParallel;                 // run parallel test with N iterations
+    std::function<std::string()> assetLoaderStats;         // returns async asset loader stats
 };
 
 class DeveloperConsole

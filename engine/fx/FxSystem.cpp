@@ -272,6 +272,17 @@ float FloatCurve::Evaluate(float t, float fallback) const
     }
 
     t = glm::clamp(t, 0.0F, 1.0F);
+
+    // Fast path for 2-key curves (most common: e.g., fade 1→0).
+    if (keys.size() == 2)
+    {
+        const FloatCurveKey& a = keys[0];
+        const FloatCurveKey& b = keys[1];
+        const float span = std::max(1.0e-5F, b.t - a.t);
+        const float alpha = glm::clamp((t - a.t) / span, 0.0F, 1.0F);
+        return glm::mix(a.value, b.value, alpha);
+    }
+
     if (t <= keys.front().t)
     {
         return keys.front().value;
@@ -307,6 +318,17 @@ glm::vec4 ColorGradient::Evaluate(float t, const glm::vec4& fallback) const
     }
 
     t = glm::clamp(t, 0.0F, 1.0F);
+
+    // Fast path for 2-key gradients (most common).
+    if (keys.size() == 2)
+    {
+        const ColorGradientKey& a = keys[0];
+        const ColorGradientKey& b = keys[1];
+        const float span = std::max(1.0e-5F, b.t - a.t);
+        const float alpha = glm::clamp((t - a.t) / span, 0.0F, 1.0F);
+        return glm::mix(a.color, b.color, alpha);
+    }
+
     if (t <= keys.front().t)
     {
         return keys.front().color;
@@ -667,21 +689,20 @@ void FxSystem::UpdateTrail(FxInstance& instance, EmitterRuntime& emitterRuntime,
         });
     }
 
-    for (std::size_t i = 0; i < emitterRuntime.trailPoints.size();)
+    std::size_t writeIndex = 0;
+    for (std::size_t readIndex = 0; readIndex < emitterRuntime.trailPoints.size(); ++readIndex)
     {
-        TrailPoint& point = emitterRuntime.trailPoints[i];
+        TrailPoint point = emitterRuntime.trailPoints[readIndex];
         point.age += dt;
         if (point.age >= point.lifetime)
         {
-            emitterRuntime.trailPoints[i] = emitterRuntime.trailPoints.back();
-            emitterRuntime.trailPoints.pop_back();
             continue;
         }
-        ++i;
+
+        emitterRuntime.trailPoints[writeIndex] = point;
+        ++writeIndex;
     }
-    std::sort(emitterRuntime.trailPoints.begin(), emitterRuntime.trailPoints.end(), [](const TrailPoint& a, const TrailPoint& b) {
-        return a.age < b.age;
-    });
+    emitterRuntime.trailPoints.resize(writeIndex);
 }
 
 void FxSystem::UpdateEmitter(FxInstance& instance, EmitterRuntime& emitterRuntime, float dt, const glm::vec3& cameraPosition)
@@ -690,7 +711,15 @@ void FxSystem::UpdateEmitter(FxInstance& instance, EmitterRuntime& emitterRuntim
     {
         return;
     }
-    const FxEmitterAsset emitter = BuildEmitterWithParams(*emitterRuntime.emitter, instance.parameters);
+
+    // Fast path: skip full copy if no parameter overrides exist.
+    const bool hasParamOverrides = !instance.parameters.values.empty() &&
+        (!emitterRuntime.emitter->rateParam.empty() ||
+         !emitterRuntime.emitter->sizeParam.empty() ||
+         !emitterRuntime.emitter->colorParam.empty());
+    const FxEmitterAsset& emitter = hasParamOverrides
+        ? (emitterRuntime.cachedEmitter = BuildEmitterWithParams(*emitterRuntime.emitter, instance.parameters))
+        : *emitterRuntime.emitter;
     emitterRuntime.age += dt;
 
     if (emitter.localSpace)
@@ -870,8 +899,12 @@ void FxSystem::Update(float deltaSeconds, const glm::vec3& cameraPosition)
 
 void FxSystem::Render(engine::render::Renderer& renderer, const glm::vec3& cameraPosition) const
 {
-    std::vector<engine::render::Renderer::BillboardData> billboards;
-    billboards.reserve(256);
+    thread_local std::vector<engine::render::Renderer::BillboardData> billboards;
+    billboards.clear();
+    if (billboards.capacity() < 512)
+    {
+        billboards.reserve(512);
+    }
 
     for (const FxInstance& instance : m_instances)
     {

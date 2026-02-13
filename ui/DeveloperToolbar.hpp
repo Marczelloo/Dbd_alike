@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <functional>
 
 namespace engine::platform
 {
@@ -25,6 +26,7 @@ struct ToolbarContext
     bool* showControlsWindow = nullptr;
     bool* showUiTestPanel = nullptr;
     bool* showLoadingScreenTestPanel = nullptr;
+    std::function<void()> profilerToggle;
 
     float fps = 0.0f;
     int tickRate = 60;

@@ -659,7 +659,10 @@ std::string CommandCategoryForUsage(const std::string& usage)
     }
     if (command == "set_vsync" || command == "set_fps" || command == "set_tick" || command == "set_resolution" ||
         command == "toggle_fullscreen" || command == "render_mode" || command == "audio_play" ||
-        command == "audio_loop" || command == "audio_stop_all")
+        command == "audio_loop" || command == "audio_stop_all" ||
+        command == "perf" || command == "perf_pin" || command == "perf_compact" ||
+        command == "benchmark" || command == "benchmark_stop" ||
+        command == "perf_test" || command == "perf_report")
     {
         return "System";
     }
@@ -901,6 +904,148 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                 context.audioStopAll();
                 LogSuccess("All audio stopped");
             }
+        });
+
+        // ─── Profiler commands ───
+        RegisterCommand("perf", "Toggle performance profiler overlay", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.profilerToggle) {
+                context.profilerToggle();
+                LogSuccess("Profiler toggled");
+            }
+        });
+
+        RegisterCommand("perf_pin on|off", "Pin/unpin profiler to game window", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerSetPinned && tokens.size() >= 2) {
+                const bool pinned = tokens[1] == "on" || tokens[1] == "1";
+                context.profilerSetPinned(pinned);
+                LogSuccess(pinned ? "Profiler pinned" : "Profiler unpinned");
+            }
+        });
+
+        RegisterCommand("perf_compact on|off", "Toggle compact profiler bar", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerSetCompact && tokens.size() >= 2) {
+                const bool compact = tokens[1] == "on" || tokens[1] == "1";
+                context.profilerSetCompact(compact);
+                LogSuccess(compact ? "Compact mode ON" : "Compact mode OFF");
+            }
+        });
+
+        RegisterCommand("benchmark [frames]", "Run automated performance benchmark (default 600 frames)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.profilerBenchmark) {
+                int frames = 600;
+                if (tokens.size() >= 2) {
+                    try { frames = std::stoi(tokens[1]); } catch (...) {}
+                }
+                context.profilerBenchmark(frames);
+                LogSuccess("Benchmark started (" + std::to_string(frames) + " frames)");
+            }
+        });
+
+        RegisterCommand("benchmark_stop", "Stop running benchmark", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.profilerBenchmarkStop) {
+                context.profilerBenchmarkStop();
+                LogSuccess("Benchmark stopped");
+            }
+        });
+
+        RegisterCommand("perf_test [map] [frames]", "Run automated perf test on a map (default: main, 600 frames)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.perfTest)
+            {
+                LogError("perf_test not available");
+                return;
+            }
+            std::string mapName = "main";
+            int frames = 600;
+            if (tokens.size() > 1) mapName = tokens[1];
+            if (tokens.size() > 2)
+            {
+                try { frames = std::stoi(tokens[2]); }
+                catch (...) { frames = 600; }
+            }
+            if (frames < 60) frames = 60;
+            if (frames > 10000) frames = 10000;
+            LogInfo("Starting perf test: map=" + mapName + " frames=" + std::to_string(frames));
+            context.perfTest(mapName, frames);
+        });
+
+        RegisterCommand("perf_report", "Print last benchmark results", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.perfReport)
+            {
+                LogError("perf_report not available");
+                return;
+            }
+            const std::string report = context.perfReport();
+            if (report.empty())
+            {
+                LogInfo("No benchmark results available. Run 'benchmark' or 'perf_test' first.");
+            }
+            else
+            {
+                LogInfo(report);
+            }
+        });
+
+        // Threading commands
+        RegisterCommand("job_stats", "Show job system statistics", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.jobStats)
+            {
+                LogError("job_stats not available");
+                return;
+            }
+            LogInfo(context.jobStats());
+        });
+
+        RegisterCommand("job_enable", "Enable/disable job system", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.jobEnabled)
+            {
+                LogError("job_enable not available");
+                return;
+            }
+            bool enable = true;
+            if (tokens.size() > 1)
+            {
+                enable = (tokens[1] == "1" || tokens[1] == "true" || tokens[1] == "on");
+            }
+            context.jobEnabled(enable);
+            LogSuccess(std::string("Job system ") + (enable ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("job_test", "Run parallel job test", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.testParallel)
+            {
+                LogError("job_test not available");
+                return;
+            }
+            int iterations = 10000;
+            if (tokens.size() > 1)
+            {
+                try
+                {
+                    iterations = std::stoi(tokens[1]);
+                    if (iterations <= 0)
+                    {
+                        LogError("iterations must be a positive number");
+                        return;
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    LogError("Invalid number: " + tokens[1]);
+                    return;
+                }
+            }
+            LogInfo("Running parallel test with " + std::to_string(iterations) + " iterations...");
+            context.testParallel(iterations);
+            LogSuccess("Parallel test complete");
+        });
+
+        RegisterCommand("asset_stats", "Show async asset loader statistics", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.assetLoaderStats)
+            {
+                LogError("asset_stats not available");
+                return;
+            }
+            LogInfo(context.assetLoaderStats());
         });
 
         RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
@@ -1199,10 +1344,10 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess(std::string("Noclip ") + (enabled ? "enabled" : "disabled"));
         });
 
-        RegisterCommand("load map test|main|main_map|collision_test", "Load gameplay scene", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("load map test|main|main_map|collision_test|benchmark", "Load gameplay scene", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 3 || tokens[1] != "map")
             {
-                LogError("Usage: load map test|main|main_map|collision_test");
+                LogError("Usage: load map test|main|main_map|collision_test|benchmark");
                 return;
             }
 
@@ -2365,6 +2510,27 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess("FPS limit: " + std::to_string(fps));
         });
 
+        RegisterCommand("fps_info", "Show current FPS limiting state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            std::ostringstream ss;
+            ss << "=== FPS State ===\n";
+            bool vsyncEnabled = false;
+            if (context.vsync != nullptr)
+            {
+                vsyncEnabled = *context.vsync;
+                ss << "  VSync: " << (vsyncEnabled ? "ON" : "OFF") << "\n";
+            }
+            if (context.fpsLimit != nullptr)
+            {
+                ss << "  FPS Limit: " << *context.fpsLimit << "\n";
+                if (vsyncEnabled && *context.fpsLimit > 0)
+                {
+                    ss << "  Manual limiter: inactive (VSync pacing active)\n";
+                }
+            }
+            ss << "=================";
+            LogSuccess(ss.str());
+        });
+
         RegisterCommand("set_tick 30|60", "Set fixed simulation tick rate", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.setTickRate == nullptr)
             {
@@ -3186,6 +3352,12 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
                 RenderPerkSlotHud(hudState.survivorPerkSlots, ImVec2(18.0F, perkHudY), false, false);
             }
         }
+    }
+
+    // Draw profiler overlay before ImGui::Render()
+    if (context.profilerDraw)
+    {
+        context.profilerDraw();
     }
 
     ImGui::Render();

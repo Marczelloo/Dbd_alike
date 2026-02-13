@@ -2,6 +2,7 @@
 #include "game/gameplay/SpawnSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"
 #include "engine/scene/Components.hpp"
+#include "engine/core/JobSystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@
 
 #include "engine/platform/Input.hpp"
 #include "engine/render/Renderer.hpp"
+#include "engine/core/Profiler.hpp"
 #include "game/editor/LevelAssets.hpp"
 #include "game/maps/TileGenerator.hpp"
 
@@ -30,6 +32,7 @@ namespace
 {
 constexpr float kGravity = -20.0F;
 constexpr float kPi = 3.1415926535F;
+constexpr float kPovLodBufferScale = 1.10F; // Dynamic actor edge buffer for low-LOD fallback
 
 engine::scene::Entity SpawnActor(
     engine::scene::World& world,
@@ -105,6 +108,7 @@ std::string MapToName(GameplaySystems::MapType type)
         case GameplaySystems::MapType::Test: return "test";
         case GameplaySystems::MapType::Main: return "main";
         case GameplaySystems::MapType::CollisionTest: return "collision_test";
+        case GameplaySystems::MapType::Benchmark: return "benchmark";
         default: return "unknown";
     }
 }
@@ -112,6 +116,232 @@ std::string MapToName(GameplaySystems::MapType type)
 void ItemPowerLog(const std::string& text)
 {
     std::cout << "[ITEM/POWER] " << text << "\n";
+}
+
+// High-poly mesh generation helpers for GPU stress testing
+engine::render::MeshGeometry GenerateIcoSphere(int subdivisions)
+{
+    // Base icosahedron vertices
+    const float t = (1.0F + std::sqrt(5.0F)) / 2.0F;
+    std::vector<glm::vec3> vertices = {
+        {-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0},
+        {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t},
+        {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}
+    };
+    for (auto& v : vertices) v = glm::normalize(v);
+    
+    // Base faces (indices)
+    std::vector<std::uint32_t> indices = {
+        0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
+        1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+        3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
+        4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1
+    };
+    
+    // Subdivide
+    for (int sub = 0; sub < subdivisions; ++sub)
+    {
+        std::vector<std::uint32_t> newIndices;
+        std::unordered_map<std::uint64_t, std::uint32_t> midpointCache;
+        
+        auto getMidpoint = [&](std::uint32_t a, std::uint32_t b) -> std::uint32_t {
+            const std::uint64_t key = (static_cast<std::uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+            auto it = midpointCache.find(key);
+            if (it != midpointCache.end()) return it->second;
+            
+            glm::vec3 mid = glm::normalize((vertices[a] + vertices[b]) * 0.5F);
+            const std::uint32_t idx = static_cast<std::uint32_t>(vertices.size());
+            vertices.push_back(mid);
+            midpointCache[key] = idx;
+            return idx;
+        };
+        
+        for (size_t i = 0; i < indices.size(); i += 3)
+        {
+            const std::uint32_t a = indices[i], b = indices[i+1], c = indices[i+2];
+            const std::uint32_t ab = getMidpoint(a, b);
+            const std::uint32_t bc = getMidpoint(b, c);
+            const std::uint32_t ca = getMidpoint(c, a);
+            
+            newIndices.insert(newIndices.end(), {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca});
+        }
+        indices = std::move(newIndices);
+    }
+    
+    engine::render::MeshGeometry mesh;
+    mesh.positions = std::move(vertices);
+    mesh.indices = std::move(indices);
+    
+    // Compute normals (same as positions for unit sphere)
+    mesh.normals = mesh.positions;
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateTorus(float majorRadius, float minorRadius, int majorSegments, int minorSegments)
+{
+    engine::render::MeshGeometry mesh;
+    
+    for (int i = 0; i <= majorSegments; ++i)
+    {
+        const float theta = static_cast<float>(i) / static_cast<float>(majorSegments) * 2.0F * kPi;
+        const float cosTheta = std::cos(theta);
+        const float sinTheta = std::sin(theta);
+        
+        for (int j = 0; j <= minorSegments; ++j)
+        {
+            const float phi = static_cast<float>(j) / static_cast<float>(minorSegments) * 2.0F * kPi;
+            const float cosPhi = std::cos(phi);
+            const float sinPhi = std::sin(phi);
+            
+            const float x = (majorRadius + minorRadius * cosPhi) * cosTheta;
+            const float y = minorRadius * sinPhi;
+            const float z = (majorRadius + minorRadius * cosPhi) * sinTheta;
+            
+            mesh.positions.push_back({x, y, z});
+            
+            // Normal
+            const float nx = cosPhi * cosTheta;
+            const float ny = sinPhi;
+            const float nz = cosPhi * sinTheta;
+            mesh.normals.push_back(glm::normalize(glm::vec3{nx, ny, nz}));
+        }
+    }
+    
+    // Generate indices
+    for (int i = 0; i < majorSegments; ++i)
+    {
+        for (int j = 0; j < minorSegments; ++j)
+        {
+            const std::uint32_t a = static_cast<std::uint32_t>(i * (minorSegments + 1) + j);
+            const std::uint32_t b = static_cast<std::uint32_t>(a + minorSegments + 1);
+            const std::uint32_t c = static_cast<std::uint32_t>(a + 1);
+            const std::uint32_t d = static_cast<std::uint32_t>(b + 1);
+            
+            mesh.indices.insert(mesh.indices.end(), {a, b, c, b, d, c});
+        }
+    }
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateGridPlane(int xDivisions, int zDivisions)
+{
+    engine::render::MeshGeometry mesh;
+    
+    const float halfX = static_cast<float>(xDivisions) * 0.5F;
+    const float halfZ = static_cast<float>(zDivisions) * 0.5F;
+    const float stepX = 1.0F;
+    const float stepZ = 1.0F;
+    
+    for (int z = 0; z <= zDivisions; ++z)
+    {
+        for (int x = 0; x <= xDivisions; ++x)
+        {
+            mesh.positions.push_back({
+                static_cast<float>(x) * stepX - halfX,
+                0.0F,
+                static_cast<float>(z) * stepZ - halfZ
+            });
+            mesh.normals.push_back({0.0F, 1.0F, 0.0F});
+        }
+    }
+    
+    for (int z = 0; z < zDivisions; ++z)
+    {
+        for (int x = 0; x < xDivisions; ++x)
+        {
+            const std::uint32_t a = static_cast<std::uint32_t>(z * (xDivisions + 1) + x);
+            const std::uint32_t b = static_cast<std::uint32_t>(a + xDivisions + 1);
+            const std::uint32_t c = static_cast<std::uint32_t>(a + 1);
+            const std::uint32_t d = static_cast<std::uint32_t>(b + 1);
+            
+            mesh.indices.insert(mesh.indices.end(), {a, c, b, c, d, b});
+        }
+    }
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateSpiralStair(int stepCount, int segmentsPerStep)
+{
+    engine::render::MeshGeometry mesh;
+    
+    const float heightPerStep = 0.2F;
+    const float radius = 1.0F;
+    const float innerRadius = 0.3F;
+    const float anglePerStep = 2.0F * kPi / 32.0F;
+    
+    for (int step = 0; step < stepCount; ++step)
+    {
+        const float baseAngle = static_cast<float>(step) * anglePerStep;
+        const float y = static_cast<float>(step) * heightPerStep;
+        
+        for (int seg = 0; seg <= segmentsPerStep; ++seg)
+        {
+            const float t = static_cast<float>(seg) / static_cast<float>(segmentsPerStep);
+            const float angle = baseAngle + t * anglePerStep;
+            
+            // Outer vertex
+            mesh.positions.push_back({
+                std::cos(angle) * radius,
+                y,
+                std::sin(angle) * radius
+            });
+            mesh.normals.push_back({std::cos(angle), 0.0F, std::sin(angle)});
+            
+            // Inner vertex
+            mesh.positions.push_back({
+                std::cos(angle) * innerRadius,
+                y,
+                std::sin(angle) * innerRadius
+            });
+            mesh.normals.push_back({-std::cos(angle), 0.0F, -std::sin(angle)});
+            
+            // Top edge
+            mesh.positions.push_back({
+                std::cos(angle) * radius,
+                y + 0.05F,
+                std::sin(angle) * radius
+            });
+            mesh.normals.push_back({0.0F, 1.0F, 0.0F});
+        }
+        
+        // Generate indices for this step
+        const std::uint32_t baseIdx = static_cast<std::uint32_t>(step * (segmentsPerStep + 1) * 3);
+        for (int seg = 0; seg < segmentsPerStep; ++seg)
+        {
+            const std::uint32_t o0 = baseIdx + static_cast<std::uint32_t>(seg * 3);
+            const std::uint32_t o1 = o0 + 3;
+            const std::uint32_t i0 = o0 + 1;
+            const std::uint32_t i1 = i0 + 3;
+            const std::uint32_t t0 = o0 + 2;
+            const std::uint32_t t1 = t0 + 3;
+            
+            // Tread top
+            mesh.indices.insert(mesh.indices.end(), {o0, i0, o1, i0, i1, o1});
+            // Riser
+            mesh.indices.insert(mesh.indices.end(), {o0, o1, t1, o0, t1, t0});
+        }
+    }
+    
+    return mesh;
+}
+
+glm::vec3 ComputeMeshBounds(const engine::render::MeshGeometry& mesh)
+{
+    if (mesh.positions.empty()) return glm::vec3{1.0F};
+    
+    glm::vec3 minPos = mesh.positions[0];
+    glm::vec3 maxPos = mesh.positions[0];
+    
+    for (const auto& p : mesh.positions)
+    {
+        minPos = glm::min(minPos, p);
+        maxPos = glm::max(maxPos, p);
+    }
+    
+    return (maxPos - minPos) * 0.5F;
 }
 
 } // namespace
@@ -297,7 +527,21 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     (void)input;
     (void)controlsEnabled;
 
-    RebuildPhysicsWorld();
+    // Rebuild physics only when world geometry changed (pallet drop/break, trap placement, etc.).
+    // For the killer chase trigger (which moves every tick), update its position in-place.
+    if (m_physicsDirty)
+    {
+        RebuildPhysicsWorld();
+        m_physicsDirty = false;
+    }
+    else if (m_killer != 0)
+    {
+        const auto kIt = m_world.Transforms().find(m_killer);
+        if (kIt != m_world.Transforms().end())
+        {
+            m_physics.UpdateTriggerCenter(m_killer, kIt->second.position);
+        }
+    }
 
     RoleCommand survivorCommand = m_localSurvivorCommand;
     RoleCommand killerCommand = m_localKillerCommand;
@@ -409,21 +653,64 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     if (survivorCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Survivor))
     {
         ExecuteInteractionForRole(m_survivor, survivorCandidate);
+        m_physicsDirty = true;
     }
     const InteractionCandidate killerCandidate = ResolveInteractionCandidateFromView(m_killer);
     if (killerCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Killer))
     {
         ExecuteInteractionForRole(m_killer, killerCandidate);
+        m_physicsDirty = true;
     }
 
     UpdateKillerAttack(killerCommand, fixedDt);
 
     UpdatePalletBreak(fixedDt);
 
-    RebuildPhysicsWorld();
+    if (m_physicsDirty)
+    {
+        RebuildPhysicsWorld();
+        m_physicsDirty = false;
+        // Physics changed — re-resolve interaction candidate for prompt display.
+        UpdateInteractionCandidate();
+    }
+    else
+    {
+        // Physics unchanged — reuse already-resolved candidate for prompt display.
+        const engine::scene::Entity controlled = ControlledEntity();
+        const auto actorIt = m_world.Actors().find(controlled);
+        const bool inputLocked = (controlled == 0 || actorIt == m_world.Actors().end() || IsActorInputLocked(actorIt->second));
+        const bool downed = (controlled == m_survivor &&
+            (m_survivorState == SurvivorHealthState::Downed ||
+             m_survivorState == SurvivorHealthState::Trapped ||
+             m_survivorState == SurvivorHealthState::Hooked ||
+             m_survivorState == SurvivorHealthState::Dead));
+
+        if (inputLocked || downed)
+        {
+            m_interactionCandidate = InteractionCandidate{};
+            m_interactionPromptHoldSeconds = 0.0F;
+        }
+        else
+        {
+            const InteractionCandidate& resolved = (controlled == m_survivor) ? survivorCandidate : killerCandidate;
+            if (resolved.type != InteractionType::None)
+            {
+                m_interactionCandidate = resolved;
+                m_interactionPromptHoldSeconds = 0.2F;
+            }
+            else if (m_interactionPromptHoldSeconds > 0.0F && !m_interactionCandidate.prompt.empty())
+            {
+                m_interactionPromptHoldSeconds = std::max(0.0F, m_interactionPromptHoldSeconds - (1.0F / 60.0F));
+            }
+            else
+            {
+                m_interactionCandidate = InteractionCandidate{};
+                m_interactionPromptHoldSeconds = 0.0F;
+            }
+        }
+    }
     UpdateChaseState(fixedDt);
     UpdateBloodlust(fixedDt);
-    UpdateInteractionCandidate();
 
     const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
     if (survivorTransformIt != m_world.Transforms().end())
@@ -543,6 +830,7 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
 
 void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRatio)
 {
+    m_rendererPtr = &renderer;
     const glm::mat4 viewProjection = BuildViewProjection(aspectRatio);
     m_frustum.Extract(viewProjection);
 
@@ -562,11 +850,12 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     renderer.SetPostFxPulse(postFxColor, postFxIntensity);
 
     // Dynamic spot lights (keep map lights, then append runtime lights).
-    std::vector<engine::render::SpotLight> spotLights = renderer.GetSpotLights();
-    if (spotLights.size() > m_mapSpotLightCount)
-    {
-        spotLights.resize(m_mapSpotLightCount);
-    }
+    // Re-use m_runtimeSpotLights to avoid per-frame heap allocation.
+    m_runtimeSpotLights.clear();
+    const auto& baseSpotLights = renderer.GetSpotLights();
+    const std::size_t mapCount = std::min(m_mapSpotLightCount, baseSpotLights.size());
+    m_runtimeSpotLights.assign(baseSpotLights.begin(), baseSpotLights.begin() + static_cast<std::ptrdiff_t>(mapCount));
+    auto& spotLights = m_runtimeSpotLights;
 
     // Phase B4: Killer Look Light (spot cone).
     const auto killerTransIt = m_world.Transforms().find(m_killer);
@@ -690,9 +979,9 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         renderer.DrawLine(origin, origin + direction * std::min(beamRange, 4.0F), glm::vec3{1.0F, 0.95F, 0.45F});
     }
 
-    renderer.SetSpotLights(spotLights);
+    renderer.SetSpotLights(std::move(m_runtimeSpotLights));
 
-    renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F}, glm::vec4{0.09F, 0.11F, 0.13F, 1.0F});
+    renderer.DrawGrid(40, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F}, glm::vec4{0.09F, 0.11F, 0.13F, 1.0F});
 
     renderer.DrawLine(glm::vec3{0.0F}, glm::vec3{2.0F, 0.0F, 0.0F}, glm::vec3{1.0F, 0.2F, 0.2F});
     renderer.DrawLine(glm::vec3{0.0F}, glm::vec3{0.0F, 2.0F, 0.0F}, glm::vec3{0.2F, 1.0F, 0.2F});
@@ -700,13 +989,45 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
 
     const auto& transforms = m_world.Transforms();
 
+    // Dynamic object frustum culling counters.
+    std::uint32_t dynamicDrawn = 0;
+    std::uint32_t dynamicCulled = 0;
+
+    enum class VisibilityLod
+    {
+        Culled,
+        Full,
+        EdgeLow
+    };
+
+    // Helper: test if an AABB at (center ± halfExtents) is inside frustum.
+    const auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        return m_frustum.IntersectsAABB(center - halfExtents, center + halfExtents);
+    };
+
+    const auto classifyVisibility = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> VisibilityLod {
+        if (m_frustum.IntersectsAABB(center - halfExtents, center + halfExtents))
+        {
+            return VisibilityLod::Full;
+        }
+
+        const glm::vec3 expandedHalfExtents = halfExtents * kPovLodBufferScale;
+        if (m_frustum.IntersectsAABB(center - expandedHalfExtents, center + expandedHalfExtents))
+        {
+            return VisibilityLod::EdgeLow;
+        }
+
+        return VisibilityLod::Culled;
+    };
+
     if (m_staticBatcher.IsBuilt())
     {
         m_staticBatcher.Render(
             viewProjection,
             m_frustum,
             renderer.GetSolidShaderProgram(),
-            renderer.GetSolidViewProjLocation()
+            renderer.GetSolidViewProjLocation(),
+            renderer.GetSolidModelLocation()
         );
     }
 
@@ -717,6 +1038,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, window.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         renderer.DrawBox(transformIt->second.position, window.halfExtents, glm::vec3{0.1F, 0.75F, 0.84F});
         if (m_debugDrawEnabled)
@@ -736,6 +1064,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, pallet.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.8F, 0.5F, 0.2F};
         if (pallet.state == engine::scene::PalletState::Dropped)
@@ -758,6 +1093,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             continue;
         }
 
+        if (!isVisible(transformIt->second.position, hook.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
+
         const glm::vec3 hookColor = hook.occupied ? glm::vec3{0.78F, 0.1F, 0.1F} : glm::vec3{0.9F, 0.9F, 0.12F};
         renderer.DrawBox(transformIt->second.position, hook.halfExtents, hookColor);
     }
@@ -769,6 +1111,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, trap.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.72F, 0.72F, 0.75F};
         if (trap.state == engine::scene::TrapState::Triggered)
@@ -797,6 +1146,15 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        // Small default AABB for ground items.
+        const glm::vec3 itemHalf{0.3F, 0.15F, 0.3F};
+        if (!isVisible(transformIt->second.position, itemHalf))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.8F, 0.8F, 0.8F};
         glm::vec3 halfExtents{0.2F, 0.06F, 0.2F};
@@ -869,6 +1227,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             continue;
         }
 
+        if (!isVisible(transformIt->second.position, generator.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
+
         // Green color scheme for generators
         glm::vec3 generatorColor{0.2F, 0.8F, 0.2F};  // Standard green
         if (generator.completed)
@@ -898,6 +1263,16 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        // Frustum cull actors using capsule bounding box.
+        const glm::vec3 actorHalf{actor.capsuleRadius, actor.capsuleHeight * 0.5F, actor.capsuleRadius};
+        const VisibilityLod actorVisibility = classifyVisibility(transformIt->second.position, actorHalf);
+        if (actorVisibility == VisibilityLod::Culled)
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         const bool hideKillerBodyInFp =
             entity == m_killer &&
@@ -934,12 +1309,24 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         const float visualHeightScale =
             actor.crawling ? 0.5F :
             (actor.crouching ? 0.72F : 1.0F);
-        renderer.DrawCapsule(
-            transformIt->second.position,
-            actor.capsuleHeight * visualHeightScale,
-            actor.capsuleRadius,
-            color
-        );
+        if (actorVisibility == VisibilityLod::EdgeLow)
+        {
+            const glm::vec3 lowLodHalfExtents{
+                actor.capsuleRadius,
+                actor.capsuleHeight * visualHeightScale * 0.5F,
+                actor.capsuleRadius
+            };
+            renderer.DrawBox(transformIt->second.position, lowLodHalfExtents, color * 0.9F);
+        }
+        else
+        {
+            renderer.DrawCapsule(
+                transformIt->second.position,
+                actor.capsuleHeight * visualHeightScale,
+                actor.capsuleRadius,
+                color
+            );
+        }
 
         if (m_debugDrawEnabled)
         {
@@ -1189,6 +1576,14 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     const bool localIsKiller = (m_controlledRole == ControlledRole::Killer);
     RenderScratchMarks(renderer, localIsKiller);
     RenderBloodPools(renderer, localIsKiller);
+    
+    // High-poly meshes for GPU stress testing (benchmark map)
+    RenderHighPolyMeshes(renderer);
+
+    // Report dynamic object culling stats to profiler.
+    auto& profStats = engine::core::Profiler::Instance().StatsMut();
+    profStats.dynamicObjectsDrawn = dynamicDrawn;
+    profStats.dynamicObjectsCulled = dynamicCulled;
 }
 
 glm::mat4 GameplaySystems::BuildViewProjection(float aspectRatio) const
@@ -1209,6 +1604,8 @@ glm::mat4 GameplaySystems::BuildViewProjection(float aspectRatio) const
 HudState GameplaySystems::BuildHudState() const
 {
     HudState hud;
+    hud.survivorStates.reserve(1);
+    hud.debugActors.reserve(2);
     hud.mapName = m_activeMapName;
     hud.roleName = m_controlledRole == ControlledRole::Survivor ? "Survivor" : "Killer";
     hud.cameraModeName = CameraModeToName(ResolveCameraMode());
@@ -1569,6 +1966,7 @@ HudState GameplaySystems::BuildHudState() const
         // Populate perk debug info for both roles
         const auto populatePerkDebug = [&](engine::scene::Role role, std::vector<HudState::ActivePerkDebug>& outDebug, float& outSpeedMod) {
             const auto& activePerkStates = m_perkSystem.GetActivePerks(role);
+            outDebug.reserve(activePerkStates.size());
             for (const auto& state : activePerkStates)
             {
                 const auto* perk = m_perkSystem.GetPerk(state.perkId);
@@ -1614,11 +2012,6 @@ HudState GameplaySystems::BuildHudState() const
     };
     pushDebugLabel(m_survivor, "Player1", false);
     pushDebugLabel(m_killer, "Player2", true);
-
-    // Phase B2/B3: Scratch marks and blood pools debug info
-    hud.scratchActiveCount = GetActiveScratchCount();
-    hud.bloodActiveCount = GetActiveBloodPoolCount();
-    hud.scratchSpawnInterval = m_scratchNextInterval;
 
     // Phase B4: Killer look light debug info
     hud.killerLightEnabled = m_killerLookLight.enabled;
@@ -1715,6 +2108,10 @@ void GameplaySystems::LoadMap(const std::string& mapName)
     else if (mapName == "collision_test")
     {
         BuildSceneFromMap(MapType::CollisionTest, m_generationSeed);
+    }
+    else if (mapName == "benchmark")
+    {
+        BuildSceneFromMap(MapType::Benchmark, m_generationSeed);
     }
     else
     {
@@ -2913,6 +3310,10 @@ void GameplaySystems::BuildSceneFromMap(MapType mapType, unsigned int seed)
             generator.CalculateDbdSpawns(generated, seed);
         }
     }
+    else if (mapType == MapType::Benchmark)
+    {
+        generated = generator.GenerateBenchmarkMap();
+    }
     else
     {
         generated = generator.GenerateCollisionTestMap();
@@ -2989,6 +3390,20 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     m_loopDebugTiles.clear();
     m_spawnPoints.clear();
     m_nextSpawnPointId = 1;
+
+    // Free GPU mesh resources before clearing the vector.
+    if (m_rendererPtr)
+    {
+        for (auto& mesh : m_highPolyMeshes)
+        {
+            m_rendererPtr->FreeGpuMesh(mesh.gpuFullLod);
+            m_rendererPtr->FreeGpuMesh(mesh.gpuMediumLod);
+        }
+    }
+    // Swap-to-empty to actually release RAM (clear() only resets size, not capacity).
+    { std::vector<HighPolyMesh> empty; m_highPolyMeshes.swap(empty); }
+    m_highPolyMeshesGenerated = false;
+    m_highPolyMeshesUploaded = false;
 
     m_loopDebugTiles.reserve(generated.tiles.size());
     for (const auto& tile : generated.tiles)
@@ -3122,6 +3537,62 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         };
         m_world.Generators()[generatorEntity] = engine::scene::GeneratorComponent{};
         m_world.Names()[generatorEntity] = engine::scene::NameComponent{"generator"};
+    }
+
+    // Generate high-poly meshes for benchmark map GPU stress test
+    if (!generated.highPolyMeshes.empty())
+    {
+        m_highPolyMeshes.reserve(generated.highPolyMeshes.size());
+        
+        for (const auto& meshSpawn : generated.highPolyMeshes)
+        {
+            HighPolyMesh mesh;
+            mesh.position = meshSpawn.position;
+            mesh.rotation = meshSpawn.rotation;
+            mesh.scale = meshSpawn.scale;
+            mesh.color = meshSpawn.color;
+            
+            // Generate geometry based on type
+            switch (meshSpawn.type)
+            {
+                case maps::HighPolyMeshSpawn::Type::IcoSphere:
+                    mesh.geometry = GenerateIcoSphere(meshSpawn.detailLevel);
+                    mesh.mediumLodGeometry = GenerateIcoSphere(std::max(1, meshSpawn.detailLevel - 2));
+                    break;
+                case maps::HighPolyMeshSpawn::Type::Torus:
+                    mesh.geometry = GenerateTorus(
+                        1.0F, 0.4F, 
+                        16 + meshSpawn.detailLevel * 8, 
+                        8 + meshSpawn.detailLevel * 4
+                    );
+                    mesh.mediumLodGeometry = GenerateTorus(
+                        1.0F,
+                        0.4F,
+                        std::max(10, 10 + meshSpawn.detailLevel * 3),
+                        std::max(6, 6 + meshSpawn.detailLevel * 2)
+                    );
+                    break;
+                case maps::HighPolyMeshSpawn::Type::GridPlane:
+                    mesh.geometry = GenerateGridPlane(2 << meshSpawn.detailLevel, 2 << meshSpawn.detailLevel);
+                    mesh.mediumLodGeometry = GenerateGridPlane(
+                        2 << std::max(2, meshSpawn.detailLevel - 2),
+                        2 << std::max(2, meshSpawn.detailLevel - 2)
+                    );
+                    break;
+                case maps::HighPolyMeshSpawn::Type::SpiralStair:
+                    mesh.geometry = GenerateSpiralStair(32 + meshSpawn.detailLevel * 8, 16);
+                    mesh.mediumLodGeometry = GenerateSpiralStair(
+                        std::max(18, 16 + meshSpawn.detailLevel * 3),
+                        12
+                    );
+                    break;
+            }
+            
+            // Compute bounding box for frustum culling
+            mesh.halfExtents = ComputeMeshBounds(mesh.geometry) * mesh.scale;
+            
+            m_highPolyMeshes.push_back(std::move(mesh));
+        }
     }
 
     // Use DBD-inspired spawn system if enabled, otherwise use legacy spawns
@@ -4135,6 +4606,7 @@ void GameplaySystems::UpdatePalletBreak(float fixedDt)
     {
         pallet.state = engine::scene::PalletState::Broken;
         pallet.halfExtents = glm::vec3{0.12F, 0.08F, 0.12F};
+        m_physicsDirty = true;
         auto transformIt = m_world.Transforms().find(m_killerBreakingPallet);
         if (transformIt != m_world.Transforms().end())
         {
@@ -4178,7 +4650,17 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
 
     // Calculate distance and LOS
     m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
-    m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+
+    // Skip expensive LOS raycast when far outside any relevant range (chase end = 18m, buffer = 2m).
+    constexpr float kLosMaxRange = 20.0F;
+    if (m_chase.distance > kLosMaxRange)
+    {
+        m_chase.hasLineOfSight = false;
+    }
+    else
+    {
+        m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+    }
 
     // Check if survivor is in killer's center FOV (±35°)
     m_chase.inCenterFOV = IsSurvivorInKillerCenterFOV(
@@ -4463,7 +4945,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
     constexpr float kInteractionCastRadius = 0.85F;
     const glm::vec3 castEnd = castStart + castDirection * kInteractionCastRange;
 
-    const std::vector<engine::physics::TriggerCastHit> triggerHits = m_physics.SphereCastTriggers(castStart, castEnd, kInteractionCastRadius);
+    m_physics.SphereCastTriggers(m_sphereCastScratch, castStart, castEnd, kInteractionCastRadius);
     std::unordered_set<engine::scene::Entity> visited;
 
     auto considerCandidate = [&](const InteractionCandidate& candidate) {
@@ -4514,7 +4996,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
         }
     };
 
-    for (const engine::physics::TriggerCastHit& hit : triggerHits)
+    for (const engine::physics::TriggerCastHit& hit : m_sphereCastScratch)
     {
         if (!visited.insert(hit.entity).second)
         {
@@ -4525,13 +5007,13 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
     }
 
     // Fallback: if camera cast misses while sprinting, still resolve entities from local trigger volumes.
-    const std::vector<engine::physics::TriggerHit> nearbyVaultTriggers = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
         engine::physics::TriggerKind::Vault
     );
-    for (const engine::physics::TriggerHit& hit : nearbyVaultTriggers)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (!visited.insert(hit.entity).second)
         {
@@ -4540,13 +5022,13 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
         processTriggerEntity(hit.entity, 0.12F);
     }
 
-    const std::vector<engine::physics::TriggerHit> nearbyInteractionTriggers = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
         engine::physics::TriggerKind::Interaction
     );
-    for (const engine::physics::TriggerHit& hit : nearbyInteractionTriggers)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (!visited.insert(hit.entity).second)
         {
@@ -4602,7 +5084,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildWindowVaultCandidate
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
@@ -4610,7 +5092,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildWindowVaultCandidate
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == windowEntity)
         {
@@ -4685,7 +5167,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildStandingPalletCandid
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -4693,7 +5175,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildStandingPalletCandid
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == palletEntity)
         {
@@ -4761,7 +5243,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildDroppedPalletCandida
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -4769,7 +5251,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildDroppedPalletCandida
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == palletEntity)
         {
@@ -4987,7 +5469,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildGeneratorRepairCandi
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -4995,7 +5477,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildGeneratorRepairCandi
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == generatorEntity)
         {
@@ -6588,6 +7070,7 @@ void GameplaySystems::UpdateScratchMarks(float fixedDt, const glm::vec3& survivo
     mark.age = 0.0F;
     mark.lifetime = m_scratchProfile.lifetime;
     mark.direction = survivorForward;
+    mark.yawDeg = glm::degrees(std::atan2(survivorForward.x, survivorForward.z));
     mark.perpOffset = ComputePerpendicular(survivorForward);
 
     const float jitterRand1 = DeterministicRandom(survivorPos, 1) * 2.0F - 1.0F;
@@ -6724,7 +7207,7 @@ void GameplaySystems::RenderScratchMarks(engine::render::Renderer& renderer, boo
         renderer.DrawOrientedBox(
             mark.position,
             glm::vec3{halfWidth * 0.5F, 0.01F, halfWidth * 0.5F},
-            glm::vec3{0.0F, glm::degrees(std::atan2(mark.direction.x, mark.direction.z)), 0.0F},
+            glm::vec3{0.0F, mark.yawDeg, 0.0F},
             baseColor * alpha
         );
     }
@@ -6751,12 +7234,155 @@ void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool 
 
         const glm::vec3 color{0.55F, 0.08F, 0.08F};
 
-        renderer.DrawOrientedBox(
+        renderer.DrawBox(
             pool.position,
             glm::vec3{pool.size * 0.5F, 0.01F, pool.size * 0.5F},
-            glm::vec3{0.0F, 0.0F, 0.0F},
             color * alpha
         );
+    }
+}
+
+void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
+{
+    if (m_highPolyMeshes.empty())
+    {
+        return;
+    }
+
+    // ─── Lazy GPU upload: move geometry to GPU VBOs once, then free CPU-side data ───
+    if (!m_highPolyMeshesUploaded)
+    {
+        for (auto& mesh : m_highPolyMeshes)
+        {
+            if (!mesh.geometry.positions.empty())
+            {
+                mesh.gpuFullLod = renderer.UploadMesh(mesh.geometry, mesh.color);
+                // Free CPU-side geometry data after GPU upload.
+                mesh.geometry = {};
+            }
+            if (!mesh.mediumLodGeometry.positions.empty())
+            {
+                mesh.gpuMediumLod = renderer.UploadMesh(mesh.mediumLodGeometry, mesh.color * 0.96F, engine::render::MaterialParams{0.65F, 0.0F, 0.0F, false});
+                mesh.mediumLodGeometry = {};
+            }
+        }
+        m_highPolyMeshesUploaded = true;
+    }
+
+    // Frustum culling helper
+    auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        const glm::vec3 mins = center - halfExtents;
+        const glm::vec3 maxs = center + halfExtents;
+        return m_frustum.IntersectsAABB(mins, maxs);
+    };
+
+    // Parallel culling - determine which meshes are visible
+    const std::size_t meshCount = m_highPolyMeshes.size();
+    std::vector<std::size_t> visibleMeshes;
+    visibleMeshes.reserve(meshCount);
+
+    // Use JobSystem for parallel culling if available
+    auto& jobSystem = engine::core::JobSystem::Instance();
+    if (jobSystem.IsInitialized() && jobSystem.IsEnabled() && meshCount > 256)
+    {
+        // Parallel culling using workers
+        // Pre-allocate results
+        std::vector<std::int8_t> visibilityFlags(meshCount, 0);
+        engine::core::JobCounter cullCounter;
+        
+        jobSystem.ParallelFor(meshCount, 64, [&](std::size_t idx) {
+            const auto& mesh = m_highPolyMeshes[idx];
+            if (isVisible(mesh.position, mesh.halfExtents))
+            {
+                visibilityFlags[idx] = 1;
+            }
+        }, engine::core::JobPriority::High, &cullCounter);
+        
+        jobSystem.WaitForCounter(cullCounter);
+        
+        // Collect visible mesh indices
+        for (std::size_t i = 0; i < meshCount; ++i)
+        {
+            if (visibilityFlags[i] == 1)
+            {
+                visibleMeshes.push_back(i);
+            }
+        }
+    }
+    else
+    {
+        // Sequential culling (fallback for small mesh counts or disabled JobSystem)
+        for (std::size_t i = 0; i < meshCount; ++i)
+        {
+            const auto& mesh = m_highPolyMeshes[i];
+            if (isVisible(mesh.position, mesh.halfExtents))
+            {
+                visibleMeshes.push_back(i);
+            }
+        }
+    }
+
+    if (visibleMeshes.empty())
+    {
+        return;
+    }
+
+    constexpr float kHighPolyFullDetailDistance = 72.0F;
+    constexpr float kHighPolyFullDetailDistanceSq = kHighPolyFullDetailDistance * kHighPolyFullDetailDistance;
+    constexpr float kHighPolyMediumDetailDistance = 140.0F;
+    constexpr float kHighPolyMediumDetailDistanceSq = kHighPolyMediumDetailDistance * kHighPolyMediumDetailDistance;
+    constexpr std::size_t kMaxFullDetailMeshes = 8;
+
+    std::vector<std::pair<std::size_t, float>> sortedVisible;
+    sortedVisible.reserve(visibleMeshes.size());
+    for (const std::size_t idx : visibleMeshes)
+    {
+        const auto& mesh = m_highPolyMeshes[idx];
+        const glm::vec3 toCamera = mesh.position - m_cameraPosition;
+        const float distanceSq = glm::dot(toCamera, toCamera);
+        sortedVisible.emplace_back(idx, distanceSq);
+    }
+    std::sort(sortedVisible.begin(), sortedVisible.end(), [](const auto& a, const auto& b) {
+        return a.second < b.second;
+    });
+
+    // Build model matrix helper
+    auto buildModelMatrix = [](const glm::vec3& position, const glm::vec3& rotation, const glm::vec3& scale) -> glm::mat4 {
+        glm::mat4 model{1.0F};
+        model = glm::translate(model, position);
+        model = glm::rotate(model, glm::radians(rotation.y), glm::vec3{0.0F, 1.0F, 0.0F});
+        model = glm::rotate(model, glm::radians(rotation.x), glm::vec3{1.0F, 0.0F, 0.0F});
+        model = glm::rotate(model, glm::radians(rotation.z), glm::vec3{0.0F, 0.0F, 1.0F});
+        model = glm::scale(model, scale);
+        return model;
+    };
+
+    // Render visible meshes using GPU-cached draw calls
+    std::size_t fullDetailDraws = 0;
+    for (const auto& [idx, distanceSq] : sortedVisible)
+    {
+        const auto& mesh = m_highPolyMeshes[idx];
+        const glm::mat4 modelMatrix = buildModelMatrix(mesh.position, mesh.rotation, mesh.scale);
+
+        if (distanceSq <= kHighPolyFullDetailDistanceSq && fullDetailDraws < kMaxFullDetailMeshes && mesh.gpuFullLod != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            renderer.DrawGpuMesh(mesh.gpuFullLod, modelMatrix);
+            ++fullDetailDraws;
+        }
+        else if (distanceSq <= kHighPolyMediumDetailDistanceSq && mesh.gpuMediumLod != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            renderer.DrawGpuMesh(mesh.gpuMediumLod, modelMatrix);
+        }
+        else
+        {
+            renderer.DrawOrientedBox(
+                mesh.position,
+                mesh.halfExtents,
+                mesh.rotation,
+                mesh.color * 0.9F,
+                engine::render::MaterialParams{0.85F, 0.0F, 0.0F, false}
+            );
+        }
     }
 }
 

@@ -78,7 +78,7 @@ Pod polem input sa dynamiczne podpowiedzi; `TAB` autouzupelnia komendy.
 - `set_role survivor|killer`
 - `control_role survivor|killer`
 - `cam_mode survivor|killer|role`
-- `load map test|main|main_map|collision_test`
+- `load map test|main|main_map|collision_test|benchmark`
 - `regen_loops [seed]`
 - `skillcheck start`
 - `set_speed survivor|killer <percent>`
@@ -94,6 +94,18 @@ Pod polem input sa dynamiczne podpowiedzi; `TAB` autouzupelnia komendy.
 - `set_resolution <w> <h>`
 - `toggle_fullscreen`
 - `quit`
+- `perf` — toggle performance profiler overlay
+- `perf_pin on|off` — pin profiler to game window
+- `perf_compact on|off` — compact FPS bar at corner
+
+### Profiler Tabs
+
+- **Overview**: Frame time graph + FPS histogram with auto-scaling
+- **Systems**: Per-system timings (Update, Physics, Render, UI, FX, Audio, Swap) with frame budget indicator
+- **Sections**: Named profile scopes with current/avg/peak times
+- **Render**: Draw calls, vertices, triangles, culling stats, GPU memory
+- **Distribution**: Frame time percentiles (P50, P90, P95, P99, 1% Low) + histogram
+- **Benchmark**: Automated FPS benchmark with statistics
 
 ## Multiplayer (Host/Join)
 
@@ -137,6 +149,12 @@ Model sieci:
 - `load map collision_test`
 - sprawdź wall sliding w korytarzu i corner snag test
 - `F2` włącz collidery/triggery/tile overlay
+
+6. `Benchmark map`:
+- `load map benchmark`
+- 100m x 100m arena z wieloma strefami testowymi
+- Testuje: edge case kolizje, rendering pod obciążeniem, LOS, chase scenarios
+- Strefy: tight corridors, spiral maze, pillar forest, slalom, dense grid, complex intersections, acute angles, multi-tier platforms, chaos scatter, concentric rings, bridge crossing, pallet gallery
 
 6. `Wiggle`:
 - ustaw survivor state na `carried`
@@ -261,6 +279,10 @@ Loop library supports:
 6. Edit selected placement/prop in `Inspector`.
 7. `Save Current` -> creates/updates `assets/maps/<name>.json`.
 8. `Playtest Current Map` to run gameplay scene using saved map.
+
+Mesh asset rendering note (Map + Loop editor runtime preview):
+- `PropType::MeshAsset` now uses one shared model draw path (`DrawModelAssetInstance`) for both editor modes.
+- Surface albedo textures and fallback mesh draw are handled by the same helper for consistent visuals.
 
 Placement rules:
 - loop footprints cannot overlap
@@ -859,6 +881,45 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 
 ---
 
+## Update: Modular Blender Asset Pipeline (Optimisation Phase)
+
+### What is new
+- New modular Blender generation stack in `tools/blender/scripts/`:
+  - `core/*` for config/scene/mesh/bake/export/validation helpers
+  - `generators/*` for asset-specific generators (`rock`, `crate`, `pillar`)
+  - `cli.py` as a single entry point (`list`, `generate`)
+- New config file: `config/assets.json`
+- New batch helper: `tools/blender/generate_batch.ps1`
+
+### Why this was added
+- Removes monolithic script coupling and enables incremental extension.
+- Introduces automatic regenerate/skip behavior based on config modification time.
+- Reduces initial high-poly rock generation pressure (uses lower subdivision baseline in modular generator).
+
+### Config schema (minimal)
+`config/assets.json`:
+- `defaults.texture_size` (int)
+- `defaults.bake_samples` (int)
+- `defaults.use_gpu` (bool)
+- `defaults.output_root` (string)
+- `assets.<assetId>.generator` (`rock|crate|pillar`)
+- `assets.<assetId>.variant` (string, optional)
+- `assets.<assetId>.seed` (int, optional)
+- `assets.<assetId>.scale` (`[x,y,z]`, optional)
+
+### Quick smoke test
+1. Run Blender CLI list mode and verify generators are listed.
+2. Run generate mode with `config/assets.json`.
+3. Verify outputs under `out/assets/`:
+   - `<asset>.blend`
+   - `<asset>.glb`
+4. Re-run generate; unchanged assets should print `SKIP ... up-to-date`.
+
+### Multiplayer impact
+- None (tooling-side change only, no runtime netcode behavior change).
+
+---
+
 ## Update: VFX System (Phase B)
 
 ### What is new
@@ -908,3 +969,111 @@ Console commands:
 2. Get injured, move around → verify blood pools spawn
 3. Use `killer_light on|off` to verify spotlight appears/disappears
 4. Use debug overlays to confirm counts and values
+
+---
+
+## Update: Visibility / LOD Optimization (Current)
+
+Render path now uses:
+
+- **Dynamic actors**: 3-zone policy
+  - inside frustum → full capsule
+  - outside frustum but inside +10% edge buffer → low proxy box
+  - outside buffer → culled
+- **Benchmark high-poly meshes**: strict frustum culling + distance tiers
+  - outside frustum → fully culled (no edge-buffer fallback)
+  - visible + near → full geometry
+  - visible + mid-range → medium LOD geometry
+  - visible + far → oriented-box proxy
+  - full-detail draws are capped per frame (nearest meshes first)
+
+This prevents out-of-view high-poly cost while keeping nearby quality high.
+
+---
+
+## Update: Multithreading System (Job System)
+
+### What is new
+- **JobSystem**: Thread pool with N workers (auto-detected from CPU cores - 1)
+- **RenderThread**: Command buffer for async render data preparation
+- **AsyncAssetLoader**: Background asset loading using JobSystem
+
+### Architecture
+The game now uses a job-based multithreading system:
+
+1. **JobSystem** (`engine/core/JobSystem.hpp`)
+   - Thread pool with worker threads
+   - Priority-based job queue (High/Normal/Low)
+   - `ParallelFor` for data-parallel tasks
+   - `JobCounter` for synchronization
+
+2. **RenderThread** (`engine/render/RenderThread.hpp`)
+   - Command buffer for render data
+   - Double-buffered frame data
+   - Allows async preparation of render commands
+
+3. **AsyncAssetLoader** (`engine/assets/AsyncAssetLoader.hpp`)
+   - Background file loading
+   - Uses JobSystem for parallel loading
+   - Callback-based completion notification
+
+### Console Commands (Threading)
+- `job_stats` - Show job system statistics (workers, pending jobs, completed)
+- `job_enable on|off` - Enable/disable job system processing
+- `job_test <iterations>` - Run parallel test (default: 10000 iterations)
+- `asset_stats` - Show async asset loader statistics
+
+### Usage Example
+```cpp
+// Schedule a job
+engine::core::JobSystem::Instance().Schedule([]() {
+    // Background work
+}, engine::core::JobPriority::Normal, "my_job");
+
+// Parallel for loop
+engine::core::JobSystem::Instance().ParallelFor(count, batchSize, [](size_t i) {
+    processItem(i);
+});
+
+// Async asset loading
+engine::assets::AsyncAssetLoader::Instance().LoadAsync(
+    "textures/character.png",
+    engine::assets::AssetType::Texture,
+    [](const engine::assets::AssetLoadResult& result) {
+        if (result.state == engine::assets::AssetState::Loaded) {
+            // Use loaded asset
+        }
+    }
+);
+```
+
+### Performance Impact
+- Parallel work distributed across all available CPU cores
+- No synthetic per-frame CPU burn jobs; worker threads execute only real scheduled work
+- Parallel culling: HighPolyMesh (for >256 meshes), StaticBatcher (for >256 chunks)
+- Frame culling waits are scoped to local job groups via `JobCounter` (no global `WaitForAll()` stalls)
+- Asset loading no longer blocks the main thread
+- Maintains deterministic gameplay (fixed timestep physics on main thread)
+
+### 2026-02-13 Regression Fix (CPU 80% -> normal)
+- Removed test-only background workload from in-game frame loop.
+- `ParallelFor` now captures callable safely (no dangling references) and falls back to sequential mode for tiny workloads.
+- `JobCounter` wait path uses atomic wait/notify (no spin-yield busy loop).
+- High-poly rendering now uses strict frustum culling + distance tiers (full / medium / proxy).
+- Textured draw batches with adjacent same texture are merged to reduce draw calls.
+- Profiler threading now reports frame-averaged worker utilization and average active workers (snapshot value kept only as instantaneous reference).
+
+### Limitations
+- OpenGL context is single-threaded (GPU submit on main thread only)
+- Vertex buffer building (Renderer::DrawMesh) remains sequential
+- For full parallel rendering, consider Vulkan/DX12 migration
+
+### Verification
+1. Run the game and start a solo session
+2. Open Task Manager → Details → asym_horror.exe
+3. Right-click → Set affinity → Observe multiple cores are active
+4. Check Profiler overlay (F1) → Systems tab → Threading section
+  - `Workers (snapshot)` = instantaneous sample (can be low between frames)
+  - `Avg active (frame)` + `Worker utilization (frame)` = reliable load indicators
+5. Use `job_stats` console command to see worker activity
+6. Run benchmark map with high-poly meshes to see parallel culling

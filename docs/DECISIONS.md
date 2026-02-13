@@ -218,9 +218,137 @@ Trap trigger/escape logic runs in gameplay authority loop; trap state replicated
 
 ### Rationale
 1. **Correctness**: Avoids divergent escape outcomes between peers.
+
+## Profiler Threading Metrics: Frame-Averaged Utilization (2026-02-14)
+
+### Decision
+Keep instantaneous worker count for debugging, but treat frame-averaged utilization as the primary threading metric in profiler UI.
+
+### Rationale
+1. **Snapshot bias**: End-of-frame sampling often reports near-zero active workers even during heavy parallel work.
+2. **Operator clarity**: Frame-average metrics better match user-observed behavior and benchmark results.
+3. **Low overhead**: Cumulative busy-time accounting per worker job is simple and cheap.
+
+### Trade-offs
+- Pro: Much more trustworthy threading telemetry.
+- Con: Adds tiny timing bookkeeping around each job execution.
+
+## High-Poly Benchmark Visibility Policy (2026-02-14)
+
+### Decision
+Use strict frustum culling for high-poly benchmark meshes (no edge-buffer fallback), with 3 distance tiers and capped full-detail draw count.
+
+### Rationale
+1. **Off-screen cost control**: Edge fallback was still spending CPU/GPU budget when object not visible.
+2. **Near-camera quality**: Raised full-detail range prevents overly aggressive detail drop.
+3. **Scalability**: Full-detail cap (nearest-first) avoids catastrophic frame spikes in dense clusters.
+
+### Trade-offs
+- Pro: Better worst-case FPS stability in stress scenes.
+- Con: Potentially more visible LOD transitions at extreme camera sweeps (mitigated by medium LOD tier).
 2. **Debuggability**: Host can inspect trap states (`power_dump`, HUD debug fields).
 3. **Future ready**: Can later move to dedicated net messages if packet budget needs optimization.
 
 ### Add-on Examples
 - `serrated_jaws`: hook modifier on trap escape (`bleed_multiplier`).
 - `tighter_springs`: stat modifiers (`escape_chance_step`, `max_escape_attempts`).
+
+## Blender Asset Generation: Modular CLI + Generator Registry (2026-02-13)
+
+### Decision
+Move toward a modular Blender pipeline with a single CLI entrypoint and generator registry, while keeping legacy scripts for compatibility.
+
+### Rationale
+1. **Scalability**: Adding a new asset type means adding one generator class instead of cloning large scripts.
+2. **Maintainability**: Shared concerns (scene setup, decimation, bake setup, export, validation) are centralized in `core/*`.
+3. **Incremental builds**: Timestamp-based skip avoids full regeneration on unchanged configs.
+4. **Hardware compatibility**: Bake setup attempts GPU backends then falls back to CPU safely.
+
+### Trade-offs
+- Pro: Faster iteration and clearer ownership of pipeline responsibilities.
+- Con: Initial migration period with both legacy and modular scripts coexisting.
+
+### Follow-up
+- Add hash-based cache manifest for stronger invalidation than mtime.
+- Expand modular baking path to output full texture sets and metadata.
+
+## Benchmark Map: Zone-Based Design vs Monolithic (2026-02-13)
+
+### Decision
+Use 15 distinct testing zones with clear purposes instead of a single heterogeneous map.
+
+### Rationale
+1. **Debuggability**: When a collision bug occurs, the zone immediately indicates what geometry pattern is problematic.
+2. **Benchmarking**: FPS/performance can be correlated to specific zone types (pillar forest = instancing, grid = broadphase).
+3. **Testing**: Each zone tests a specific game mechanic (step-up, acute angles, LOS, pallet cycling).
+4. **Visual variety**: Different colored zones make the map more interesting and easier to navigate.
+
+### Zone Design Principles
+- **Corner Corridors**: 1.2m width = minimum viable for capsule navigation
+- **Spiral Maze**: Continuous wall curvature tests collision response smoothness
+- **Pillar Forest**: ~160 pillars tests broadphase efficiency and draw call batching
+- **Acute Corners**: 30° V-angle is the extreme case where collision response can fail
+- **Concentric Rings**: Cardinal gaps test radial LOS with multiple occluders
+
+### Trade-offs
+- Pro: Clear test boundaries, easy to isolate problems
+- Pro: Good visual benchmark with varied geometry complexity
+- Con: Not representative of actual gameplay maps (intentionally extreme)
+
+## Threading: Scoped Waits via JobCounter (2026-02-13)
+
+### Decision
+Use per-task-group `JobCounter` waits (e.g. culling pass) instead of global `JobSystem::WaitForAll()` in frame-critical paths.
+
+### Rationale
+1. **Isolation**: Frame culling no longer blocks on unrelated async jobs (asset loader, debug jobs, etc.).
+2. **Latency**: Reduces long-tail stalls and frame time spikes under queue contention.
+3. **Determinism**: Wait scope is explicit and tied to the exact jobs created by that subsystem.
+
+### Trade-offs
+- Pro: Better frame pacing and less cross-system interference.
+- Con: Slightly more bookkeeping (`JobCounter` creation/passing) per parallel pass.
+
+## High-Poly Render LOD Proxy (2026-02-13)
+
+### Decision
+For benchmark high-poly meshes, render full geometry only within a near distance threshold; use oriented-box proxy farther away.
+
+### Rationale
+1. **CPU reduction**: Avoids per-frame CPU vertex transform/push for distant heavy meshes.
+2. **GPU reduction**: Cuts fragment/triangle load in high-coverage scenes.
+3. **Visual stability**: Maintains clear scene silhouette with cheap proxy geometry.
+
+### Trade-offs
+- Pro: Significant perf gain on stress map and camera sweeps.
+- Con: Distant geometry fidelity is intentionally reduced.
+
+## GPU Mesh Cache: Static Upload vs Per-Frame DrawMesh (2026-02-14)
+
+### Decision
+Upload high-poly mesh geometry to persistent GPU VBOs once, then draw via per-instance model matrix uniform — instead of CPU-transforming every vertex each frame.
+
+### Rationale
+1. **Performance**: DrawMesh() transformed ~489K vertices CPU-side every frame (111ms). GPU upload once + model matrix draw eliminates this entirely.
+2. **Memory**: CPU-side geometry data freed after GPU upload — no longer retained in RAM.
+3. **Compatibility**: Solid vertex shader now uses `uModel` uniform; identity matrix set for legacy immediate draws (fully backward compatible).
+4. **Simplicity**: Clean API — `UploadMesh()` / `DrawGpuMesh()` / `FreeGpuMesh()`.
+
+### Trade-offs
+- Pro: Eliminates largest CPU bottleneck; frees geometry RAM; no regression for existing draws.
+- Con: Mesh geometry is immutable after upload (fine for static props; dynamic meshes still use DrawMesh).
+
+## Memory Leak Fix: Swap-to-Empty vs clear() (2026-02-14)
+
+### Decision
+Use swap-to-empty idiom + shrink_to_fit instead of clear() for map-change cleanup.
+
+### Rationale
+1. `std::vector::clear()` retains allocated capacity — hundreds of MB never returned to OS on map change.
+2. Swap-to-empty (`{ std::vector<T> tmp; v.swap(tmp); }`) guarantees deallocation.
+3. `shrink_to_fit()` in PhysicsWorld::Clear() for secondary containers.
+4. Transient renderer buffer (`m_solidVertices`) uses capacity heuristic: shrink when >256K and >4× last frame usage.
+
+### Trade-offs
+- Pro: RAM drops correctly on map change; no indefinite growth.
+- Con: Re-allocation cost on next map load (negligible — one-time during load).

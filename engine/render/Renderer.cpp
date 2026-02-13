@@ -12,6 +12,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "engine/core/Profiler.hpp"
+
 namespace engine::render
 {
 namespace
@@ -54,6 +56,7 @@ layout (location = 2) in vec3 aColor;
 layout (location = 3) in vec4 aMaterial;
 
 uniform mat4 uViewProjection;
+uniform mat4 uModel;
 
 out vec3 vNormal;
 out vec3 vColor;
@@ -62,11 +65,12 @@ out vec4 vMaterial;
 
 void main()
 {
-    vNormal = aNormal;
+    vec4 worldPos = uModel * vec4(aPosition, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = mat3(uModel) * aNormal;
     vColor = aColor;
-    vWorldPos = aPosition;
     vMaterial = aMaterial;
-    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position = uViewProjection * worldPos;
 }
 )";
 
@@ -130,11 +134,13 @@ void main()
     for (int i = 0; i < uPointLightCount; ++i)
     {
         vec3 toLight = uPointLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uPointLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uPointLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
             float ndotl = max(dot(n, l), 0.0);
             float attenuation = 1.0 - (dist / range);
             attenuation *= attenuation;
@@ -150,14 +156,14 @@ void main()
     for (int i = 0; i < uSpotLightCount; ++i)
     {
         vec3 toLight = uSpotLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uSpotLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uSpotLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
-            vec3 fromLightToFrag = normalize(-toLight);
-            vec3 spotDir = normalize(uSpotLightDirInnerCos[i].xyz);
-            float cosTheta = dot(fromLightToFrag, spotDir);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
+            float cosTheta = dot(-l, uSpotLightDirInnerCos[i].xyz);
             float innerCos = uSpotLightDirInnerCos[i].w;
             float outerCos = uSpotLightOuterCos[i];
             float cone = smoothstep(outerCos, innerCos, cosTheta);
@@ -178,9 +184,9 @@ void main()
 
     if (uFogEnabled != 0)
     {
-        float dist = length(vWorldPos - uCameraPos);
-        float linear = clamp((dist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
-        float expFog = 1.0 - exp(-uFogDensity * dist);
+        float viewDist = length(vWorldPos - uCameraPos);
+        float linear = clamp((viewDist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
+        float expFog = 1.0 - exp(-uFogDensity * viewDist);
         float fogAmount = clamp(max(linear, expFog), 0.0, 1.0);
         lit = mix(lit, uFogColor, fogAmount);
     }
@@ -280,11 +286,13 @@ void main()
     for (int i = 0; i < uPointLightCount; ++i)
     {
         vec3 toLight = uPointLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uPointLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uPointLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
             float ndotl = max(dot(n, l), 0.0);
             float attenuation = 1.0 - (dist / range);
             attenuation *= attenuation;
@@ -300,14 +308,14 @@ void main()
     for (int i = 0; i < uSpotLightCount; ++i)
     {
         vec3 toLight = uSpotLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uSpotLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uSpotLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
-            vec3 fromLightToFrag = normalize(-toLight);
-            vec3 spotDir = normalize(uSpotLightDirInnerCos[i].xyz);
-            float cosTheta = dot(fromLightToFrag, spotDir);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
+            float cosTheta = dot(-l, uSpotLightDirInnerCos[i].xyz);
             float innerCos = uSpotLightDirInnerCos[i].w;
             float outerCos = uSpotLightOuterCos[i];
             float cone = smoothstep(outerCos, innerCos, cosTheta);
@@ -328,9 +336,9 @@ void main()
 
     if (uFogEnabled != 0)
     {
-        float dist = length(vWorldPos - uCameraPos);
-        float linear = clamp((dist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
-        float expFog = 1.0 - exp(-uFogDensity * dist);
+        float viewDist = length(vWorldPos - uCameraPos);
+        float linear = clamp((viewDist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
+        float expFog = 1.0 - exp(-uFogDensity * viewDist);
         float fogAmount = clamp(max(linear, expFog), 0.0, 1.0);
         lit = mix(lit, uFogColor, fogAmount);
     }
@@ -353,6 +361,16 @@ glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
 bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 {
     glEnable(GL_DEPTH_TEST);
+    // NOTE: GL_CULL_FACE intentionally NOT enabled — the geometry pipeline
+    // (boxes, capsules, UI quads) has mixed CW/CCW winding order.
+    // A full winding audit would be needed before culling can safely be enabled.
+
+    // Reserve transient CPU-side buffers once to reduce per-frame growth churn.
+    m_lineVertices.reserve(8192);
+    m_overlayLineVertices.reserve(4096);
+    m_solidVertices.reserve(32768);
+    m_texturedVertices.reserve(16384);
+    m_texturedBatches.reserve(512);
 
     m_lineProgram = CreateProgram(kLineVertexShader, kLineFragmentShader);
     m_solidProgram = CreateProgram(kSolidVertexShader, kSolidFragmentShader);
@@ -368,7 +386,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_lineVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
     m_lineVboCapacityBytes = 2U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_lineVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_lineVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), reinterpret_cast<void*>(offsetof(LineVertex, position)));
     glEnableVertexAttribArray(0);
@@ -381,7 +399,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_solidVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
     m_solidVboCapacityBytes = 4U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SolidVertex), reinterpret_cast<void*>(offsetof(SolidVertex, position)));
     glEnableVertexAttribArray(0);
@@ -398,7 +416,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_texturedVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_texturedVbo);
     m_texturedVboCapacityBytes = 4U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_texturedVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TexturedVertex), reinterpret_cast<void*>(offsetof(TexturedVertex, position)));
     glEnableVertexAttribArray(0);
@@ -416,6 +434,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 
     m_lineViewProjLocation = glGetUniformLocation(m_lineProgram, "uViewProjection");
     m_solidViewProjLocation = glGetUniformLocation(m_solidProgram, "uViewProjection");
+    m_solidModelLocation = glGetUniformLocation(m_solidProgram, "uModel");
     m_solidCameraPosLocation = glGetUniformLocation(m_solidProgram, "uCameraPos");
     m_solidLightingEnabledLocation = glGetUniformLocation(m_solidProgram, "uLightingEnabled");
     m_solidLightDirLocation = glGetUniformLocation(m_solidProgram, "uLightDir");
@@ -461,6 +480,8 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 
 void Renderer::Shutdown()
 {
+    FreeAllGpuMeshes();
+
     if (m_lineVbo != 0)
     {
         glDeleteBuffers(1, &m_lineVbo);
@@ -545,9 +566,27 @@ void Renderer::SetPointLights(const std::vector<PointLight>& lights)
     }
 }
 
+void Renderer::SetPointLights(std::vector<PointLight>&& lights)
+{
+    m_pointLights = std::move(lights);
+    if (m_pointLights.size() > static_cast<std::size_t>(kMaxPointLights))
+    {
+        m_pointLights.resize(static_cast<std::size_t>(kMaxPointLights));
+    }
+}
+
 void Renderer::SetSpotLights(const std::vector<SpotLight>& lights)
 {
     m_spotLights = lights;
+    if (m_spotLights.size() > static_cast<std::size_t>(kMaxSpotLights))
+    {
+        m_spotLights.resize(static_cast<std::size_t>(kMaxSpotLights));
+    }
+}
+
+void Renderer::SetSpotLights(std::vector<SpotLight>&& lights)
+{
+    m_spotLights = std::move(lights);
     if (m_spotLights.size() > static_cast<std::size_t>(kMaxSpotLights))
     {
         m_spotLights.resize(static_cast<std::size_t>(kMaxSpotLights));
@@ -577,6 +616,21 @@ void Renderer::BeginFrame(const glm::vec3& clearColor)
     m_solidVertices.clear();
     m_texturedVertices.clear();
     m_texturedBatches.clear();
+    m_gpuMeshDraws.clear();
+
+    // Periodically reclaim excess transient buffer capacity (e.g. after leaving benchmark).
+    // If capacity is >4× the last frame's usage or >256K, shrink to save RAM.
+    constexpr std::size_t kShrinkThreshold = 256U * 1024U;
+    if (m_solidVertices.capacity() > kShrinkThreshold && m_solidVertices.capacity() > m_lastFrameSolidCount * 4)
+    {
+        m_solidVertices.shrink_to_fit();
+        m_solidVertices.reserve(std::max<std::size_t>(32768, m_lastFrameSolidCount * 2));
+    }
+    if (m_lineVertices.capacity() > kShrinkThreshold)
+    {
+        m_lineVertices.shrink_to_fit();
+        m_lineVertices.reserve(8192);
+    }
 
     m_cloudPhase += 0.016F;
     glm::vec3 finalClear = clearColor;
@@ -604,15 +658,20 @@ void Renderer::BeginFrame(const glm::vec3& clearColor)
 
 void Renderer::EndFrame(const glm::mat4& viewProjection)
 {
+    PROFILE_SCOPE("Renderer::EndFrame");
     m_frustum.Extract(viewProjection);
 
-    const auto ensureBufferCapacity = [](unsigned int vbo, std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
+    auto& profiler = engine::core::Profiler::Instance();
+
+    const auto ensureBufferCapacity = [](std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
         if (ioCapacityBytes == nullptr || requiredBytes == 0U)
         {
             return;
         }
         if (requiredBytes <= *ioCapacityBytes)
         {
+            // Orphan the existing buffer to avoid GPU sync stalls.
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(*ioCapacityBytes), nullptr, GL_STREAM_DRAW);
             return;
         }
 
@@ -621,142 +680,156 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         {
             newCapacity *= 2U;
         }
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(newCapacity), nullptr, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(newCapacity), nullptr, GL_STREAM_DRAW);
         *ioCapacityBytes = newCapacity;
     };
 
+    // ─── Build light uniform arrays ONCE (shared by solid + textured) ───
+    const glm::vec3 normalizedLightDir = glm::normalize(m_environment.directionalLightDirection);
+
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
+    const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
+    for (int i = 0; i < pointCount; ++i)
+    {
+        const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
+        pointPosRange[static_cast<std::size_t>(i)] =
+            glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
+        pointColorIntensity[static_cast<std::size_t>(i)] =
+            glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
+    }
+
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
+    std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
+    const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
+    for (int i = 0; i < spotCount; ++i)
+    {
+        const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
+        const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
+        spotPosRange[static_cast<std::size_t>(i)] =
+            glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
+        spotDirInnerCos[static_cast<std::size_t>(i)] =
+            glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
+        spotColorIntensity[static_cast<std::size_t>(i)] =
+            glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
+        spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
+    }
+
+    // Lambda to upload shared light uniforms to any program.
+    const auto uploadLightUniforms = [&](
+        int lightDirLoc, int lightColorLoc, int lightIntensityLoc,
+        int cameraPosLoc, int lightingEnabledLoc,
+        int fogEnabledLoc, int fogColorLoc, int fogDensityLoc, int fogStartLoc, int fogEndLoc,
+        int pointCountLoc, int pointPosRangeLoc, int pointColorIntensityLoc,
+        int spotCountLoc, int spotPosRangeLoc, int spotDirInnerCosLoc, int spotColorIntensityLoc, int spotOuterCosLoc)
+    {
+        glUniform3fv(cameraPosLoc, 1, glm::value_ptr(m_cameraWorldPosition));
+        glUniform1i(lightingEnabledLoc, m_lightingEnabled ? 1 : 0);
+        glUniform3fv(lightDirLoc, 1, glm::value_ptr(normalizedLightDir));
+        glUniform3fv(lightColorLoc, 1, glm::value_ptr(m_environment.directionalLightColor));
+        glUniform1f(lightIntensityLoc, m_environment.directionalLightIntensity);
+        glUniform1i(fogEnabledLoc, m_environment.fogEnabled ? 1 : 0);
+        glUniform3fv(fogColorLoc, 1, glm::value_ptr(m_environment.fogColor));
+        glUniform1f(fogDensityLoc, m_environment.fogDensity);
+        glUniform1f(fogStartLoc, m_environment.fogStart);
+        glUniform1f(fogEndLoc, m_environment.fogEnd);
+        glUniform1i(pointCountLoc, pointCount);
+        glUniform4fv(pointPosRangeLoc, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
+        glUniform4fv(pointColorIntensityLoc, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
+        glUniform1i(spotCountLoc, spotCount);
+        glUniform4fv(spotPosRangeLoc, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
+        glUniform4fv(spotDirInnerCosLoc, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
+        glUniform4fv(spotColorIntensityLoc, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
+        glUniform1fv(spotOuterCosLoc, kMaxSpotLights, spotOuterCos.data());
+    };
+
+    // ─── Solid pass ───
     if (!m_solidVertices.empty())
     {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
         glUseProgram(m_solidProgram);
         glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-        glUniform3fv(m_solidCameraPosLocation, 1, glm::value_ptr(m_cameraWorldPosition));
-        glUniform1i(m_solidLightingEnabledLocation, m_lightingEnabled ? 1 : 0);
-        glUniform3fv(m_solidLightDirLocation, 1, glm::value_ptr(glm::normalize(m_environment.directionalLightDirection)));
-        glUniform3fv(m_solidLightColorLocation, 1, glm::value_ptr(m_environment.directionalLightColor));
-        glUniform1f(m_solidLightIntensityLocation, m_environment.directionalLightIntensity);
-        glUniform1i(m_solidFogEnabledLocation, m_environment.fogEnabled ? 1 : 0);
-        glUniform3fv(m_solidFogColorLocation, 1, glm::value_ptr(m_environment.fogColor));
-        glUniform1f(m_solidFogDensityLocation, m_environment.fogDensity);
-        glUniform1f(m_solidFogStartLocation, m_environment.fogStart);
-        glUniform1f(m_solidFogEndLocation, m_environment.fogEnd);
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
-        const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
-        for (int i = 0; i < pointCount; ++i)
-        {
-            const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
-            pointPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            pointColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
-        }
-        glUniform1i(m_solidPointLightCountLocation, pointCount);
-        glUniform4fv(m_solidPointLightPosRangeLocation, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
-        glUniform4fv(m_solidPointLightColorIntensityLocation, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
-        std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
-        const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
-        for (int i = 0; i < spotCount; ++i)
-        {
-            const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
-            const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
-            spotPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            spotDirInnerCos[static_cast<std::size_t>(i)] =
-                glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
-            spotColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{
-                    light.color.x,
-                    light.color.y,
-                    light.color.z,
-                    glm::max(0.0F, light.intensity),
-                };
-            spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
-        }
-        glUniform1i(m_solidSpotLightCountLocation, spotCount);
-        glUniform4fv(m_solidSpotLightPosRangeLocation, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
-        glUniform4fv(m_solidSpotLightDirInnerCosLocation, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
-        glUniform4fv(m_solidSpotLightColorIntensityLocation, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
-        glUniform1fv(m_solidSpotLightOuterCosLocation, kMaxSpotLights, spotOuterCos.data());
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(identity));
+        uploadLightUniforms(
+            m_solidLightDirLocation, m_solidLightColorLocation, m_solidLightIntensityLocation,
+            m_solidCameraPosLocation, m_solidLightingEnabledLocation,
+            m_solidFogEnabledLocation, m_solidFogColorLocation, m_solidFogDensityLocation,
+            m_solidFogStartLocation, m_solidFogEndLocation,
+            m_solidPointLightCountLocation, m_solidPointLightPosRangeLocation, m_solidPointLightColorIntensityLocation,
+            m_solidSpotLightCountLocation, m_solidSpotLightPosRangeLocation, m_solidSpotLightDirInnerCosLocation,
+            m_solidSpotLightColorIntensityLocation, m_solidSpotLightOuterCosLocation
+        );
 
         glBindVertexArray(m_solidVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
         const std::size_t solidBytes = m_solidVertices.size() * sizeof(SolidVertex);
-        ensureBufferCapacity(m_solidVbo, &m_solidVboCapacityBytes, solidBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_solidVertices.size() * sizeof(SolidVertex)), m_solidVertices.data());
+        ensureBufferCapacity(&m_solidVboCapacityBytes, solidBytes);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(solidBytes), m_solidVertices.data());
 
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_solidVertices.size()));
+        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_solidVertices.size()), static_cast<std::uint32_t>(m_solidVertices.size() / 3));
+        profiler.StatsMut().solidVboBytes = solidBytes;
     }
 
+    // ─── GPU-cached mesh pass (uses same solid shader with per-draw model matrix) ───
+    if (!m_gpuMeshDraws.empty())
+    {
+        // Ensure solid shader is bound with correct shared uniforms.
+        const bool solidWasActive = !m_solidVertices.empty(); // shader already set up
+        if (!solidWasActive)
+        {
+            glUseProgram(m_solidProgram);
+            glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+            uploadLightUniforms(
+                m_solidLightDirLocation, m_solidLightColorLocation, m_solidLightIntensityLocation,
+                m_solidCameraPosLocation, m_solidLightingEnabledLocation,
+                m_solidFogEnabledLocation, m_solidFogColorLocation, m_solidFogDensityLocation,
+                m_solidFogStartLocation, m_solidFogEndLocation,
+                m_solidPointLightCountLocation, m_solidPointLightPosRangeLocation, m_solidPointLightColorIntensityLocation,
+                m_solidSpotLightCountLocation, m_solidSpotLightPosRangeLocation, m_solidSpotLightDirInnerCosLocation,
+                m_solidSpotLightColorIntensityLocation, m_solidSpotLightOuterCosLocation
+            );
+        }
+
+        for (const GpuMeshDraw& draw : m_gpuMeshDraws)
+        {
+            const auto it = m_gpuMeshes.find(draw.meshId);
+            if (it == m_gpuMeshes.end() || it->second.vertexCount == 0)
+            {
+                continue;
+            }
+            glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(draw.modelMatrix));
+            glBindVertexArray(it->second.vao);
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(it->second.vertexCount));
+            profiler.RecordDrawCall(it->second.vertexCount, it->second.vertexCount / 3);
+        }
+
+        // Reset model matrix back to identity for subsequent passes.
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(identity));
+    }
+
+    // ─── Textured pass ───
     if (!m_texturedVertices.empty() && !m_texturedBatches.empty())
     {
         glUseProgram(m_texturedProgram);
         glUniformMatrix4fv(m_texturedViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-        glUniform3fv(m_texturedCameraPosLocation, 1, glm::value_ptr(m_cameraWorldPosition));
-        glUniform1i(m_texturedLightingEnabledLocation, m_lightingEnabled ? 1 : 0);
-        glUniform3fv(m_texturedLightDirLocation, 1, glm::value_ptr(glm::normalize(m_environment.directionalLightDirection)));
-        glUniform3fv(m_texturedLightColorLocation, 1, glm::value_ptr(m_environment.directionalLightColor));
-        glUniform1f(m_texturedLightIntensityLocation, m_environment.directionalLightIntensity);
-        glUniform1i(m_texturedFogEnabledLocation, m_environment.fogEnabled ? 1 : 0);
-        glUniform3fv(m_texturedFogColorLocation, 1, glm::value_ptr(m_environment.fogColor));
-        glUniform1f(m_texturedFogDensityLocation, m_environment.fogDensity);
-        glUniform1f(m_texturedFogStartLocation, m_environment.fogStart);
-        glUniform1f(m_texturedFogEndLocation, m_environment.fogEnd);
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
-        const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
-        for (int i = 0; i < pointCount; ++i)
-        {
-            const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
-            pointPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            pointColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
-        }
-        glUniform1i(m_texturedPointLightCountLocation, pointCount);
-        glUniform4fv(m_texturedPointLightPosRangeLocation, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
-        glUniform4fv(m_texturedPointLightColorIntensityLocation, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
-        std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
-        const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
-        for (int i = 0; i < spotCount; ++i)
-        {
-            const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
-            const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
-            spotPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            spotDirInnerCos[static_cast<std::size_t>(i)] =
-                glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
-            spotColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{
-                    light.color.x,
-                    light.color.y,
-                    light.color.z,
-                    glm::max(0.0F, light.intensity),
-                };
-            spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
-        }
-        glUniform1i(m_texturedSpotLightCountLocation, spotCount);
-        glUniform4fv(m_texturedSpotLightPosRangeLocation, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
-        glUniform4fv(m_texturedSpotLightDirInnerCosLocation, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
-        glUniform4fv(m_texturedSpotLightColorIntensityLocation, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
-        glUniform1fv(m_texturedSpotLightOuterCosLocation, kMaxSpotLights, spotOuterCos.data());
+        uploadLightUniforms(
+            m_texturedLightDirLocation, m_texturedLightColorLocation, m_texturedLightIntensityLocation,
+            m_texturedCameraPosLocation, m_texturedLightingEnabledLocation,
+            m_texturedFogEnabledLocation, m_texturedFogColorLocation, m_texturedFogDensityLocation,
+            m_texturedFogStartLocation, m_texturedFogEndLocation,
+            m_texturedPointLightCountLocation, m_texturedPointLightPosRangeLocation, m_texturedPointLightColorIntensityLocation,
+            m_texturedSpotLightCountLocation, m_texturedSpotLightPosRangeLocation, m_texturedSpotLightDirInnerCosLocation,
+            m_texturedSpotLightColorIntensityLocation, m_texturedSpotLightOuterCosLocation
+        );
 
         glBindVertexArray(m_texturedVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_texturedVbo);
         const std::size_t texturedBytes = m_texturedVertices.size() * sizeof(TexturedVertex);
-        ensureBufferCapacity(m_texturedVbo, &m_texturedVboCapacityBytes, texturedBytes);
+        ensureBufferCapacity(&m_texturedVboCapacityBytes, texturedBytes);
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(texturedBytes), m_texturedVertices.data());
 
         glActiveTexture(GL_TEXTURE0);
@@ -769,43 +842,56 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
             }
             glBindTexture(GL_TEXTURE_2D, batch.textureId);
             glDrawArrays(GL_TRIANGLES, static_cast<GLint>(batch.firstVertex), static_cast<GLsizei>(batch.vertexCount));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(batch.vertexCount), static_cast<std::uint32_t>(batch.vertexCount / 3));
         }
         glBindTexture(GL_TEXTURE_2D, 0);
+        profiler.StatsMut().texturedVboBytes = texturedBytes;
     }
 
-    if (!m_lineVertices.empty())
+    // ─── Line pass (combined: lines + overlay lines in single buffer) ───
+    const bool hasLines = !m_lineVertices.empty();
+    const bool hasOverlay = !m_overlayLineVertices.empty();
+    if (hasLines || hasOverlay)
     {
         glUseProgram(m_lineProgram);
         glUniformMatrix4fv(m_lineViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-
         glBindVertexArray(m_lineVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
+
         const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
-        ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, lineBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_lineVertices.size() * sizeof(LineVertex)), m_lineVertices.data());
-
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
-    }
-
-    if (!m_overlayLineVertices.empty())
-    {
-        glDisable(GL_DEPTH_TEST);
-        glUseProgram(m_lineProgram);
-        glUniformMatrix4fv(m_lineViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-
-        glBindVertexArray(m_lineVao);
-        glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
         const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
-        ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, overlayBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_overlayLineVertices.size() * sizeof(LineVertex)), m_overlayLineVertices.data());
+        const std::size_t totalBytes = lineBytes + overlayBytes;
 
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
-        glEnable(GL_DEPTH_TEST);
+        // Single orphan + upload for both line arrays.
+        ensureBufferCapacity(&m_lineVboCapacityBytes, totalBytes);
+        if (hasLines)
+        {
+            glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
+        }
+        if (hasOverlay)
+        {
+            glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(lineBytes), static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
+        }
+
+        if (hasLines)
+        {
+            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
+            profiler.StatsMut().lineVboBytes = lineBytes;
+        }
+        if (hasOverlay)
+        {
+            glDisable(GL_DEPTH_TEST);
+            glDrawArrays(GL_LINES, static_cast<GLint>(m_lineVertices.size()), static_cast<GLsizei>(m_overlayLineVertices.size()));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
+            glEnable(GL_DEPTH_TEST);
+        }
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-    glUseProgram(0);
+    // No glBindBuffer(0)/glBindVertexArray(0)/glUseProgram(0) cleanup needed —
+    // next frame's BeginFrame/EndFrame will set fresh state.
+
+    m_lastFrameSolidCount = m_solidVertices.size();
 }
 
 void Renderer::DrawLine(const glm::vec3& from, const glm::vec3& to, const glm::vec3& color)
@@ -869,7 +955,26 @@ void Renderer::DrawCapsule(
     }
     else
     {
-        AddSolidCapsule(center, height, radius, color, material);
+        // Distance-based LOD for capsule tessellation.
+        const float distSq = glm::dot(center - m_cameraWorldPosition, center - m_cameraWorldPosition);
+        int segments = 16;
+        int hemiRings = 6;
+        if (distSq > 900.0F)       // > 30m
+        {
+            segments = 6;
+            hemiRings = 2;
+        }
+        else if (distSq > 225.0F)  // > 15m
+        {
+            segments = 8;
+            hemiRings = 3;
+        }
+        else if (distSq > 64.0F)   // > 8m
+        {
+            segments = 12;
+            hemiRings = 4;
+        }
+        AddSolidCapsule(center, height, radius, color, material, segments, hemiRings);
     }
 }
 
@@ -1064,11 +1169,19 @@ void Renderer::DrawTexturedMesh(
     const std::size_t endVertex = m_texturedVertices.size();
     if (endVertex > firstVertex)
     {
-        m_texturedBatches.push_back(TexturedBatch{
-            textureId,
-            firstVertex,
-            endVertex - firstVertex,
-        });
+        const std::size_t addedVertices = endVertex - firstVertex;
+        if (!m_texturedBatches.empty())
+        {
+            TexturedBatch& lastBatch = m_texturedBatches.back();
+            const bool contiguous = (lastBatch.firstVertex + lastBatch.vertexCount) == firstVertex;
+            if (lastBatch.textureId == textureId && contiguous)
+            {
+                lastBatch.vertexCount += addedVertices;
+                return;
+            }
+        }
+
+        m_texturedBatches.push_back(TexturedBatch{textureId, firstVertex, addedVertices});
     }
 }
 
@@ -1148,20 +1261,6 @@ void Renderer::DrawBillboards(
         return;
     }
 
-    glm::vec3 camForward = glm::normalize(cameraPosition);
-    if (glm::length(camForward) < 0.5F)
-    {
-        camForward = glm::vec3{0.0F, 0.0F, -1.0F};
-    }
-
-    glm::vec3 up{0.0F, 1.0F, 0.0F};
-    glm::vec3 right = glm::normalize(glm::cross(up, camForward));
-    if (glm::length(right) < 0.1F)
-    {
-        right = glm::vec3{1.0F, 0.0F, 0.0F};
-    }
-    up = glm::normalize(glm::cross(camForward, right));
-
     for (std::size_t i = 0; i < count; ++i)
     {
         const BillboardData& b = billboards[i];
@@ -1197,6 +1296,151 @@ void Renderer::DrawBillboards(
         m_solidVertices.push_back(SolidVertex{cornerRD, normal, color, material});
         m_solidVertices.push_back(SolidVertex{cornerRU, normal, color, material});
     }
+}
+
+// ─── GPU Mesh Cache ─────────────────────────────────────────────────────────
+
+Renderer::GpuMeshId Renderer::UploadMesh(const MeshGeometry& mesh, const glm::vec3& color, const MaterialParams& material)
+{
+    if (mesh.positions.empty())
+    {
+        return kInvalidGpuMesh;
+    }
+
+    // Build vertex data in object space (no transform applied).
+    const glm::vec4 packedMaterial{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
+    };
+
+    std::vector<SolidVertex> vertices;
+
+    auto emitTri = [&](std::uint32_t ia, std::uint32_t ib, std::uint32_t ic) {
+        if (ia >= mesh.positions.size() || ib >= mesh.positions.size() || ic >= mesh.positions.size())
+        {
+            return;
+        }
+        const glm::vec3& a = mesh.positions[ia];
+        const glm::vec3& b = mesh.positions[ib];
+        const glm::vec3& c = mesh.positions[ic];
+
+        glm::vec3 fallbackNormal = glm::cross(b - a, c - a);
+        if (glm::length(fallbackNormal) > 1.0e-6F)
+        {
+            fallbackNormal = glm::normalize(fallbackNormal);
+        }
+        else
+        {
+            fallbackNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+        }
+        const glm::vec3 nA = ia < mesh.normals.size() ? mesh.normals[ia] : fallbackNormal;
+        const glm::vec3 nB = ib < mesh.normals.size() ? mesh.normals[ib] : fallbackNormal;
+        const glm::vec3 nC = ic < mesh.normals.size() ? mesh.normals[ic] : fallbackNormal;
+        const glm::vec3 cA = glm::clamp(ia < mesh.colors.size() ? color * mesh.colors[ia] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+        const glm::vec3 cB = glm::clamp(ib < mesh.colors.size() ? color * mesh.colors[ib] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+        const glm::vec3 cC = glm::clamp(ic < mesh.colors.size() ? color * mesh.colors[ic] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+
+        vertices.push_back(SolidVertex{a, nA, cA, packedMaterial});
+        vertices.push_back(SolidVertex{b, nB, cB, packedMaterial});
+        vertices.push_back(SolidVertex{c, nC, cC, packedMaterial});
+    };
+
+    if (!mesh.indices.empty())
+    {
+        vertices.reserve(mesh.indices.size());
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
+        {
+            emitTri(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+        }
+    }
+    else
+    {
+        vertices.reserve(mesh.positions.size());
+        for (std::uint32_t i = 0; i + 2 < static_cast<std::uint32_t>(mesh.positions.size()); i += 3)
+        {
+            emitTri(i, i + 1, i + 2);
+        }
+    }
+
+    if (vertices.empty())
+    {
+        return kInvalidGpuMesh;
+    }
+
+    unsigned int vao = 0;
+    unsigned int vbo = 0;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(SolidVertex)), vertices.data(), GL_STATIC_DRAW);
+
+    constexpr GLsizei stride = sizeof(SolidVertex);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, position)));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, normal)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, color)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, material)));
+    glEnableVertexAttribArray(3);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    const GpuMeshId id = m_nextGpuMeshId++;
+    m_gpuMeshes[id] = GpuMeshInfo{vao, vbo, static_cast<std::uint32_t>(vertices.size())};
+    return id;
+}
+
+void Renderer::DrawGpuMesh(GpuMeshId id, const glm::mat4& modelMatrix)
+{
+    if (id == kInvalidGpuMesh)
+    {
+        return;
+    }
+    m_gpuMeshDraws.push_back(GpuMeshDraw{id, modelMatrix});
+}
+
+void Renderer::FreeGpuMesh(GpuMeshId id)
+{
+    if (id == kInvalidGpuMesh)
+    {
+        return;
+    }
+    const auto it = m_gpuMeshes.find(id);
+    if (it == m_gpuMeshes.end())
+    {
+        return;
+    }
+    if (it->second.vbo != 0)
+    {
+        glDeleteBuffers(1, &it->second.vbo);
+    }
+    if (it->second.vao != 0)
+    {
+        glDeleteVertexArrays(1, &it->second.vao);
+    }
+    m_gpuMeshes.erase(it);
+}
+
+void Renderer::FreeAllGpuMeshes()
+{
+    for (auto& [id, info] : m_gpuMeshes)
+    {
+        if (info.vbo != 0)
+        {
+            glDeleteBuffers(1, &info.vbo);
+        }
+        if (info.vao != 0)
+        {
+            glDeleteVertexArrays(1, &info.vao);
+        }
+    }
+    m_gpuMeshes.clear();
 }
 
 unsigned int Renderer::CompileShader(unsigned int type, const char* source)
@@ -1291,33 +1535,49 @@ void Renderer::AddSolidBox(
     const MaterialParams& material
 )
 {
-    const std::array<glm::vec3, 8> corners = {
-        center + glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z},
-        center + glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z},
-        center + glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z},
+    const glm::vec3 c0 = center + glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c1 = center + glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c2 = center + glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c3 = center + glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c4 = center + glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c5 = center + glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c6 = center + glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z};
+    const glm::vec3 c7 = center + glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z};
+
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
     };
 
-    const auto tri = [&](int a, int b, int c) {
-        AddSolidTriangle(
-            corners[static_cast<size_t>(a)],
-            corners[static_cast<size_t>(b)],
-            corners[static_cast<size_t>(c)],
-            color,
-            material
-        );
-    };
+    // Pre-size to avoid internal reallocations.
+    auto& v = m_solidVertices;
 
-    tri(0, 2, 1); tri(0, 3, 2);
-    tri(4, 5, 6); tri(4, 6, 7);
-    tri(0, 1, 5); tri(0, 5, 4);
-    tri(3, 7, 6); tri(3, 6, 2);
-    tri(0, 4, 7); tri(0, 7, 3);
-    tri(1, 2, 6); tri(1, 6, 5);
+    // Bottom  (normal: 0,-1,0)
+    const glm::vec3 nBot{0,-1,0};
+    v.push_back({c0,nBot,color,mat}); v.push_back({c2,nBot,color,mat}); v.push_back({c1,nBot,color,mat});
+    v.push_back({c0,nBot,color,mat}); v.push_back({c3,nBot,color,mat}); v.push_back({c2,nBot,color,mat});
+    // Top     (normal: 0,+1,0)
+    const glm::vec3 nTop{0,1,0};
+    v.push_back({c4,nTop,color,mat}); v.push_back({c5,nTop,color,mat}); v.push_back({c6,nTop,color,mat});
+    v.push_back({c4,nTop,color,mat}); v.push_back({c6,nTop,color,mat}); v.push_back({c7,nTop,color,mat});
+    // Front   (normal: 0,0,-1)
+    const glm::vec3 nFront{0,0,-1};
+    v.push_back({c0,nFront,color,mat}); v.push_back({c1,nFront,color,mat}); v.push_back({c5,nFront,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c5,nFront,color,mat}); v.push_back({c4,nFront,color,mat});
+    // Back    (normal: 0,0,+1)
+    const glm::vec3 nBack{0,0,1};
+    v.push_back({c3,nBack,color,mat}); v.push_back({c7,nBack,color,mat}); v.push_back({c6,nBack,color,mat});
+    v.push_back({c3,nBack,color,mat}); v.push_back({c6,nBack,color,mat}); v.push_back({c2,nBack,color,mat});
+    // Left    (normal: -1,0,0)
+    const glm::vec3 nLeft{-1,0,0};
+    v.push_back({c0,nLeft,color,mat}); v.push_back({c4,nLeft,color,mat}); v.push_back({c7,nLeft,color,mat});
+    v.push_back({c0,nLeft,color,mat}); v.push_back({c7,nLeft,color,mat}); v.push_back({c3,nLeft,color,mat});
+    // Right   (normal: +1,0,0)
+    const glm::vec3 nRight{1,0,0};
+    v.push_back({c1,nRight,color,mat}); v.push_back({c2,nRight,color,mat}); v.push_back({c6,nRight,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c6,nRight,color,mat}); v.push_back({c5,nRight,color,mat});
 }
 
 void Renderer::AddWireOrientedBox(
@@ -1360,39 +1620,43 @@ void Renderer::AddSolidOrientedBox(
 )
 {
     const glm::mat3 rotation = RotationMatrixFromEulerDegrees(rotationEulerDegrees);
-    const std::array<glm::vec3, 8> localCorners = {
-        glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z},
-        glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z},
-        glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z},
+    const glm::vec3 c0 = center + rotation * glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c1 = center + rotation * glm::vec3{+halfExtents.x, -halfExtents.y, -halfExtents.z};
+    const glm::vec3 c2 = center + rotation * glm::vec3{+halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c3 = center + rotation * glm::vec3{-halfExtents.x, -halfExtents.y, +halfExtents.z};
+    const glm::vec3 c4 = center + rotation * glm::vec3{-halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c5 = center + rotation * glm::vec3{+halfExtents.x, +halfExtents.y, -halfExtents.z};
+    const glm::vec3 c6 = center + rotation * glm::vec3{+halfExtents.x, +halfExtents.y, +halfExtents.z};
+    const glm::vec3 c7 = center + rotation * glm::vec3{-halfExtents.x, +halfExtents.y, +halfExtents.z};
+
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
     };
 
-    std::array<glm::vec3, 8> corners{};
-    for (std::size_t i = 0; i < localCorners.size(); ++i)
-    {
-        corners[i] = center + rotation * localCorners[i];
-    }
+    // Rotated face normals (cheaper than per-tri cross product).
+    const glm::vec3 nBot   = rotation * glm::vec3{0,-1, 0};
+    const glm::vec3 nTop   = rotation * glm::vec3{0, 1, 0};
+    const glm::vec3 nFront = rotation * glm::vec3{0, 0,-1};
+    const glm::vec3 nBack  = rotation * glm::vec3{0, 0, 1};
+    const glm::vec3 nLeft  = rotation * glm::vec3{-1,0, 0};
+    const glm::vec3 nRight = rotation * glm::vec3{1, 0, 0};
 
-    const auto tri = [&](int a, int b, int c) {
-        AddSolidTriangle(
-            corners[static_cast<std::size_t>(a)],
-            corners[static_cast<std::size_t>(b)],
-            corners[static_cast<std::size_t>(c)],
-            color,
-            material
-        );
-    };
-
-    tri(0, 2, 1); tri(0, 3, 2);
-    tri(4, 5, 6); tri(4, 6, 7);
-    tri(0, 1, 5); tri(0, 5, 4);
-    tri(3, 7, 6); tri(3, 6, 2);
-    tri(0, 4, 7); tri(0, 7, 3);
-    tri(1, 2, 6); tri(1, 6, 5);
+    auto& v = m_solidVertices;
+    v.push_back({c0,nBot,color,mat});   v.push_back({c2,nBot,color,mat});   v.push_back({c1,nBot,color,mat});
+    v.push_back({c0,nBot,color,mat});   v.push_back({c3,nBot,color,mat});   v.push_back({c2,nBot,color,mat});
+    v.push_back({c4,nTop,color,mat});   v.push_back({c5,nTop,color,mat});   v.push_back({c6,nTop,color,mat});
+    v.push_back({c4,nTop,color,mat});   v.push_back({c6,nTop,color,mat});   v.push_back({c7,nTop,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c1,nFront,color,mat}); v.push_back({c5,nFront,color,mat});
+    v.push_back({c0,nFront,color,mat}); v.push_back({c5,nFront,color,mat}); v.push_back({c4,nFront,color,mat});
+    v.push_back({c3,nBack,color,mat});  v.push_back({c7,nBack,color,mat});  v.push_back({c6,nBack,color,mat});
+    v.push_back({c3,nBack,color,mat});  v.push_back({c6,nBack,color,mat});  v.push_back({c2,nBack,color,mat});
+    v.push_back({c0,nLeft,color,mat});  v.push_back({c4,nLeft,color,mat});  v.push_back({c7,nLeft,color,mat});
+    v.push_back({c0,nLeft,color,mat});  v.push_back({c7,nLeft,color,mat});  v.push_back({c3,nLeft,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c2,nRight,color,mat}); v.push_back({c6,nRight,color,mat});
+    v.push_back({c1,nRight,color,mat}); v.push_back({c6,nRight,color,mat}); v.push_back({c5,nRight,color,mat});
 }
 
 void Renderer::AddWireCapsule(const glm::vec3& center, float height, float radius, const glm::vec3& color)
@@ -1421,66 +1685,89 @@ void Renderer::AddSolidCapsule(
     float height,
     float radius,
     const glm::vec3& color,
-    const MaterialParams& material
+    const MaterialParams& material,
+    int segments,
+    int hemiRings
 )
 {
-    constexpr int segments = 16;
-    constexpr int hemiRings = 6;
-
     const float halfCylinder = std::max(0.0F, height * 0.5F - radius);
     const glm::vec3 topCenter = center + glm::vec3{0.0F, halfCylinder, 0.0F};
     const glm::vec3 bottomCenter = center - glm::vec3{0.0F, halfCylinder, 0.0F};
 
-    for (int i = 0; i < segments; ++i)
-    {
-        const float t0 = static_cast<float>(i) / static_cast<float>(segments) * 6.2831853F;
-        const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments) * 6.2831853F;
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
+    };
 
-        const glm::vec3 ring0{std::cos(t0) * radius, 0.0F, std::sin(t0) * radius};
-        const glm::vec3 ring1{std::cos(t1) * radius, 0.0F, std::sin(t1) * radius};
+    auto& v = m_solidVertices;
+    const float twoPi = 6.2831853F;
+    const float halfPi = 1.5707963F;
+
+    // Pre-compute sin/cos per segment.
+    const int maxSegs = std::min(segments, 64);
+    float cosTable[65], sinTable[65]; // +1 for wrap
+    for (int i = 0; i <= maxSegs; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(maxSegs) * twoPi;
+        cosTable[i] = std::cos(t);
+        sinTable[i] = std::sin(t);
+    }
+
+    // Cylinder body — normals point radially outward (no Y component).
+    for (int i = 0; i < maxSegs; ++i)
+    {
+        const glm::vec3 ring0{cosTable[i] * radius, 0.0F, sinTable[i] * radius};
+        const glm::vec3 ring1{cosTable[i + 1] * radius, 0.0F, sinTable[i + 1] * radius};
+        const glm::vec3 n0 = glm::vec3{cosTable[i], 0.0F, sinTable[i]};
+        const glm::vec3 n1 = glm::vec3{cosTable[i + 1], 0.0F, sinTable[i + 1]};
 
         const glm::vec3 b0 = bottomCenter + ring0;
         const glm::vec3 b1 = bottomCenter + ring1;
-        const glm::vec3 t00 = topCenter + ring0;
-        const glm::vec3 t11 = topCenter + ring1;
+        const glm::vec3 t0 = topCenter + ring0;
+        const glm::vec3 t1 = topCenter + ring1;
 
-        AddSolidTriangle(b0, t00, t11, color, material);
-        AddSolidTriangle(b0, t11, b1, color, material);
+        v.push_back({b0, n0, color, mat}); v.push_back({t0, n0, color, mat}); v.push_back({t1, n1, color, mat});
+        v.push_back({b0, n0, color, mat}); v.push_back({t1, n1, color, mat}); v.push_back({b1, n1, color, mat});
     }
 
+    // Hemisphere with analytically-computed normals.
     auto addHemisphere = [&](const glm::vec3& hemiCenter, float ySign) {
         for (int ring = 0; ring < hemiRings; ++ring)
         {
-            const float v0 = static_cast<float>(ring) / static_cast<float>(hemiRings);
-            const float v1 = static_cast<float>(ring + 1) / static_cast<float>(hemiRings);
-
-            const float phi0 = v0 * 1.5707963F;
-            const float phi1 = v1 * 1.5707963F;
-
+            const float phi0 = static_cast<float>(ring) / static_cast<float>(hemiRings) * halfPi;
+            const float phi1 = static_cast<float>(ring + 1) / static_cast<float>(hemiRings) * halfPi;
             const float r0 = std::cos(phi0) * radius;
             const float r1 = std::cos(phi1) * radius;
             const float y0 = std::sin(phi0) * radius * ySign;
             const float y1 = std::sin(phi1) * radius * ySign;
+            const float ny0 = std::sin(phi0) * ySign;
+            const float ny1 = std::sin(phi1) * ySign;
+            const float nr0 = std::cos(phi0);
+            const float nr1 = std::cos(phi1);
 
-            for (int i = 0; i < segments; ++i)
+            for (int i = 0; i < maxSegs; ++i)
             {
-                const float t0 = static_cast<float>(i) / static_cast<float>(segments) * 6.2831853F;
-                const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments) * 6.2831853F;
+                const glm::vec3 v00 = hemiCenter + glm::vec3{cosTable[i] * r0, y0, sinTable[i] * r0};
+                const glm::vec3 v01 = hemiCenter + glm::vec3{cosTable[i + 1] * r0, y0, sinTable[i + 1] * r0};
+                const glm::vec3 v10 = hemiCenter + glm::vec3{cosTable[i] * r1, y1, sinTable[i] * r1};
+                const glm::vec3 v11 = hemiCenter + glm::vec3{cosTable[i + 1] * r1, y1, sinTable[i + 1] * r1};
 
-                const glm::vec3 v00 = hemiCenter + glm::vec3{std::cos(t0) * r0, y0, std::sin(t0) * r0};
-                const glm::vec3 v01 = hemiCenter + glm::vec3{std::cos(t1) * r0, y0, std::sin(t1) * r0};
-                const glm::vec3 v10 = hemiCenter + glm::vec3{std::cos(t0) * r1, y1, std::sin(t0) * r1};
-                const glm::vec3 v11 = hemiCenter + glm::vec3{std::cos(t1) * r1, y1, std::sin(t1) * r1};
+                const glm::vec3 n00{cosTable[i] * nr0, ny0, sinTable[i] * nr0};
+                const glm::vec3 n01{cosTable[i + 1] * nr0, ny0, sinTable[i + 1] * nr0};
+                const glm::vec3 n10{cosTable[i] * nr1, ny1, sinTable[i] * nr1};
+                const glm::vec3 n11{cosTable[i + 1] * nr1, ny1, sinTable[i + 1] * nr1};
 
                 if (ySign > 0.0F)
                 {
-                    AddSolidTriangle(v00, v10, v11, color, material);
-                    AddSolidTriangle(v00, v11, v01, color, material);
+                    v.push_back({v00, n00, color, mat}); v.push_back({v10, n10, color, mat}); v.push_back({v11, n11, color, mat});
+                    v.push_back({v00, n00, color, mat}); v.push_back({v11, n11, color, mat}); v.push_back({v01, n01, color, mat});
                 }
                 else
                 {
-                    AddSolidTriangle(v00, v11, v10, color, material);
-                    AddSolidTriangle(v00, v01, v11, color, material);
+                    v.push_back({v00, n00, color, mat}); v.push_back({v11, n11, color, mat}); v.push_back({v10, n10, color, mat});
+                    v.push_back({v00, n00, color, mat}); v.push_back({v01, n01, color, mat}); v.push_back({v11, n11, color, mat});
                 }
             }
         }
