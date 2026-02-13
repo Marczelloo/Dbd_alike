@@ -132,11 +132,13 @@ void main()
     for (int i = 0; i < uPointLightCount; ++i)
     {
         vec3 toLight = uPointLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uPointLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uPointLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
             float ndotl = max(dot(n, l), 0.0);
             float attenuation = 1.0 - (dist / range);
             attenuation *= attenuation;
@@ -152,14 +154,14 @@ void main()
     for (int i = 0; i < uSpotLightCount; ++i)
     {
         vec3 toLight = uSpotLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uSpotLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uSpotLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
-            vec3 fromLightToFrag = normalize(-toLight);
-            vec3 spotDir = normalize(uSpotLightDirInnerCos[i].xyz);
-            float cosTheta = dot(fromLightToFrag, spotDir);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
+            float cosTheta = dot(-l, uSpotLightDirInnerCos[i].xyz);
             float innerCos = uSpotLightDirInnerCos[i].w;
             float outerCos = uSpotLightOuterCos[i];
             float cone = smoothstep(outerCos, innerCos, cosTheta);
@@ -180,9 +182,9 @@ void main()
 
     if (uFogEnabled != 0)
     {
-        float dist = length(vWorldPos - uCameraPos);
-        float linear = clamp((dist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
-        float expFog = 1.0 - exp(-uFogDensity * dist);
+        float viewDist = length(vWorldPos - uCameraPos);
+        float linear = clamp((viewDist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
+        float expFog = 1.0 - exp(-uFogDensity * viewDist);
         float fogAmount = clamp(max(linear, expFog), 0.0, 1.0);
         lit = mix(lit, uFogColor, fogAmount);
     }
@@ -282,11 +284,13 @@ void main()
     for (int i = 0; i < uPointLightCount; ++i)
     {
         vec3 toLight = uPointLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uPointLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uPointLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
             float ndotl = max(dot(n, l), 0.0);
             float attenuation = 1.0 - (dist / range);
             attenuation *= attenuation;
@@ -302,14 +306,14 @@ void main()
     for (int i = 0; i < uSpotLightCount; ++i)
     {
         vec3 toLight = uSpotLightPosRange[i].xyz - vWorldPos;
-        float dist = length(toLight);
-        float range = max(0.001, uSpotLightPosRange[i].w);
-        if (dist < range)
+        float distSq = dot(toLight, toLight);
+        float range = uSpotLightPosRange[i].w;
+        if (distSq < range * range)
         {
-            vec3 l = normalize(toLight);
-            vec3 fromLightToFrag = normalize(-toLight);
-            vec3 spotDir = normalize(uSpotLightDirInnerCos[i].xyz);
-            float cosTheta = dot(fromLightToFrag, spotDir);
+            float invDist = inversesqrt(distSq);
+            float dist = distSq * invDist;
+            vec3 l = toLight * invDist;
+            float cosTheta = dot(-l, uSpotLightDirInnerCos[i].xyz);
             float innerCos = uSpotLightDirInnerCos[i].w;
             float outerCos = uSpotLightOuterCos[i];
             float cone = smoothstep(outerCos, innerCos, cosTheta);
@@ -330,9 +334,9 @@ void main()
 
     if (uFogEnabled != 0)
     {
-        float dist = length(vWorldPos - uCameraPos);
-        float linear = clamp((dist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
-        float expFog = 1.0 - exp(-uFogDensity * dist);
+        float viewDist = length(vWorldPos - uCameraPos);
+        float linear = clamp((viewDist - uFogStart) / max(0.001, uFogEnd - uFogStart), 0.0, 1.0);
+        float expFog = 1.0 - exp(-uFogDensity * viewDist);
         float fogAmount = clamp(max(linear, expFog), 0.0, 1.0);
         lit = mix(lit, uFogColor, fogAmount);
     }
@@ -377,7 +381,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_lineVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
     m_lineVboCapacityBytes = 2U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_lineVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_lineVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), reinterpret_cast<void*>(offsetof(LineVertex, position)));
     glEnableVertexAttribArray(0);
@@ -390,7 +394,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_solidVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
     m_solidVboCapacityBytes = 4U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SolidVertex), reinterpret_cast<void*>(offsetof(SolidVertex, position)));
     glEnableVertexAttribArray(0);
@@ -407,7 +411,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
     glBindVertexArray(m_texturedVao);
     glBindBuffer(GL_ARRAY_BUFFER, m_texturedVbo);
     m_texturedVboCapacityBytes = 4U * 1024U * 1024U;
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_texturedVboCapacityBytes), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_solidVboCapacityBytes), nullptr, GL_STREAM_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TexturedVertex), reinterpret_cast<void*>(offsetof(TexturedVertex, position)));
     glEnableVertexAttribArray(0);
@@ -618,13 +622,15 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
 
     auto& profiler = engine::core::Profiler::Instance();
 
-    const auto ensureBufferCapacity = [](unsigned int vbo, std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
+    const auto ensureBufferCapacity = [](std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
         if (ioCapacityBytes == nullptr || requiredBytes == 0U)
         {
             return;
         }
         if (requiredBytes <= *ioCapacityBytes)
         {
+            // Orphan the existing buffer to avoid GPU sync stalls.
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(*ioCapacityBytes), nullptr, GL_STREAM_DRAW);
             return;
         }
 
@@ -633,8 +639,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         {
             newCapacity *= 2U;
         }
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(newCapacity), nullptr, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(newCapacity), nullptr, GL_STREAM_DRAW);
         *ioCapacityBytes = newCapacity;
     };
 
@@ -702,7 +707,6 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
     // ─── Solid pass ───
     if (!m_solidVertices.empty())
     {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glUseProgram(m_solidProgram);
         glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
         uploadLightUniforms(
@@ -718,7 +722,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glBindVertexArray(m_solidVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
         const std::size_t solidBytes = m_solidVertices.size() * sizeof(SolidVertex);
-        ensureBufferCapacity(m_solidVbo, &m_solidVboCapacityBytes, solidBytes);
+        ensureBufferCapacity(&m_solidVboCapacityBytes, solidBytes);
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(solidBytes), m_solidVertices.data());
 
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_solidVertices.size()));
@@ -744,7 +748,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glBindVertexArray(m_texturedVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_texturedVbo);
         const std::size_t texturedBytes = m_texturedVertices.size() * sizeof(TexturedVertex);
-        ensureBufferCapacity(m_texturedVbo, &m_texturedVboCapacityBytes, texturedBytes);
+        ensureBufferCapacity(&m_texturedVboCapacityBytes, texturedBytes);
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(texturedBytes), m_texturedVertices.data());
 
         glActiveTexture(GL_TEXTURE0);
@@ -776,7 +780,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         if (hasLines)
         {
             const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
-            ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, lineBytes);
+            ensureBufferCapacity(&m_lineVboCapacityBytes, lineBytes);
             glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
             glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
             profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
@@ -787,7 +791,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         {
             glDisable(GL_DEPTH_TEST);
             const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
-            ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, overlayBytes);
+            ensureBufferCapacity(&m_lineVboCapacityBytes, overlayBytes);
             glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
             glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
             profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
@@ -1443,61 +1447,84 @@ void Renderer::AddSolidCapsule(
     int hemiRings
 )
 {
-
     const float halfCylinder = std::max(0.0F, height * 0.5F - radius);
     const glm::vec3 topCenter = center + glm::vec3{0.0F, halfCylinder, 0.0F};
     const glm::vec3 bottomCenter = center - glm::vec3{0.0F, halfCylinder, 0.0F};
 
-    for (int i = 0; i < segments; ++i)
-    {
-        const float t0 = static_cast<float>(i) / static_cast<float>(segments) * 6.2831853F;
-        const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments) * 6.2831853F;
+    const glm::vec4 mat{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
+    };
 
-        const glm::vec3 ring0{std::cos(t0) * radius, 0.0F, std::sin(t0) * radius};
-        const glm::vec3 ring1{std::cos(t1) * radius, 0.0F, std::sin(t1) * radius};
+    auto& v = m_solidVertices;
+    const float twoPi = 6.2831853F;
+    const float halfPi = 1.5707963F;
+
+    // Pre-compute sin/cos per segment.
+    const int maxSegs = std::min(segments, 64);
+    float cosTable[65], sinTable[65]; // +1 for wrap
+    for (int i = 0; i <= maxSegs; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(maxSegs) * twoPi;
+        cosTable[i] = std::cos(t);
+        sinTable[i] = std::sin(t);
+    }
+
+    // Cylinder body — normals point radially outward (no Y component).
+    for (int i = 0; i < maxSegs; ++i)
+    {
+        const glm::vec3 ring0{cosTable[i] * radius, 0.0F, sinTable[i] * radius};
+        const glm::vec3 ring1{cosTable[i + 1] * radius, 0.0F, sinTable[i + 1] * radius};
+        const glm::vec3 n0 = glm::vec3{cosTable[i], 0.0F, sinTable[i]};
+        const glm::vec3 n1 = glm::vec3{cosTable[i + 1], 0.0F, sinTable[i + 1]};
 
         const glm::vec3 b0 = bottomCenter + ring0;
         const glm::vec3 b1 = bottomCenter + ring1;
-        const glm::vec3 t00 = topCenter + ring0;
-        const glm::vec3 t11 = topCenter + ring1;
+        const glm::vec3 t0 = topCenter + ring0;
+        const glm::vec3 t1 = topCenter + ring1;
 
-        AddSolidTriangle(b0, t00, t11, color, material);
-        AddSolidTriangle(b0, t11, b1, color, material);
+        v.push_back({b0, n0, color, mat}); v.push_back({t0, n0, color, mat}); v.push_back({t1, n1, color, mat});
+        v.push_back({b0, n0, color, mat}); v.push_back({t1, n1, color, mat}); v.push_back({b1, n1, color, mat});
     }
 
+    // Hemisphere with analytically-computed normals.
     auto addHemisphere = [&](const glm::vec3& hemiCenter, float ySign) {
         for (int ring = 0; ring < hemiRings; ++ring)
         {
-            const float v0 = static_cast<float>(ring) / static_cast<float>(hemiRings);
-            const float v1 = static_cast<float>(ring + 1) / static_cast<float>(hemiRings);
-
-            const float phi0 = v0 * 1.5707963F;
-            const float phi1 = v1 * 1.5707963F;
-
+            const float phi0 = static_cast<float>(ring) / static_cast<float>(hemiRings) * halfPi;
+            const float phi1 = static_cast<float>(ring + 1) / static_cast<float>(hemiRings) * halfPi;
             const float r0 = std::cos(phi0) * radius;
             const float r1 = std::cos(phi1) * radius;
             const float y0 = std::sin(phi0) * radius * ySign;
             const float y1 = std::sin(phi1) * radius * ySign;
+            const float ny0 = std::sin(phi0) * ySign;
+            const float ny1 = std::sin(phi1) * ySign;
+            const float nr0 = std::cos(phi0);
+            const float nr1 = std::cos(phi1);
 
-            for (int i = 0; i < segments; ++i)
+            for (int i = 0; i < maxSegs; ++i)
             {
-                const float t0 = static_cast<float>(i) / static_cast<float>(segments) * 6.2831853F;
-                const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments) * 6.2831853F;
+                const glm::vec3 v00 = hemiCenter + glm::vec3{cosTable[i] * r0, y0, sinTable[i] * r0};
+                const glm::vec3 v01 = hemiCenter + glm::vec3{cosTable[i + 1] * r0, y0, sinTable[i + 1] * r0};
+                const glm::vec3 v10 = hemiCenter + glm::vec3{cosTable[i] * r1, y1, sinTable[i] * r1};
+                const glm::vec3 v11 = hemiCenter + glm::vec3{cosTable[i + 1] * r1, y1, sinTable[i + 1] * r1};
 
-                const glm::vec3 v00 = hemiCenter + glm::vec3{std::cos(t0) * r0, y0, std::sin(t0) * r0};
-                const glm::vec3 v01 = hemiCenter + glm::vec3{std::cos(t1) * r0, y0, std::sin(t1) * r0};
-                const glm::vec3 v10 = hemiCenter + glm::vec3{std::cos(t0) * r1, y1, std::sin(t0) * r1};
-                const glm::vec3 v11 = hemiCenter + glm::vec3{std::cos(t1) * r1, y1, std::sin(t1) * r1};
+                const glm::vec3 n00{cosTable[i] * nr0, ny0, sinTable[i] * nr0};
+                const glm::vec3 n01{cosTable[i + 1] * nr0, ny0, sinTable[i + 1] * nr0};
+                const glm::vec3 n10{cosTable[i] * nr1, ny1, sinTable[i] * nr1};
+                const glm::vec3 n11{cosTable[i + 1] * nr1, ny1, sinTable[i + 1] * nr1};
 
                 if (ySign > 0.0F)
                 {
-                    AddSolidTriangle(v00, v10, v11, color, material);
-                    AddSolidTriangle(v00, v11, v01, color, material);
+                    v.push_back({v00, n00, color, mat}); v.push_back({v10, n10, color, mat}); v.push_back({v11, n11, color, mat});
+                    v.push_back({v00, n00, color, mat}); v.push_back({v11, n11, color, mat}); v.push_back({v01, n01, color, mat});
                 }
                 else
                 {
-                    AddSolidTriangle(v00, v11, v10, color, material);
-                    AddSolidTriangle(v00, v01, v11, color, material);
+                    v.push_back({v00, n00, color, mat}); v.push_back({v11, n11, color, mat}); v.push_back({v10, n10, color, mat});
+                    v.push_back({v00, n00, color, mat}); v.push_back({v01, n01, color, mat}); v.push_back({v11, n11, color, mat});
                 }
             }
         }
