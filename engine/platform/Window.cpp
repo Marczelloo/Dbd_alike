@@ -47,6 +47,7 @@ bool Window::Initialize(const WindowSettings& settings)
     glfwSetFramebufferSizeCallback(m_window, FramebufferResizeCallback);
     glfwSetDropCallback(m_window, FileDropCallback);
     glfwGetFramebufferSize(m_window, &m_fbWidth, &m_fbHeight);
+    glfwGetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
 
     SetVSync(settings.vsync);
     return true;
@@ -178,7 +179,12 @@ void Window::ToggleFullscreen()
 
     if (m_displayMode == DisplayMode::Windowed)
     {
-        SetDisplayMode(DisplayMode::Fullscreen, m_windowWidth, m_windowHeight);
+        // Get primary monitor's max resolution for fullscreen
+        GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = primaryMonitor != nullptr ? glfwGetVideoMode(primaryMonitor) : nullptr;
+        const int fullWidth = mode != nullptr ? mode->width : m_windowWidth;
+        const int fullHeight = mode != nullptr ? mode->height : m_windowHeight;
+        SetDisplayMode(DisplayMode::Fullscreen, fullWidth, fullHeight);
     }
     else
     {
@@ -214,6 +220,7 @@ void Window::FramebufferResizeCallback(GLFWwindow* window, int width, int height
         return;
     }
 
+    glfwGetWindowSize(window, &self->m_windowWidth, &self->m_windowHeight);
     self->m_fbWidth = width;
     self->m_fbHeight = height;
     if (self->m_resizeCallback)

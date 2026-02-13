@@ -69,5 +69,5 @@ config/audio.json
 .DS_Store
 Thumbs.db
 Desktop.ini
-
 prompt.md
+nul

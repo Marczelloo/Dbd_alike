@@ -604,6 +604,8 @@ void Renderer::BeginFrame(const glm::vec3& clearColor)
 
 void Renderer::EndFrame(const glm::mat4& viewProjection)
 {
+    m_frustum.Extract(viewProjection);
+
     const auto ensureBufferCapacity = [](unsigned int vbo, std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
         if (ioCapacityBytes == nullptr || requiredBytes == 0U)
         {
@@ -1070,9 +1072,21 @@ void Renderer::DrawTexturedMesh(
     }
 }
 
-void Renderer::DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor)
+void Renderer::DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor, const glm::vec4& filledColor)
 {
     const float range = static_cast<float>(halfSize) * step;
+    
+    if (m_renderMode == RenderMode::Filled && filledColor.a > 0.0F)
+    {
+        AddSolidBox(
+            glm::vec3{0.0F, -0.01F, 0.0F},
+            glm::vec3{range, 0.005F, range},
+            glm::vec3{filledColor.r, filledColor.g, filledColor.b},
+            MaterialParams{}
+        );
+    }
+    
+    // Always draw grid lines
     for (int i = -halfSize; i <= halfSize; ++i)
     {
         const float value = static_cast<float>(i) * step;
@@ -1081,6 +1095,107 @@ void Renderer::DrawGrid(int halfSize, float step, const glm::vec3& majorColor, c
 
         DrawLine(glm::vec3{-range, 0.0F, value}, glm::vec3{range, 0.0F, value}, color);
         DrawLine(glm::vec3{value, 0.0F, -range}, glm::vec3{value, 0.0F, range}, color);
+    }
+}
+
+void Renderer::DrawCircle(
+    const glm::vec3& center,
+    float radius,
+    int segments,
+    const glm::vec3& color,
+    bool overlay
+)
+{
+    if (segments < 3 || radius <= 0.0F)
+    {
+        return;
+    }
+
+    auto addLine = [&](const glm::vec3& a, const glm::vec3& b) {
+        if (overlay)
+        {
+            m_overlayLineVertices.push_back(LineVertex{a, color});
+            m_overlayLineVertices.push_back(LineVertex{b, color});
+        }
+        else
+        {
+            m_lineVertices.push_back(LineVertex{a, color});
+            m_lineVertices.push_back(LineVertex{b, color});
+        }
+    };
+
+    constexpr float kTwoPi = 6.28318530718F;
+    const float step = kTwoPi / static_cast<float>(segments);
+    
+    glm::vec3 prev = center + glm::vec3{radius, 0.0F, 0.0F};
+    for (int i = 1; i <= segments; ++i)
+    {
+        const float angle = step * static_cast<float>(i);
+        const glm::vec3 curr = center + glm::vec3{std::cos(angle) * radius, 0.0F, std::sin(angle) * radius};
+        addLine(prev, curr);
+        prev = curr;
+    }
+}
+
+void Renderer::DrawBillboards(
+    const BillboardData* billboards,
+    std::size_t count,
+    const glm::vec3& cameraPosition
+)
+{
+    if (billboards == nullptr || count == 0)
+    {
+        return;
+    }
+
+    glm::vec3 camForward = glm::normalize(cameraPosition);
+    if (glm::length(camForward) < 0.5F)
+    {
+        camForward = glm::vec3{0.0F, 0.0F, -1.0F};
+    }
+
+    glm::vec3 up{0.0F, 1.0F, 0.0F};
+    glm::vec3 right = glm::normalize(glm::cross(up, camForward));
+    if (glm::length(right) < 0.1F)
+    {
+        right = glm::vec3{1.0F, 0.0F, 0.0F};
+    }
+    up = glm::normalize(glm::cross(camForward, right));
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const BillboardData& b = billboards[i];
+        const glm::vec3 camDir = cameraPosition - b.position;
+        const float dist = glm::length(camDir);
+        if (dist < 0.01F)
+        {
+            continue;
+        }
+
+        const glm::vec3 forward = camDir / dist;
+        glm::vec3 localRight = glm::normalize(glm::cross(glm::vec3{0.0F, 1.0F, 0.0F}, forward));
+        if (glm::length(localRight) < 0.1F)
+        {
+            localRight = glm::vec3{1.0F, 0.0F, 0.0F};
+        }
+        const glm::vec3 localUp = glm::normalize(glm::cross(forward, localRight));
+
+        const float halfSize = b.size * 0.5F;
+        const glm::vec3 cornerLU = b.position - localRight * halfSize + localUp * halfSize;
+        const glm::vec3 cornerRU = b.position + localRight * halfSize + localUp * halfSize;
+        const glm::vec3 cornerLD = b.position - localRight * halfSize - localUp * halfSize;
+        const glm::vec3 cornerRD = b.position + localRight * halfSize - localUp * halfSize;
+
+        const glm::vec3 normal = forward;
+        const glm::vec3 color = glm::vec3{b.color.r, b.color.g, b.color.b};
+        const glm::vec4 material{0.55F, 0.0F, 0.0F, 0.0F};
+
+        m_solidVertices.push_back(SolidVertex{cornerLD, normal, color, material});
+        m_solidVertices.push_back(SolidVertex{cornerRU, normal, color, material});
+        m_solidVertices.push_back(SolidVertex{cornerLU, normal, color, material});
+        m_solidVertices.push_back(SolidVertex{cornerLD, normal, color, material});
+        m_solidVertices.push_back(SolidVertex{cornerRD, normal, color, material});
+        m_solidVertices.push_back(SolidVertex{cornerRU, normal, color, material});
     }
 }
 

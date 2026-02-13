@@ -22,7 +22,13 @@
 #include "game/editor/LevelEditor.hpp"
 #include "game/gameplay/GameplaySystems.hpp"
 #include "game/ui/LoadingManager.hpp"
+#include "game/ui/SkillCheckWheel.hpp"
+#include "game/ui/GeneratorProgressBar.hpp"
+#include "game/ui/ScreenEffects.hpp"
+#include "game/ui/PerkLoadoutEditor.hpp"
+#include "game/ui/LobbyScene.hpp"
 #include "ui/DeveloperConsole.hpp"
+#include "ui/DeveloperToolbar.hpp"
 
 namespace engine::core
 {
@@ -83,6 +89,7 @@ private:
     enum class AppMode
     {
         MainMenu,
+        Lobby,
         Editor,
         InGame,
         Loading
@@ -105,6 +112,14 @@ private:
         Connected,
         Disconnecting,
         Error
+    };
+
+    enum class HudDragTarget
+    {
+        None,
+        Movement,
+        Stats,
+        Controls
     };
 
     struct NetRoleInputPacket
@@ -202,14 +217,13 @@ private:
     void SendAssignRoleToClient(const std::string& remoteRole);
     bool SendRoleChangeRequestToHost(const std::string& requestedRole);
 
-    void DrawMainMenuUi(bool* shouldQuit);
-    void DrawPauseMenuUi(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit);
-    void DrawSettingsUi(bool* closeSettings);
     void DrawMainMenuUiCustom(bool* shouldQuit);
     void DrawPauseMenuUiCustom(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit);
     void DrawSettingsUiCustom(bool* closeSettings);
     void DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fps, double nowSeconds);
     void DrawUiTestPanel();
+    void DrawLoadingScreenTestPanel();
+    void DrawFullLoadingScreen(float progress01, const std::string& tip, const std::string& stepText);
     void DrawNetworkStatusUi(double nowSeconds);
     void DrawNetworkOverlayUi(double nowSeconds);
     void DrawPlayersDebugUi(double nowSeconds);
@@ -252,7 +266,13 @@ private:
     game::gameplay::GameplaySystems m_gameplay;
     game::editor::LevelEditor m_levelEditor;
     game::ui::LoadingManager m_loadingManager;
+    game::ui::SkillCheckWheel m_skillCheckWheel;
+    game::ui::GeneratorProgressBar m_generatorProgressBar;
+    game::ui::ScreenEffects m_screenEffects;
+    game::ui::PerkLoadoutEditor m_perkLoadoutEditor;
+    game::ui::LobbyScene m_lobbyScene;
     ::ui::DeveloperConsole m_console;
+    ::ui::DeveloperToolbar m_devToolbar;
     net::NetworkSession m_network;
     net::LanDiscovery m_lanDiscovery;
 
@@ -261,6 +281,10 @@ private:
     int m_fixedTickHz = 60;
     bool m_showDebugOverlay = true;
     bool m_showNetworkOverlay = false;
+    bool m_showPlayersWindow = false;
+    bool m_showMovementWindow = false;
+    bool m_showStatsWindow = false;
+    bool m_showControlsWindow = true;
     bool m_showLanDebug = false;
     std::uint16_t m_defaultGamePort = 7777;
     std::uint16_t m_lanDiscoveryPort = 7778;
@@ -277,6 +301,7 @@ private:
     float m_mainMenuScrollY = 0.0F;
     bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
+    bool m_showLoadingScreenTestPanel = false;
 
     struct HudLayoutSettings
     {
@@ -287,6 +312,21 @@ private:
         glm::vec2 bottomCenterOffset{0.0F, 110.0F};
         glm::vec2 messageOffset{0.0F, 72.0F};
     } m_hudLayout{};
+
+    HudDragTarget m_hudDragTarget = HudDragTarget::None;
+    glm::vec2 m_hudDragOffset{0.0F, 0.0F};
+    glm::vec2 m_hudMovementPos{-1.0F, -1.0F};
+    glm::vec2 m_hudStatsPos{-1.0F, -1.0F};
+    glm::vec2 m_hudControlsPos{-1.0F, -1.0F};
+    glm::vec2 m_hudMovementSize{-1.0F, -1.0F};
+    glm::vec2 m_hudStatsSize{-1.0F, -1.0F};
+    glm::vec2 m_hudControlsSize{-1.0F, -1.0F};
+    bool m_hudResizing = false;
+    HudDragTarget m_hudResizeTarget = HudDragTarget::None;
+
+    bool m_connectingLoadingActive = false;
+    bool m_showConnectingLoading = false;
+    double m_connectingLoadingStart = 0.0;
 
     ControlsSettings m_controlsSettings{};
     GraphicsSettings m_graphicsApplied{};
@@ -324,6 +364,12 @@ private:
     int m_menuKillerAddonBIndex = 0;
     int m_menuPort = 7777;
     std::string m_menuJoinIp = "127.0.0.1";
+    
+    // Menu perk loadout selection (4 slots like in-game HUD)
+    std::vector<std::string> m_menuSurvivorPerks = {"sprint_burst", "self_care", "iron_will", ""};
+    std::vector<std::string> m_menuKillerPerks = {"brutal_strength", "terrifying_presence", "sloppy_butcher", ""};
+    
+    float m_menuLanScroll = 0.0F;
     std::string m_menuNetStatus;
     std::string m_lastNetworkError;
     std::string m_connectedEndpoint;
@@ -356,6 +402,25 @@ private:
     float m_uiTestProgress = 0.35F;
     bool m_uiTestCaptureMode = false;
     std::string m_uiTestCaptured;
+
+    float m_loadingTestProgress = 0.0F;
+    bool m_loadingTestAutoAdvance = false;
+    float m_loadingTestSpeed = 0.5F;
+    int m_loadingTestSteps = 5;
+    int m_loadingTestCurrentStep = 0;
+    bool m_loadingTestShowTips = true;
+    int m_loadingTestSelectedTip = 0;
+    bool m_loadingTestShowFull = false;
+    std::vector<std::string> m_loadingTestTips{
+        "Survivors: Work together to repair 5 generators and escape.",
+        "Killer: Hunt down and sacrifice all survivors before they escape.",
+        "Pallets: Drop pallets to block the killer's path and create distance.",
+        "Windows: Fast vault through windows to break line of sight.",
+        "Generators: Stay near generators to earn repair progress bonus.",
+        "Skill Checks: Press SPACE when the needle is in the green zone.",
+        "Terror Radius: The heartbeat indicates the killer is nearby.",
+        "Chase: Run in circles around loops to waste the killer's time."
+    };
 
     std::vector<std::string> m_localIpv4Addresses;
     std::vector<render::PointLight> m_runtimeMapPointLights;

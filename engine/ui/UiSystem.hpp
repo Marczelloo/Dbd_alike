@@ -121,6 +121,11 @@ public:
     void PushIdScope(const std::string& scopeId);
     void PopIdScope();
 
+    // Low-level drawing (public for custom HUD panels with drag headers)
+    void DrawRect(const UiRect& rect, const glm::vec4& color);
+    void DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color);
+    void DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
+
 private:
     struct QuadVertex
     {
@@ -204,8 +209,6 @@ private:
     [[nodiscard]] glm::vec2 MousePositionUi() const;
     [[nodiscard]] bool IsFocusableWidget(const std::string& id) const;
 
-    void DrawRect(const UiRect& rect, const glm::vec4& color);
-    void DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color);
     void DrawText(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
     [[nodiscard]] float TextWidth(std::string_view text, float fontScale = 1.0F) const;
     [[nodiscard]] float LineHeight(float fontScale = 1.0F) const;

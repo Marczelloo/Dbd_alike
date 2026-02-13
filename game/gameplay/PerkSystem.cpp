@@ -132,6 +132,43 @@ bool PerkSystem::HasPerk(const std::string& id) const
     return m_perkRegistry.contains(id);
 }
 
+void PerkSystem::SetDefaultDevLoadout()
+{
+    // Survivor: pick up to 3 registered survivor perks
+    {
+        PerkLoadout survivorLoadout;
+        const auto survivorPerks = ListPerks(PerkRole::Survivor);
+
+        if (!survivorPerks.empty())
+        {
+            survivorLoadout.SetPerk(0, survivorPerks[0]);
+        }
+        if (survivorPerks.size() > 1)
+        {
+            survivorLoadout.SetPerk(1, survivorPerks[1]);
+        }
+        if (survivorPerks.size() > 2)
+        {
+            survivorLoadout.SetPerk(2, survivorPerks[2]);
+        }
+
+        m_survivorLoadout = survivorLoadout;
+        std::cout << "[PERKS] Set default survivor dev loadout (" << std::min<std::size_t>(3, survivorPerks.size()) << " perks)\n";
+    }
+    
+    // Killer: brutal_strength, terrifying_presence, sloppy_butcher
+    {
+        PerkLoadout killerLoadout;
+        killerLoadout.SetPerk(0, "brutal_strength");
+        killerLoadout.SetPerk(1, "terrifying_presence");
+        killerLoadout.SetPerk(2, "sloppy_butcher");
+        m_killerLoadout = killerLoadout;
+        std::cout << "[PERKS] Set default killer dev loadout (3 perks)\n";
+    }
+    
+    InitializeActiveStates();
+}
+
 void PerkSystem::InitializeActiveStates()
 {
     m_activeSurvivorPerks.clear();

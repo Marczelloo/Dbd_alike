@@ -122,8 +122,7 @@ void LoadingManager::AddTask(
     LoadingTask task;
     task.id = id;
     task.name = name;
-    task.loadFunc = [callback](LoadingState& state) {
-        LoadingContext ctx;
+    task.loadFunc = [callback, ctx = m_context](LoadingState& state) {
         callback(state, ctx);
     };
     task.progressWeight = weight;

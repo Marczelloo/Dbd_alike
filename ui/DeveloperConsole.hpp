@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <glm/glm.hpp>
 
 namespace engine::platform
 {
@@ -29,6 +30,8 @@ struct ConsoleContext
     bool* vsync = nullptr;
     int* fpsLimit = nullptr;
     bool* showDebugOverlay = nullptr;
+    bool* showMovementWindow = nullptr;
+    bool* showStatsWindow = nullptr;
     bool renderPlayerHud = true;
 
     std::function<void(bool)> applyVsync;
@@ -86,5 +89,18 @@ private:
     struct Impl;
     Impl* m_impl = nullptr;
 #endif
+
+    // Color palette for console messages
+    struct ConsoleColors
+    {
+        static constexpr glm::vec4 Command{0.0F, 0.75F, 1.0F, 1.0F};      // Cyan
+        static constexpr glm::vec4 Success{0.0F, 0.9F, 0.3F, 1.0F};       // Green
+        static constexpr glm::vec4 Error{1.0F, 0.3F, 0.3F, 1.0F};         // Red
+        static constexpr glm::vec4 Warning{1.0F, 0.75F, 0.0F, 1.0F};      // Orange/Yellow
+        static constexpr glm::vec4 Info{0.7F, 0.7F, 0.85F, 1.0F};        // Light gray-ish blue
+        static constexpr glm::vec4 Category{0.6F, 0.9F, 0.95F, 1.0F};    // Light cyan
+        static constexpr glm::vec4 Value{0.9F, 0.85F, 0.7F, 1.0F};       // Light yellow
+        static constexpr glm::vec4 Default{0.9F, 0.9F, 0.9F, 1.0F};      // White-ish
+    };
 };
 } // namespace ui

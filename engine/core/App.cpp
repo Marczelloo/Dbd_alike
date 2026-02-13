@@ -394,17 +394,72 @@ bool App::Run()
         std::cerr << "Failed to initialize loading manager.\n";
     }
 
+    if (!m_skillCheckWheel.Initialize(&m_ui, &m_renderer))
+    {
+        std::cerr << "Failed to initialize skill check wheel.\n";
+    }
+
+    if (!m_generatorProgressBar.Initialize(&m_ui))
+    {
+        std::cerr << "Failed to initialize generator progress bar.\n";
+    }
+
+    if (!m_screenEffects.Initialize(&m_ui))
+    {
+        std::cerr << "Failed to initialize screen effects.\n";
+    }
+
+    if (!m_perkLoadoutEditor.Initialize(&m_ui, &m_gameplay.GetPerkSystem()))
+    {
+        std::cerr << "Failed to initialize perk loadout editor.\n";
+    }
+
+    if (!m_lobbyScene.Initialize(&m_ui, &m_renderer, &m_input))
+    {
+        std::cerr << "Failed to initialize lobby scene.\n";
+    }
+    m_lobbyScene.SetStartMatchCallback([this](const std::string& map, const std::string& role, const std::array<std::string, 4>& perks) {
+        m_sessionMapName = map;
+        m_sessionRoleName = role;
+        std::array<std::string, 4> perkArray = perks;
+        if (role == "survivor")
+        {
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                m_menuSurvivorPerks[i] = perkArray[i];
+            }
+        }
+        else
+        {
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                m_menuKillerPerks[i] = perkArray[i];
+            }
+        }
+        m_lobbyScene.ExitLobby();
+        StartSoloSession(map, role);
+    });
+    m_lobbyScene.SetReadyChangedCallback([this](bool ready) {
+        (void)ready;
+    });
+    m_lobbyScene.SetRoleChangedCallback([this](const std::string& role) {
+        m_sessionRoleName = role;
+    });
+
     if (!m_console.Initialize(m_window))
     {
         CloseNetworkLogFile();
         return false;
     }
-
-    ResetToMainMenu();
-
+        if (!m_devToolbar.Initialize(m_window))
+        {
+            m_console.Shutdown();
+            CloseNetworkLogFile();
+            return false;
+        }
+    float currentFps = 0.0F;
     double fpsAccumulator = 0.0;
     int fpsFrames = 0;
-    float currentFps = 0.0F;
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
@@ -425,11 +480,17 @@ bool App::Run()
 
         const bool inGame = m_appMode == AppMode::InGame;
         const bool inEditor = m_appMode == AppMode::Editor;
-        if ((inGame || inEditor) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        const bool inLobby = m_appMode == AppMode::Lobby;
+        if ((inGame || inEditor || inLobby) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
         {
             if (inGame)
             {
                 m_pauseMenuOpen = !m_pauseMenuOpen;
+            }
+            else if (inLobby)
+            {
+                m_lobbyScene.ExitLobby();
+                ResetToMainMenu();
             }
             else
             {
@@ -437,7 +498,8 @@ bool App::Run()
             }
         }
 
-        const bool controlsEnabled = (inGame || inEditor) && !m_pauseMenuOpen && !m_console.IsOpen() && !m_settingsMenuOpen;
+        const bool altHeld = m_input.IsKeyDown(GLFW_KEY_LEFT_ALT) || m_input.IsKeyDown(GLFW_KEY_RIGHT_ALT);
+        const bool controlsEnabled = (inGame || inEditor) && !m_pauseMenuOpen && !m_console.IsOpen() && !m_settingsMenuOpen && !altHeld;
         m_window.SetCursorCaptured(inGame && controlsEnabled);
 
         if (m_input.IsKeyPressed(GLFW_KEY_F11))
@@ -474,10 +536,10 @@ bool App::Run()
             m_statusToastMessage = m_showUiTestPanel ? "UI test panel ON" : "UI test panel OFF";
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         }
-        if (m_input.IsKeyPressed(GLFW_KEY_F10))
+        if (m_input.IsKeyPressed(GLFW_KEY_F7))
         {
-            m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-            m_statusToastMessage = m_useLegacyImGuiMenus ? "Legacy ImGui menus ON" : "Custom UI menus ON";
+            m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
+            m_statusToastMessage = m_showLoadingScreenTestPanel ? "Loading screen test panel ON" : "Loading screen test panel OFF";
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         }
 
@@ -558,13 +620,12 @@ bool App::Run()
         if (inGame)
         {
             m_renderer.SetLightingEnabled(true);
-            m_gameplay.Render(m_renderer);
-
             m_renderer.SetPointLights(m_runtimeMapPointLights);
-
+            m_renderer.SetSpotLights(m_runtimeMapSpotLights);
             const float aspect = m_window.FramebufferHeight() > 0
                                      ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
                                      : (16.0F / 9.0F);
+            m_gameplay.Render(m_renderer, aspect);
             viewProjection = m_gameplay.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_gameplay.CameraPosition());
         }
@@ -579,6 +640,16 @@ bool App::Run()
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
         }
+        else if (inLobby)
+        {
+            m_renderer.SetLightingEnabled(true);
+            const float aspect = m_window.FramebufferHeight() > 0
+                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
+                                     : (16.0F / 9.0F);
+            viewProjection = m_lobbyScene.BuildViewProjection(aspect);
+            m_renderer.SetCameraWorldPosition(m_lobbyScene.CameraPosition());
+            m_lobbyScene.Render3D();
+        }
         else
         {
             m_renderer.SetLightingEnabled(true);
@@ -591,6 +662,12 @@ bool App::Run()
         bool backToMenu = false;
 
         m_console.BeginFrame();
+
+        if (m_appMode == AppMode::Loading && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        {
+            m_loadingTestShowFull = false;
+            m_appMode = AppMode::MainMenu;
+        }
 
         m_ui.BeginFrame(engine::ui::UiSystem::BeginFrameArgs{
             &m_input,
@@ -612,13 +689,13 @@ bool App::Run()
         }
         else if (m_appMode == AppMode::MainMenu && !m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
+            DrawMainMenuUiCustom(&shouldQuit);
+        }
+        else if (m_appMode == AppMode::Loading)
+        {
+            if (m_loadingTestShowFull)
             {
-                DrawMainMenuUi(&shouldQuit);
-            }
-            else
-            {
-                DrawMainMenuUiCustom(&shouldQuit);
+                DrawFullLoadingScreen(m_loadingTestProgress, m_loadingTestTips[static_cast<std::size_t>(m_loadingTestSelectedTip) % m_loadingTestTips.size()], "Loading...");
             }
         }
         else if (m_appMode == AppMode::Editor)
@@ -644,26 +721,12 @@ bool App::Run()
         }
         else if (m_pauseMenuOpen && !m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
-            {
-                DrawPauseMenuUi(&closePauseMenu, &backToMenu, &shouldQuit);
-            }
-            else
-            {
-                DrawPauseMenuUiCustom(&closePauseMenu, &backToMenu, &shouldQuit);
-            }
+            DrawPauseMenuUiCustom(&closePauseMenu, &backToMenu, &shouldQuit);
         }
 
         if (m_settingsMenuOpen)
         {
-            if (m_useLegacyImGuiMenus)
-            {
-                DrawSettingsUi(&m_settingsMenuOpen);
-            }
-            else
-            {
-                DrawSettingsUiCustom(&m_settingsMenuOpen);
-            }
+            DrawSettingsUiCustom(&m_settingsMenuOpen);
         }
 
         if (m_graphicsAutoConfirmPending && glfwGetTime() >= m_graphicsAutoConfirmDeadline)
@@ -691,38 +754,149 @@ bool App::Run()
 
         if (m_appMode == AppMode::InGame)
         {
-            if (!m_useLegacyImGuiMenus)
+            const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+            DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
+            
+            m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
+            game::ui::ScreenEffectsState screenState;
+            screenState.terrorRadiusActive = hudState.terrorRadiusVisible;
+            screenState.terrorRadiusIntensity = hudState.chaseActive ? 0.8F : 0.4F;
+            screenState.chaseActive = hudState.chaseActive;
+            screenState.lowHealthActive = (hudState.survivorStateName == "Injured" || hudState.survivorStateName == "Downed");
+            screenState.lowHealthIntensity = hudState.survivorStateName == "Downed" ? 0.6F : 0.3F;
+            m_screenEffects.Render(screenState);
+            
+            if (hudState.skillCheckActive)
             {
-                DrawInGameHudCustom(m_gameplay.BuildHudState(), currentFps, glfwGetTime());
+                if (!m_skillCheckWheel.IsActive())
+                {
+                    m_skillCheckWheel.TriggerSkillCheck(
+                        hudState.skillCheckSuccessStart,
+                        hudState.skillCheckSuccessEnd,
+                        0.15F
+                    );
+                }
+                // Sync needle position from game state
+                m_skillCheckWheel.GetState().needleAngle = hudState.skillCheckNeedle * 360.0F;
             }
+            else
+            {
+                if (m_skillCheckWheel.IsActive())
+                {
+                    // Skill check ended in game - show feedback
+                    m_skillCheckWheel.GetState().active = false;
+                }
+            }
+            m_skillCheckWheel.Update(static_cast<float>(m_time.DeltaSeconds()));
+            m_skillCheckWheel.Render();
+            
+            game::ui::GeneratorProgressState genState;
+            genState.isActive = hudState.repairingGenerator || hudState.generatorsCompleted > 0;
+            genState.isRepairing = hudState.repairingGenerator;
+            genState.progress = hudState.activeGeneratorProgress;
+            genState.generatorsCompleted = hudState.generatorsCompleted;
+            genState.generatorsTotal = hudState.generatorsTotal;
+            m_generatorProgressBar.Render(genState);
+        }
+        else if (m_appMode == AppMode::Lobby)
+        {
+            m_lobbyScene.Update(static_cast<float>(m_time.DeltaSeconds()));
+            m_lobbyScene.RenderUI();
+            m_lobbyScene.HandleInput();
         }
 
         if (m_showUiTestPanel)
         {
             DrawUiTestPanel();
         }
+        if (m_showLoadingScreenTestPanel && (m_appMode != AppMode::Loading || !m_loadingTestShowFull))
+        {
+            DrawLoadingScreenTestPanel();
+        }
 
-        m_ui.EndFrame();
+        // Draw connecting loading screen overlay
+        if (m_connectingLoadingActive)
+        {
+            const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
+            
+            // Solo mode dismisses faster (2s), multiplayer has 15s timeout
+            const bool isSoloMode = m_joinTargetIp.empty();
+            const double timeout = isSoloMode ? 2.0 : 15.0;
+            
+            if (elapsed > timeout)
+            {
+                std::cout << "[Loading] Timeout after " << timeout << "s, dismissing loading screen\n";
+                m_connectingLoadingActive = false;
+            }
+            else
+            {
+                // Fake progress: asymptotically approach 0.95 over ~8 seconds
+                const float fakeProgress = std::min(0.95F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
+                
+                std::string step;
+                std::string tip;
+                if (isSoloMode)
+                {
+                    // Solo mode
+                    step = "Loading solo session (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+                    tip = "Preparing game world...";
+                }
+                else
+                {
+                    // Multiplayer join
+                    step = "Connecting to " + m_joinTargetIp + ":" + std::to_string(m_joinTargetPort) + " (" + std::to_string(static_cast<int>(elapsed)) + "s)";
+                    tip = "Establishing connection to the server...";
+                }
+                DrawFullLoadingScreen(fakeProgress, tip, step);
+            }
+        }
 
+        // Render ImGui debug windows BEFORE EndFrame
         if (m_showNetworkOverlay && (inGame || m_appMode == AppMode::MainMenu))
         {
             DrawNetworkOverlayUi(glfwGetTime());
         }
-        if (inGame && m_showDebugOverlay)
+        if (inGame && m_showPlayersWindow)
         {
             DrawPlayersDebugUi(glfwGetTime());
         }
 
-        const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        m_ui.EndFrame();
+
+        // Build HUD state before rendering toolbar (needed for game stats display)
+        game::gameplay::HudState hudState = m_gameplay.BuildHudState();
+        hudState.isInGame = (m_appMode == AppMode::InGame);
+
+        // Render developer toolbar LAST to be on top of everything
+        if (m_appMode == AppMode::InGame)
+        {
+            ::ui::ToolbarContext toolbarContext;
+            toolbarContext.showNetworkOverlay = &m_showNetworkOverlay;
+            toolbarContext.showPlayersWindow = &m_showPlayersWindow;
+            toolbarContext.showDebugOverlay = &m_showDebugOverlay;
+            toolbarContext.showMovementWindow = &m_showMovementWindow;
+            toolbarContext.showStatsWindow = &m_showStatsWindow;
+            toolbarContext.showControlsWindow = &m_showControlsWindow;
+            toolbarContext.showUiTestPanel = &m_showUiTestPanel;
+            toolbarContext.showLoadingScreenTestPanel = &m_showLoadingScreenTestPanel;
+            toolbarContext.fps = currentFps;
+            toolbarContext.tickRate = m_fixedTickHz;
+            toolbarContext.renderMode = RenderModeToText(m_renderer.GetRenderMode());
+
+            m_devToolbar.Render(toolbarContext);
+        }
+
         ::ui::ConsoleContext context;
         context.gameplay = &m_gameplay;
         context.window = &m_window;
         context.vsync = &m_vsyncEnabled;
         context.fpsLimit = &m_fpsLimit;
-        context.renderPlayerHud = m_useLegacyImGuiMenus;
+        context.renderPlayerHud = false;
 
         bool showOverlayThisFrame = m_showDebugOverlay && m_appMode == AppMode::InGame;
         context.showDebugOverlay = &showOverlayThisFrame;
+        context.showMovementWindow = &m_showMovementWindow;
+        context.showStatsWindow = &m_showStatsWindow;
 
         context.applyVsync = [this](bool enabled) {
             m_vsyncEnabled = enabled;
@@ -933,7 +1107,13 @@ bool App::Run()
     TransitionNetworkState(NetworkState::Disconnecting, "Application shutdown");
     m_lanDiscovery.Stop();
     m_network.Shutdown();
+    m_lobbyScene.Shutdown();
+    m_perkLoadoutEditor.Shutdown();
+    m_screenEffects.Shutdown();
+    m_generatorProgressBar.Shutdown();
+    m_skillCheckWheel.Shutdown();
     m_console.Shutdown();
+    m_devToolbar.Shutdown();
     m_ui.Shutdown();
     m_audio.Shutdown();
     m_renderer.Shutdown();
@@ -963,21 +1143,22 @@ void App::ResetToMainMenu()
     m_serverGameplayValues = false;
     ApplyGameplaySettings(m_gameplayApplied, false);
 
-    m_gameplay.LoadMap("main");
-    m_gameplay.SetControlledRole("survivor");
-    m_renderer.SetEnvironmentSettings(render::EnvironmentSettings{});
     m_renderer.SetPointLights({});
     m_renderer.SetSpotLights({});
     m_runtimeMapPointLights.clear();
     m_runtimeMapSpotLights.clear();
     m_gameplay.SetMapSpotLightCount(0);
-
     m_sessionRoleName = "survivor";
     m_remoteRoleName = "killer";
     m_sessionMapName = "main";
     m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+    m_sessionSeed = std::random_device{}();
     m_connectedEndpoint.clear();
     InitializePlayerBindings();
+
+    m_gameplay.RegenerateLoops(m_sessionSeed);
+    m_gameplay.SetControlledRole("survivor");
+    m_renderer.SetEnvironmentSettings(render::EnvironmentSettings{});
 
     if (m_lanDiscovery.StartClient(m_lanDiscoveryPort, kProtocolVersion, kBuildId))
     {
@@ -993,6 +1174,7 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
 {
     m_lanDiscovery.Stop();
     m_network.Disconnect();
+
     TransitionNetworkState(NetworkState::Offline, "Solo session");
     m_multiplayerMode = MultiplayerMode::Solo;
     m_appMode = AppMode::InGame;
@@ -1029,6 +1211,7 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     if (normalizedMap == "main")
     {
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+        m_sessionSeed = std::random_device{}();
     }
     else if (normalizedMap == "collision_test")
     {
@@ -1037,6 +1220,12 @@ void App::StartSoloSession(const std::string& mapName, const std::string& roleNa
     else
     {
         m_sessionMapType = game::gameplay::GameplaySystems::MapType::Test;
+    }
+
+    m_gameplay.LoadMap(normalizedMap);
+    if (normalizedMap == "main")
+    {
+        m_gameplay.RegenerateLoops(m_sessionSeed);
     }
 
     ApplyMapEnvironment(normalizedMap);
@@ -1142,6 +1331,8 @@ bool App::StartJoinSession(const std::string& ip, std::uint16_t port, const std:
     m_joinStartSeconds = glfwGetTime();
     m_connectedEndpoint.clear();
     m_menuNetStatus = "Joining " + ip + ":" + std::to_string(port) + " ...";
+    m_connectingLoadingActive = m_showConnectingLoading;
+    m_connectingLoadingStart = glfwGetTime();
     return true;
 }
 
@@ -2333,6 +2524,11 @@ void App::TransitionNetworkState(NetworkState state, const std::string& reason, 
     if (isError)
     {
         m_lastNetworkError = reason;
+    }
+    // Dismiss connecting loading screen on terminal states
+    if (state == NetworkState::Connected || state == NetworkState::Error || state == NetworkState::Offline)
+    {
+        m_connectingLoadingActive = false;
     }
     std::cout << m_statusToastMessage << "\n";
     AppendNetworkLog(m_statusToastMessage);
@@ -4199,7 +4395,7 @@ void App::DrawPlayersDebugUi(double nowSeconds)
 void App::DrawMainMenuUiCustom(bool* shouldQuit)
 {
     const std::vector<std::string> roleItems{"Survivor", "Killer"};
-    const std::vector<std::string> mapItems{"main_map", "collision_test", "test"};
+    const std::vector<std::string> mapItems{"Test", "Collision Test", "Random Generation"};
     const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
     const auto survivorCharacters = m_gameplay.ListSurvivorCharacters();
     const auto killerCharacters = m_gameplay.ListKillerCharacters();
@@ -4259,36 +4455,43 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     }
 
     const float scale = m_ui.Scale();
-    const float panelW = std::min(700.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 20.0F);
-    const float panelH = std::min(900.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 20.0F);
-    const engine::ui::UiRect panel{
-        (static_cast<float>(m_ui.ScreenWidth()) - panelW) * 0.5F,
-        (static_cast<float>(m_ui.ScreenHeight()) - panelH) * 0.5F,
-        panelW,
-        panelH,
+    const float screenW = static_cast<float>(m_ui.ScreenWidth());
+    const float screenH = static_cast<float>(m_ui.ScreenHeight());
+    const float gap = 12.0F * scale;
+    const float marginX = 24.0F * scale;
+    const float marginTop = 60.0F * scale;
+    const float marginBottom = 60.0F * scale;
+
+    // Left panel: Game Menu (centered, fixed width)
+    const float leftPanelW = std::min(420.0F * scale, screenW - marginX * 2.0F - 280.0F * scale - gap);
+    const float leftPanelH = screenH - marginTop - marginBottom;
+    const float leftPanelX = (screenW - leftPanelW - 280.0F * scale - gap) * 0.5F;
+    const engine::ui::UiRect leftPanel{
+        leftPanelX,
+        marginTop,
+        leftPanelW,
+        leftPanelH,
     };
 
-    m_ui.BeginRootPanel("main_menu_custom", panel, true);
-    const float scrollHeight = std::max(200.0F * scale, panel.h - 24.0F * scale);
-    m_ui.BeginScrollRegion("main_menu_scroll_region", scrollHeight, &m_mainMenuScrollY);
-    m_ui.Label("Asymmetric Horror Prototype", 1.2F);
-    m_ui.Label("Press ~ for Console | F6 UI test | F10 Legacy UI toggle", m_ui.Theme().colorTextMuted);
-    if (m_ui.Button("toggle_legacy_ui", std::string("Legacy ImGui menus: ") + (m_useLegacyImGuiMenus ? "ON" : "OFF")))
-    {
-        m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-    }
-    if (m_ui.Button("toggle_ui_test", std::string("UI test panel: ") + (m_showUiTestPanel ? "ON" : "OFF")))
-    {
-        m_showUiTestPanel = !m_showUiTestPanel;
-    }
+    // Right panel: Dev Tools (fixed compact width)
+    const float rightPanelW = 280.0F * scale;
+    const float rightPanelH = leftPanelH;
+    const engine::ui::UiRect rightPanel{
+        leftPanel.x + leftPanelW + gap,
+        marginTop,
+        rightPanelW,
+        rightPanelH,
+    };
 
-    if (m_ui.Button("menu_settings", "Settings"))
-    {
-        m_settingsMenuOpen = true;
-        m_settingsOpenedFromPause = false;
-    }
+    // ==================== LEFT PANEL: Game Menu (DBD Style) ====================
+    m_ui.BeginRootPanel("main_menu_game", leftPanel, true);
+    m_ui.Label("THE GAME", 1.6F);
+    m_ui.Spacer(4.0F * scale);
+    m_ui.Label("Asymmetric Horror Prototype", m_ui.Theme().colorTextMuted);
 
-    m_ui.Label("Session", m_ui.Theme().colorAccent);
+    m_ui.Spacer(24.0F * scale);
+
+    // Session settings
     m_ui.Dropdown("menu_role", "Role", &m_menuRoleIndex, roleItems);
     m_ui.Dropdown("menu_map", "Map", &m_menuMapIndex, mapItems);
     if (!survivorCharacters.empty())
@@ -4331,20 +4534,6 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_ui.Dropdown("killer_power_addon_b", "Killer Addon B", &m_menuKillerAddonBIndex, killerAddonOptions);
     }
 
-    std::string portText = std::to_string(m_menuPort);
-    if (m_ui.InputText("menu_port", "Port", &portText, 6))
-    {
-        try
-        {
-            m_menuPort = std::clamp(std::stoi(portText), 1, 65535);
-        }
-        catch (const std::exception&)
-        {
-            m_menuPort = std::clamp(m_menuPort, 1, 65535);
-        }
-    }
-    m_ui.InputText("menu_join_ip", "Join IP", &m_menuJoinIp, 63);
-
     const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
     const std::string mapName = MapNameFromIndex(m_menuMapIndex);
     auto applyMenuGameplaySelections = [&]() {
@@ -4356,6 +4545,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         {
             m_gameplay.SetSelectedKillerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
         }
+
         const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
                                        ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
                                        : std::string{};
@@ -4395,6 +4585,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
                 }
             }
         }
+
         const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
                                             ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
                                             : std::string{"none"};
@@ -4414,24 +4605,137 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
             resolvedPowerAddonB == "none" ? "" : resolvedPowerAddonB
         );
     };
-    if (m_ui.Button("play_solo", "Play Solo", true, &m_ui.Theme().colorSuccess))
+
+    m_ui.Spacer(12.0F * scale);
+    if (m_ui.Button("play_solo", "PLAY", true, &m_ui.Theme().colorAccent))
     {
         applyMenuGameplaySelections();
         StartSoloSession(mapName, roleName);
     }
+    if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
+    {
+        applyMenuGameplaySelections();
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 1;
+        localPlayer.name = "Player";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = true;
+        localPlayer.isConnected = true;
+        m_lobbyScene.SetPlayers({localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks({m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]});
+        m_lobbyScene.EnterLobby();
+    }
 
     if (!savedMaps.empty())
     {
-        m_ui.Dropdown("saved_maps", "Play Saved Map", &m_menuSavedMapIndex, savedMaps);
-        if (m_ui.Button("play_saved", "Play Map"))
+        m_ui.Spacer(8.0F * scale);
+        m_ui.Dropdown("saved_maps", "Saved Map", &m_menuSavedMapIndex, savedMaps);
+        if (m_ui.Button("play_saved", "PLAY SAVED"))
         {
             applyMenuGameplaySelections();
             StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
         }
     }
 
-    m_ui.Label("Editor", m_ui.Theme().colorAccent);
-    if (m_ui.Button("level_editor", "Level Editor"))
+    m_ui.Spacer(20.0F * scale);
+    m_ui.Label("MULTIPLAYER", m_ui.Theme().colorTextMuted);
+
+    std::string portText = std::to_string(m_menuPort);
+    if (m_ui.InputText("menu_port", "Port", &portText, 6))
+    {
+        try
+        {
+            m_menuPort = std::clamp(std::stoi(portText), 1, 65535);
+        }
+        catch (const std::exception&)
+        {
+            m_menuPort = std::clamp(m_menuPort, 1, 65535);
+        }
+    }
+    m_ui.InputText("menu_join_ip", "Join IP", &m_menuJoinIp, 63);
+
+    m_ui.Spacer(8.0F * scale);
+    if (m_ui.Button("host_btn", "HOST GAME"))
+    {
+        applyMenuGameplaySelections();
+        // Host goes to lobby
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 1;
+        localPlayer.name = "Host";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = true;
+        localPlayer.isConnected = true;
+        
+        // Set available perks based on role
+        const bool isSurvivor = (roleName == "survivor");
+        const auto& perkSystem = m_gameplay.GetPerkSystem();
+        const auto availablePerks = isSurvivor 
+            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
+            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+        std::vector<std::string> perkIds = availablePerks;
+        std::vector<std::string> perkNames;
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        
+        m_lobbyScene.SetPlayers({localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
+            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
+        m_lobbyScene.EnterLobby();
+    }
+    if (m_ui.Button("join_btn", "JOIN GAME"))
+    {
+        applyMenuGameplaySelections();
+        // Join goes to lobby (simulated for now)
+        m_appMode = AppMode::Lobby;
+        game::ui::LobbyPlayer hostPlayer;
+        hostPlayer.netId = 1;
+        hostPlayer.name = "Host";
+        hostPlayer.selectedRole = (roleName == "survivor") ? "killer" : "survivor";
+        hostPlayer.isHost = true;
+        hostPlayer.isConnected = true;
+        
+        game::ui::LobbyPlayer localPlayer;
+        localPlayer.netId = 2;
+        localPlayer.name = "Player";
+        localPlayer.selectedRole = roleName;
+        localPlayer.isHost = false;
+        localPlayer.isConnected = true;
+        
+        // Set available perks based on role
+        const bool isSurvivor = (roleName == "survivor");
+        const auto& perkSystem = m_gameplay.GetPerkSystem();
+        const auto availablePerks = isSurvivor 
+            ? perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor)
+            : perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+        std::vector<std::string> perkIds = availablePerks;
+        std::vector<std::string> perkNames;
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        m_lobbyScene.SetAvailablePerks(perkIds, perkNames);
+        
+        m_lobbyScene.SetPlayers({hostPlayer, localPlayer});
+        m_lobbyScene.SetLocalPlayerRole(roleName);
+        m_lobbyScene.SetLocalPlayerPerks(isSurvivor 
+            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
+            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
+        m_lobbyScene.EnterLobby();
+    }
+
+    m_ui.Spacer(20.0F * scale);
+    m_ui.Label("EDITORS", m_ui.Theme().colorTextMuted);
+    if (m_ui.Button("level_editor", "LEVEL EDITOR"))
     {
         m_lanDiscovery.Stop();
         m_network.Disconnect();
@@ -4444,7 +4748,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_menuNetStatus = "Entered Level Editor";
         TransitionNetworkState(NetworkState::Offline, "Editor mode");
     }
-    if (m_ui.Button("loop_editor", "Loop Editor"))
+    if (m_ui.Button("loop_editor", "LOOP EDITOR"))
     {
         m_lanDiscovery.Stop();
         m_network.Disconnect();
@@ -4458,59 +4762,161 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         TransitionNetworkState(NetworkState::Offline, "Editor mode");
     }
 
-    m_ui.Label("Multiplayer", m_ui.Theme().colorAccent);
-    if (m_ui.Button("host_btn", "Host Multiplayer"))
+    m_ui.Spacer(20.0F * scale);
+    if (m_ui.Button("menu_settings", "SETTINGS"))
     {
-        applyMenuGameplaySelections();
-        StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
-    }
-    if (m_ui.Button("join_btn", "Join Multiplayer"))
-    {
-        applyMenuGameplaySelections();
-        StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
+        m_settingsMenuOpen = true;
+        m_settingsOpenedFromPause = false;
     }
 
-    if (m_ui.Button("refresh_lan", "Refresh LAN"))
+    m_ui.Spacer(20.0F * scale);
+    if (m_ui.Button("quit_game", "EXIT", true, &m_ui.Theme().colorDanger))
+    {
+        *shouldQuit = true;
+    }
+
+    m_ui.EndPanel();
+
+    // ==================== RIGHT PANEL: Dev Tools (Compact) ====================
+    m_ui.BeginRootPanel("main_menu_dev", rightPanel, true);
+    m_ui.Label("DEV", 1.1F);
+
+    m_ui.Spacer(8.0F * scale);
+    if (m_ui.Button("toggle_ui_test", std::string("UI Test: ") + (m_showUiTestPanel ? "ON" : "OFF")))
+    {
+        m_showUiTestPanel = !m_showUiTestPanel;
+    }
+    if (m_ui.Button("toggle_loading_test", std::string("Loading: ") + (m_showLoadingScreenTestPanel ? "ON" : "OFF")))
+    {
+        m_showLoadingScreenTestPanel = !m_showLoadingScreenTestPanel;
+    }
+    m_ui.Checkbox("loading_on_join", "Loading on join", &m_showConnectingLoading);
+
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label("LAN", m_ui.Theme().colorTextMuted, 0.9F);
+    if (m_ui.Button("refresh_lan", "REFRESH"))
     {
         m_lanDiscovery.ForceScan();
     }
+
     const auto& servers = m_lanDiscovery.Servers();
     if (servers.empty())
     {
-        m_ui.Label("No LAN games found.", m_ui.Theme().colorTextMuted);
+        m_ui.Label("No games found", m_ui.Theme().colorTextMuted, 0.85F);
     }
     else
     {
-        for (std::size_t i = 0; i < servers.size(); ++i)
+        for (std::size_t i = 0; i < servers.size() && i < 3; ++i)
         {
             const auto& entry = servers[i];
             const bool canJoin = entry.compatible && entry.players < entry.maxPlayers;
-            std::string line = "[" + entry.hostName + "] " + entry.ip + ":" + std::to_string(entry.port) + " | Map: " + entry.mapName + " | Players: " +
-                               std::to_string(entry.players) + "/" + std::to_string(entry.maxPlayers);
-            m_ui.Label(line, canJoin ? m_ui.Theme().colorText : m_ui.Theme().colorTextMuted);
+            m_ui.Label(entry.hostName, canJoin ? m_ui.Theme().colorText : m_ui.Theme().colorTextMuted, 0.9F);
             m_ui.PushIdScope("lan_" + std::to_string(i));
-            if (m_ui.Button("join_lan", "Join", canJoin))
+            if (m_ui.Button("join_lan", "JOIN", canJoin))
             {
+                applyMenuGameplaySelections();
                 StartJoinSession(entry.ip, entry.port, roleName);
             }
             m_ui.PopIdScope();
         }
+        if (servers.size() > 3)
+        {
+            m_ui.Label("+" + std::to_string(servers.size() - 3) + " more...", m_ui.Theme().colorTextMuted, 0.8F);
+        }
     }
 
-    m_ui.Label("Network State: " + NetworkStateToText(m_networkState), m_ui.Theme().colorTextMuted);
-    if (!m_menuNetStatus.empty())
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label(NetworkStateToText(m_networkState), m_ui.Theme().colorTextMuted, 0.85F);
+
+    m_ui.Spacer(12.0F * scale);
+    
+    // Get available perks based on selected role
+    const auto& perkSystem = m_gameplay.GetPerkSystem();
+    const bool isSurvivor = (m_menuRoleIndex == 0);
+    const auto survivorPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor);
+    const auto killerPerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+    const auto& availablePerks = isSurvivor ? survivorPerks : killerPerks;
+    auto& selectedPerks = isSurvivor ? m_menuSurvivorPerks : m_menuKillerPerks;
+    
+    m_ui.Label(isSurvivor ? "SURVIVOR PERKS" : "KILLER PERKS", m_ui.Theme().colorTextMuted, 0.9F);
+    
+    // Ensure 4 slots
+    if (selectedPerks.size() < 4)
     {
-        m_ui.Label(m_menuNetStatus, m_ui.Theme().colorTextMuted);
+        selectedPerks.resize(4, "");
     }
-    if (!m_lastNetworkError.empty())
+    
+    // Show 4 perk slots (like in-game HUD)
+    for (int slot = 0; slot < 4; ++slot)
     {
-        m_ui.Label("Last Error: " + m_lastNetworkError, m_ui.Theme().colorDanger);
-    }
-    if (m_ui.Button("quit_game", "Quit", true, &m_ui.Theme().colorDanger))
-    {
-        *shouldQuit = true;
+        const std::string slotLabel = "Slot " + std::to_string(slot + 1);
+        
+        // Build perk names list with "None" as first option
+        std::vector<std::string> perkNames{"None"};
+        for (const auto& id : availablePerks)
+        {
+            const auto* perk = perkSystem.GetPerk(id);
+            perkNames.push_back(perk ? perk->name : id);
+        }
+        
+        // Map selected index
+        int selectedIndex = 0;
+        if (slot < static_cast<int>(selectedPerks.size()) && !selectedPerks[slot].empty())
+        {
+            const auto& perkId = selectedPerks[slot];
+            const auto* perk = perkSystem.GetPerk(perkId);
+            const std::string perkName = perk ? perk->name : perkId;
+            for (std::size_t i = 0; i < availablePerks.size(); ++i)
+            {
+                const auto* p = perkSystem.GetPerk(availablePerks[i]);
+                if ((p && p->name == perkName) || availablePerks[i] == perkId)
+                {
+                    selectedIndex = static_cast<int>(i + 1); // +1 for "None"
+                    break;
+                }
+            }
+        }
+        
+        m_ui.PushIdScope("perk_slot_" + std::to_string(slot));
+        if (m_ui.Dropdown("perk", slotLabel.c_str(), &selectedIndex, perkNames))
+        {
+            if (selectedIndex == 0)
+            {
+                // "None" selected
+                selectedPerks[slot] = "";
+            }
+            else if (selectedIndex > 0 && static_cast<std::size_t>(selectedIndex - 1) < availablePerks.size())
+            {
+                // Perk selected
+                const std::string perkId = availablePerks[static_cast<std::size_t>(selectedIndex - 1)];
+                selectedPerks[slot] = perkId;
+            }
+            
+            // Update loadout in PerkSystem (based on role)
+            game::gameplay::perks::PerkLoadout loadout;
+            for (std::size_t i = 0; i < selectedPerks.size() && i < 4; ++i)
+            {
+                if (!selectedPerks[i].empty())
+                {
+                    loadout.SetPerk(static_cast<int>(i), selectedPerks[i]);
+                }
+            }
+            if (isSurvivor)
+            {
+                m_gameplay.SetSurvivorPerkLoadout(loadout);
+            }
+            else
+            {
+                m_gameplay.SetKillerPerkLoadout(loadout);
+            }
+        }
+        m_ui.PopIdScope();
     }
     m_ui.EndScrollRegion();
+
+    m_ui.Spacer(10.0F * scale);
+    m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
+    m_ui.Label("F7 Load", m_ui.Theme().colorTextMuted, 0.8F);
     m_ui.EndPanel();
 }
 
@@ -5073,7 +5479,12 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         );
     }
     m_ui.EndPanel();
+    const bool showOverlay = m_showDebugOverlay;
+    const bool showMovement = m_showMovementWindow && showOverlay;
+    const bool showStats = m_showStatsWindow && showOverlay;
+    const bool showControls = m_showControlsWindow && showOverlay;
 
+    // Perk debug panel
     if (hudState.debugDrawEnabled)
     {
         const engine::ui::UiRect perkPanel{
@@ -5132,28 +5543,259 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.EndPanel();
     }
 
-    const engine::ui::UiRect topRight{
-        static_cast<float>(m_ui.ScreenWidth()) - (360.0F * scale) - m_hudLayout.topRightOffset.x * scale,
-        m_hudLayout.topRightOffset.y * scale,
-        360.0F * scale,
-        250.0F * scale,
+    // Draggable/resizable HUD panels (from Ui-overhaul branch)
+    const float screenW = static_cast<float>(m_ui.ScreenWidth());
+    const float screenH = static_cast<float>(m_ui.ScreenHeight());
+    const float windowW = static_cast<float>(std::max(1, m_window.WindowWidth()));
+    const float windowH = static_cast<float>(std::max(1, m_window.WindowHeight()));
+    const glm::vec2 mouseUi = m_input.MousePosition() * glm::vec2{screenW / windowW, screenH / windowH};
+
+    const float leftX = m_hudLayout.topLeftOffset.x * scale;
+    const float leftY = m_hudLayout.topLeftOffset.y * scale;
+    const float defaultLeftWidth = 420.0F * scale;
+    const float defaultMovementHeight = 310.0F * scale;
+    const float defaultStatsHeight = 260.0F * scale;
+    const float panelSpacing = 10.0F * scale;
+    const float safeTop = std::max(36.0F * scale, (m_ui.Theme().baseFontSize + 12.0F) * scale);
+
+    const float minPanelW = 200.0F * scale;
+    const float minPanelH = 100.0F * scale;
+    const float maxPanelW = screenW * 0.8F;
+    const float maxPanelH = screenH * 0.8F;
+
+    // Initialize default sizes on first use
+    if (m_hudMovementSize.x < 0.0F) m_hudMovementSize = glm::vec2{defaultLeftWidth, defaultMovementHeight};
+    if (m_hudStatsSize.x < 0.0F) m_hudStatsSize = glm::vec2{defaultLeftWidth, defaultStatsHeight};
+    if (m_hudControlsSize.x < 0.0F) m_hudControlsSize = glm::vec2{360.0F * scale, 200.0F * scale};
+
+    if (m_hudMovementPos.x < 0.0F || m_hudMovementPos.y < 0.0F)
+    {
+        m_hudMovementPos = glm::vec2{leftX, leftY};
+    }
+    if (m_hudStatsPos.x < 0.0F || m_hudStatsPos.y < 0.0F)
+    {
+        m_hudStatsPos = glm::vec2{leftX, leftY + m_hudMovementSize.y + panelSpacing};
+    }
+    if (m_hudControlsPos.x < 0.0F || m_hudControlsPos.y < 0.0F)
+    {
+        m_hudControlsPos = glm::vec2{
+            screenW - m_hudControlsSize.x - m_hudLayout.topRightOffset.x * scale,
+            m_hudLayout.topRightOffset.y * scale,
+        };
+    }
+
+    auto clampPanel = [&](glm::vec2& pos, const glm::vec2& size) {
+        const float maxX = std::max(0.0F, screenW - size.x);
+        const float maxY = std::max(safeTop, screenH - size.y);
+        pos.x = std::clamp(pos.x, 0.0F, maxX);
+        pos.y = std::clamp(pos.y, safeTop, maxY);
     };
-    m_ui.BeginPanel("hud_controls_custom", topRight, true);
-    m_ui.Label("Controls", 1.03F);
-    m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
-    m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
-    m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
-    if (hudState.roleName == "Survivor")
+
+    const float headerHeight = std::max(24.0F * scale, m_ui.Theme().baseFontSize * scale + 10.0F * scale);
+    const float resizeGripSize = 14.0F * scale;
+
+    // Draw a visible drag header bar at the top of each panel
+    auto drawDragHeader = [&](const glm::vec2& pos, const glm::vec2& size, const std::string& title) {
+        const engine::ui::UiRect headerRect{pos.x, pos.y, size.x, headerHeight};
+        const glm::vec4 headerBg{0.22F, 0.24F, 0.30F, 0.85F};
+        const glm::vec4 headerBorder{0.35F, 0.38F, 0.45F, 0.9F};
+        m_ui.DrawRect(headerRect, headerBg);
+        m_ui.DrawRectOutline(headerRect, 1.0F, headerBorder);
+        const float textX = pos.x + 8.0F * scale;
+        const float textY = pos.y + 3.0F * scale;
+        m_ui.DrawTextLabel(textX, textY, title, glm::vec4{0.7F, 0.75F, 0.82F, 1.0F}, 0.85F);
+        // Draw grip dots to hint at draggability
+        const float dotY = pos.y + headerHeight * 0.5F;
+        const float dotStartX = pos.x + size.x - 28.0F * scale;
+        const glm::vec4 dotColor{0.5F, 0.52F, 0.58F, 0.7F};
+        for (int i = 0; i < 3; ++i)
+        {
+            const float dx = dotStartX + static_cast<float>(i) * 6.0F * scale;
+            m_ui.DrawRect(engine::ui::UiRect{dx, dotY - 1.0F * scale, 3.0F * scale, 3.0F * scale}, dotColor);
+        }
+    };
+
+    // Draw resize grip at bottom-right corner
+    auto drawResizeGrip = [&](const glm::vec2& pos, const glm::vec2& size) {
+        const float gx = pos.x + size.x - resizeGripSize;
+        const float gy = pos.y + size.y - resizeGripSize;
+        const glm::vec4 gripColor{0.45F, 0.48F, 0.55F, 0.6F};
+        // Draw two diagonal lines as resize hint
+        for (int i = 0; i < 3; ++i)
+        {
+            const float off = static_cast<float>(i) * 4.0F * scale;
+            m_ui.DrawRect(engine::ui::UiRect{gx + resizeGripSize - 3.0F * scale - off, gy + resizeGripSize - 1.0F * scale, 3.0F * scale, 1.0F * scale}, gripColor);
+            m_ui.DrawRect(engine::ui::UiRect{gx + resizeGripSize - 1.0F * scale, gy + resizeGripSize - 3.0F * scale - off, 1.0F * scale, 3.0F * scale}, gripColor);
+        }
+    };
+
+    auto handleDrag = [&](HudDragTarget target, glm::vec2& pos, const glm::vec2& size) {
+        const engine::ui::UiRect header{pos.x, pos.y, size.x, headerHeight};
+        const bool hovering = header.Contains(mouseUi.x, mouseUi.y);
+
+        if (m_hudDragTarget == HudDragTarget::None && !m_hudResizing && hovering && m_input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            m_hudDragTarget = target;
+            m_hudDragOffset = mouseUi - pos;
+        }
+
+        if (m_hudDragTarget == target)
+        {
+            if (m_input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
+            {
+                pos = mouseUi - m_hudDragOffset;
+            }
+            else
+            {
+                m_hudDragTarget = HudDragTarget::None;
+            }
+        }
+
+        clampPanel(pos, size);
+    };
+
+    auto handleResize = [&](HudDragTarget target, const glm::vec2& pos, glm::vec2& size) {
+        const engine::ui::UiRect grip{pos.x + size.x - resizeGripSize, pos.y + size.y - resizeGripSize, resizeGripSize, resizeGripSize};
+        const bool hoveringGrip = grip.Contains(mouseUi.x, mouseUi.y);
+
+        if (!m_hudResizing && m_hudDragTarget == HudDragTarget::None && hoveringGrip && m_input.IsMousePressed(GLFW_MOUSE_BUTTON_LEFT))
+        {
+            m_hudResizing = true;
+            m_hudResizeTarget = target;
+        }
+
+        if (m_hudResizing && m_hudResizeTarget == target)
+        {
+            if (m_input.IsMouseDown(GLFW_MOUSE_BUTTON_LEFT))
+            {
+                size.x = std::clamp(mouseUi.x - pos.x, minPanelW, maxPanelW);
+                size.y = std::clamp(mouseUi.y - pos.y, minPanelH, maxPanelH);
+            }
+            else
+            {
+                m_hudResizing = false;
+                m_hudResizeTarget = HudDragTarget::None;
+            }
+        }
+    };
+
+    if (showMovement)
     {
-        m_ui.Label("RMB: Use Item | R: Drop Item | LMB: Pickup Item | E: Swap Item", m_ui.Theme().colorTextMuted);
+        handleDrag(HudDragTarget::Movement, m_hudMovementPos, m_hudMovementSize);
+        handleResize(HudDragTarget::Movement, m_hudMovementPos, m_hudMovementSize);
+        drawDragHeader(m_hudMovementPos, m_hudMovementSize, "Movement");
+        const engine::ui::UiRect movementRect{
+            m_hudMovementPos.x,
+            m_hudMovementPos.y + headerHeight,
+            m_hudMovementSize.x,
+            m_hudMovementSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_movement_custom", movementRect, true);
+        m_ui.Label("Role: " + hudState.roleName, 1.05F);
+        m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
+        m_ui.Label("Camera: " + hudState.cameraModeName + " | Render: " + hudState.renderModeName, m_ui.Theme().colorTextMuted);
+        m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+        m_ui.Label("Attack: " + hudState.killerAttackStateName, m_ui.Theme().colorTextMuted);
+        if (hudState.roleName == "Killer")
+        {
+            m_ui.Label(hudState.attackHint, m_ui.Theme().colorTextMuted);
+        }
+        if (hudState.roleName == "Killer" && hudState.lungeCharge01 > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_lunge_progress_custom",
+                hudState.lungeCharge01,
+                std::to_string(static_cast<int>(hudState.lungeCharge01 * 100.0F)) + "%"
+            );
+        }
+        if (hudState.selfHealing)
+        {
+            m_ui.ProgressBar(
+                "hud_selfheal_progress_custom",
+                hudState.selfHealProgress,
+                std::to_string(static_cast<int>(hudState.selfHealProgress * 100.0F)) + "%"
+            );
+        }
+        if (hudState.roleName == "Survivor" && hudState.survivorStateName == "Carried")
+        {
+            m_ui.Label("Wiggle: Alternate A/D to escape", m_ui.Theme().colorTextMuted);
+            m_ui.ProgressBar(
+                "hud_carry_escape_custom",
+                hudState.carryEscapeProgress,
+                std::to_string(static_cast<int>(hudState.carryEscapeProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.Label(
+            "Terror Radius: " + std::string(hudState.terrorRadiusVisible ? "ON " : "OFF ") + std::to_string(hudState.terrorRadiusMeters) + "m",
+            m_ui.Theme().colorTextMuted
+        );
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudMovementPos, m_hudMovementSize);
     }
-    if (hudState.roleName == "Killer")
+
+    if (showStats)
     {
-        m_ui.Label("LMB click: Short | Hold LMB: Lunge", m_ui.Theme().colorTextMuted);
-        m_ui.Label("RMB: Power | E: Secondary Power Action", m_ui.Theme().colorTextMuted);
+        handleDrag(HudDragTarget::Stats, m_hudStatsPos, m_hudStatsSize);
+        handleResize(HudDragTarget::Stats, m_hudStatsPos, m_hudStatsSize);
+        drawDragHeader(m_hudStatsPos, m_hudStatsSize, "Stats");
+        const engine::ui::UiRect statsRect{
+            m_hudStatsPos.x,
+            m_hudStatsPos.y + headerHeight,
+            m_hudStatsSize.x,
+            m_hudStatsSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_stats_custom", statsRect, true);
+        m_ui.Label("Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal), m_ui.Theme().colorAccent);
+        if (hudState.repairingGenerator)
+        {
+            m_ui.ProgressBar(
+                "hud_gen_progress_custom",
+                hudState.activeGeneratorProgress,
+                std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Grounded: " + std::string(hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
+        m_ui.Label("Distance: " + std::to_string(hudState.chaseDistance), m_ui.Theme().colorTextMuted);
+        m_ui.Label("LOS: " + std::string(hudState.lineOfSight ? "true" : "false"), m_ui.Theme().colorTextMuted);
+        m_ui.Label("Hook Stage: " + std::to_string(hudState.hookStage), m_ui.Theme().colorTextMuted);
+        if (hudState.hookStageProgress > 0.0F)
+        {
+            m_ui.ProgressBar(
+                "hud_hook_progress_custom",
+                hudState.hookStageProgress,
+                std::to_string(static_cast<int>(hudState.hookStageProgress * 100.0F)) + "%"
+            );
+        }
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudStatsPos, m_hudStatsSize);
     }
-    m_ui.Label("~ Console | F1/F2 Debug | F3 Render", m_ui.Theme().colorTextMuted);
-    m_ui.EndPanel();
+
+    if (showControls)
+    {
+        handleDrag(HudDragTarget::Controls, m_hudControlsPos, m_hudControlsSize);
+        handleResize(HudDragTarget::Controls, m_hudControlsPos, m_hudControlsSize);
+        drawDragHeader(m_hudControlsPos, m_hudControlsSize, "Controls");
+        const engine::ui::UiRect topRight{
+            m_hudControlsPos.x,
+            m_hudControlsPos.y + headerHeight,
+            m_hudControlsSize.x,
+            m_hudControlsSize.y - headerHeight,
+        };
+        m_ui.BeginPanel("hud_controls_custom", topRight, true);
+        m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
+        m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
+        m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
+        if (hudState.roleName == "Killer")
+        {
+            m_ui.Label("LMB click: Short | Hold LMB: Lunge", m_ui.Theme().colorTextMuted);
+        }
+        m_ui.Label("~ Console | F1/F2 Debug | F3 Render", m_ui.Theme().colorTextMuted);
+        m_ui.Label("ALT: Release cursor for UI", m_ui.Theme().colorTextMuted);
+        m_ui.EndPanel();
+        drawResizeGrip(m_hudControlsPos, m_hudControlsSize);
+    }
 
     if (isActionablePrompt(hudState.interactionPrompt))
     {
@@ -5467,11 +6109,12 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
 void App::DrawUiTestPanel()
 {
     const float scale = m_ui.Scale();
+    const float topY = 48.0F * scale; // clear the developer toolbar
     const engine::ui::UiRect panel{
         18.0F * scale,
-        18.0F * scale,
+        topY,
         std::min(440.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 36.0F * scale),
-        std::min(760.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 36.0F * scale),
+        std::min(760.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - topY - 18.0F * scale),
     };
     m_ui.BeginPanel("ui_test_panel", panel, true);
     m_ui.Label("UI Test Panel", 1.1F);
@@ -5549,698 +6192,153 @@ void App::DrawUiTestPanel()
     m_ui.EndPanel();
 }
 
-void App::DrawMainMenuUi(bool* shouldQuit)
+void App::DrawLoadingScreenTestPanel()
 {
-#if BUILD_WITH_IMGUI
-    constexpr const char* kRoleItems[] = {"Survivor", "Killer"};
-    constexpr const char* kMapItems[] = {"main_map", "collision_test", "test"};
-    const std::vector<std::string> savedMaps = game::editor::LevelAssetIO::ListMapNames();
-    if (m_menuSavedMapIndex >= static_cast<int>(savedMaps.size()))
+    const float scale = m_ui.Scale();
+    const float topY = 48.0F * scale; // clear the developer toolbar
+    const engine::ui::UiRect panel{
+        18.0F * scale,
+        topY,
+        std::min(440.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 36.0F * scale),
+        std::min(680.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - topY - 18.0F * scale),
+    };
+    m_ui.BeginPanel("loading_screen_test_panel", panel, true);
+    m_ui.Label("Loading Screen Test Panel", 1.1F);
+    m_ui.Label("Test loading screen UI and progress animations.", m_ui.Theme().colorTextMuted);
+
+    m_ui.SliderFloat("loading_speed", "Loading Speed", &m_loadingTestSpeed, 0.1F, 2.0F, "%.2f");
+    m_ui.SliderInt("loading_steps", "Loading Steps", &m_loadingTestSteps, 1, 10);
+
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+    if (m_ui.Button("loading_start", "Start Loading"))
     {
-        m_menuSavedMapIndex = savedMaps.empty() ? -1 : 0;
+        m_loadingTestProgress = 0.0F;
+        m_loadingTestAutoAdvance = true;
+        m_loadingTestCurrentStep = 0;
+        m_statusToastMessage = "Loading started";
+        m_statusToastUntilSeconds = glfwGetTime() + 1.0;
     }
-    if (m_menuSavedMapIndex < 0 && !savedMaps.empty())
+    if (m_ui.Button("loading_pause", m_loadingTestAutoAdvance ? "Pause" : "Resume"))
     {
-        m_menuSavedMapIndex = 0;
+        m_loadingTestAutoAdvance = !m_loadingTestAutoAdvance;
     }
-
-    ImGui::SetNextWindowSize(ImVec2(620.0F, 720.0F), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5F, 0.5F));
-
-    if (ImGui::Begin("Main Menu", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
+    if (m_ui.Button("loading_reset", "Reset"))
     {
-        ImGui::TextUnformatted("Asymmetric Horror Prototype");
-        if (ImGui::Button(m_useLegacyImGuiMenus ? "Use Custom UI Menus (F10)" : "Use Legacy ImGui Menus (F10)", ImVec2(-1.0F, 0.0F)))
-        {
-            m_useLegacyImGuiMenus = !m_useLegacyImGuiMenus;
-        }
-        if (ImGui::Button(m_showUiTestPanel ? "Hide UI Test Panel (F6)" : "Show UI Test Panel (F6)", ImVec2(-1.0F, 0.0F)))
-        {
-            m_showUiTestPanel = !m_showUiTestPanel;
-        }
-        if (ImGui::Button("Settings", ImVec2(-1.0F, 0.0F)))
-        {
-            m_settingsMenuOpen = true;
-            m_settingsOpenedFromPause = false;
-        }
-        ImGui::Separator();
-
-        ImGui::Combo("Role", &m_menuRoleIndex, kRoleItems, IM_ARRAYSIZE(kRoleItems));
-        ImGui::Combo("Map", &m_menuMapIndex, kMapItems, IM_ARRAYSIZE(kMapItems));
-
-        m_menuPort = std::clamp(m_menuPort, 1, 65535);
-        ImGui::InputInt("Port", &m_menuPort);
-
-        char ipBuffer[64]{};
-        std::snprintf(ipBuffer, sizeof(ipBuffer), "%s", m_menuJoinIp.c_str());
-        if (ImGui::InputText("Join IP", ipBuffer, sizeof(ipBuffer)))
-        {
-            m_menuJoinIp = ipBuffer;
-        }
-
-        const std::string roleName = RoleNameFromIndex(m_menuRoleIndex);
-        const std::string mapName = MapNameFromIndex(m_menuMapIndex);
-
-        if (ImGui::Button("Play Solo", ImVec2(-1.0F, 0.0F)))
-        {
-            StartSoloSession(mapName, roleName);
-        }
-
-        if (!savedMaps.empty())
-        {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Play Saved Map");
-            if (ImGui::BeginListBox("##saved_maps", ImVec2(-1.0F, 110.0F)))
-            {
-                for (int i = 0; i < static_cast<int>(savedMaps.size()); ++i)
-                {
-                    const bool selected = m_menuSavedMapIndex == i;
-                    if (ImGui::Selectable(savedMaps[static_cast<std::size_t>(i)].c_str(), selected))
-                    {
-                        m_menuSavedMapIndex = i;
-                    }
-                }
-                ImGui::EndListBox();
-            }
-            if (ImGui::Button("Play Map", ImVec2(-1.0F, 0.0F)))
-            {
-                if (m_menuSavedMapIndex >= 0 && m_menuSavedMapIndex < static_cast<int>(savedMaps.size()))
-                {
-                    StartSoloSession(savedMaps[static_cast<std::size_t>(m_menuSavedMapIndex)], roleName);
-                }
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Editor");
-        if (ImGui::Button("Level Editor", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.Stop();
-            m_network.Disconnect();
-            m_gameplay.SetNetworkAuthorityMode(false);
-            m_gameplay.ClearRemoteRoleCommands();
-            m_multiplayerMode = MultiplayerMode::Solo;
-            m_pauseMenuOpen = false;
-            m_appMode = AppMode::Editor;
-            m_levelEditor.Enter(game::editor::LevelEditor::Mode::MapEditor);
-            m_menuNetStatus = "Entered Level Editor";
-            TransitionNetworkState(NetworkState::Offline, "Editor mode");
-        }
-        if (ImGui::Button("Loop Editor", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.Stop();
-            m_network.Disconnect();
-            m_gameplay.SetNetworkAuthorityMode(false);
-            m_gameplay.ClearRemoteRoleCommands();
-            m_multiplayerMode = MultiplayerMode::Solo;
-            m_pauseMenuOpen = false;
-            m_appMode = AppMode::Editor;
-            m_levelEditor.Enter(game::editor::LevelEditor::Mode::LoopEditor);
-            m_menuNetStatus = "Entered Loop Editor";
-            TransitionNetworkState(NetworkState::Offline, "Editor mode");
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Multiplayer");
-        if (ImGui::Button("Host Multiplayer", ImVec2(-1.0F, 0.0F)))
-        {
-            StartHostSession(mapName, roleName, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)));
-        }
-
-        if (ImGui::Button("Join Multiplayer", ImVec2(-1.0F, 0.0F)))
-        {
-            StartJoinSession(m_menuJoinIp, static_cast<std::uint16_t>(std::clamp(m_menuPort, 1, 65535)), roleName);
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("LAN Games (Local Network Only)");
-        if (ImGui::Button("Refresh LAN", ImVec2(-1.0F, 0.0F)))
-        {
-            m_lanDiscovery.ForceScan();
-        }
-
-        const auto& servers = m_lanDiscovery.Servers();
-        if (servers.empty())
-        {
-            ImGui::TextWrapped("No LAN games found. Make sure host is running and on same network.");
-        }
-        else
-        {
-            for (std::size_t i = 0; i < servers.size(); ++i)
-            {
-                const auto& entry = servers[i];
-                const bool full = entry.players >= entry.maxPlayers;
-                const bool canJoin = entry.compatible && !full;
-
-                ImGui::PushID(static_cast<int>(i));
-                ImGui::Text("[%s] %s:%u | Map: %s | Players: %d/%d",
-                            entry.hostName.c_str(),
-                            entry.ip.c_str(),
-                            entry.port,
-                            entry.mapName.c_str(),
-                            entry.players,
-                            entry.maxPlayers);
-                if (!entry.compatible)
-                {
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted("(Incompatible Version)");
-                }
-                else if (full)
-                {
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted("(Full)");
-                }
-
-                if (!canJoin)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Join", ImVec2(100.0F, 0.0F)))
-                {
-                    StartJoinSession(entry.ip, entry.port, roleName);
-                }
-                if (!canJoin)
-                {
-                    ImGui::EndDisabled();
-                }
-                ImGui::PopID();
-            }
-        }
-
-        if (ImGui::Button("Quit", ImVec2(-1.0F, 0.0F)))
-        {
-            *shouldQuit = true;
-        }
-
-        if (!m_menuNetStatus.empty())
-        {
-            ImGui::Separator();
-            ImGui::TextWrapped("%s", m_menuNetStatus.c_str());
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Network State: %s", NetworkStateToText(m_networkState).c_str());
-        if (m_networkState == NetworkState::ClientConnecting || m_networkState == NetworkState::ClientHandshaking)
-        {
-            const double elapsed = std::max(0.0, glfwGetTime() - m_joinStartSeconds);
-            ImGui::Text("Connecting to %s:%u (%.1fs)", m_joinTargetIp.c_str(), m_joinTargetPort, elapsed);
-        }
-        if (!m_lastNetworkError.empty())
-        {
-            ImGui::TextWrapped("Last Error: %s", m_lastNetworkError.c_str());
-        }
-        ImGui::TextUnformatted("Press F4 for network diagnostics");
+        m_loadingTestProgress = 0.0F;
+        m_loadingTestAutoAdvance = false;
+        m_loadingTestCurrentStep = 0;
+        m_statusToastMessage = "Loading reset";
+        m_statusToastUntilSeconds = glfwGetTime() + 1.0;
     }
-    ImGui::End();
-#else
-    (void)shouldQuit;
-#endif
+    m_ui.PopLayout();
+
+    m_ui.Label("Loading Progress:", m_ui.Theme().colorAccent);
+    m_ui.ProgressBar("loading_progress_bar", m_loadingTestProgress, std::to_string(static_cast<int>(m_loadingTestProgress * 100.0F)) + "%");
+
+    m_ui.SliderFloat("loading_manual", "Manual Progress", &m_loadingTestProgress, 0.0F, 1.0F, "%.2f");
+
+    m_ui.Label("Current Step: " + std::to_string(m_loadingTestCurrentStep + 1) + " / " + std::to_string(m_loadingTestSteps), m_ui.Theme().colorTextMuted);
+
+    m_ui.Checkbox("loading_show_full", "Enable Full Screen Mode", &m_loadingTestShowFull);
+
+    m_ui.Spacer(8.0F);
+
+    if (m_ui.Button("loading_toggle_full", m_loadingTestShowFull ? "Show Full Screen" : "Show Full Screen (disabled)"))
+    {
+        if (m_loadingTestShowFull && m_appMode != AppMode::Loading)
+        {
+            m_appMode = AppMode::Loading;
+        }
+        else if (m_appMode == AppMode::Loading)
+        {
+            m_appMode = AppMode::MainMenu;
+        }
+    }
+
+    // Update progress even when in full screen mode
+    if (m_loadingTestAutoAdvance && m_loadingTestProgress < 1.0F)
+    {
+        m_loadingTestProgress += m_loadingTestSpeed * static_cast<float>(m_time.DeltaSeconds());
+        m_loadingTestProgress = std::min(1.0F, m_loadingTestProgress);
+        const int newStep = static_cast<int>(m_loadingTestProgress * m_loadingTestSteps);
+        if (newStep != m_loadingTestCurrentStep)
+        {
+            m_loadingTestCurrentStep = newStep;
+            m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
+        }
+    }
+
+    m_ui.Checkbox("loading_show_tips", "Show Tips", &m_loadingTestShowTips);
+    if (m_loadingTestShowTips)
+    {
+        m_ui.Label("Tip:", m_ui.Theme().colorAccent);
+        const std::string& tip = m_loadingTestTips[static_cast<std::size_t>(m_loadingTestSelectedTip) % m_loadingTestTips.size()];
+        m_ui.Label(tip, 0.9F);
+    }
+
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+    if (m_ui.Button("tip_prev", "Previous Tip"))
+    {
+        m_loadingTestSelectedTip = (m_loadingTestSelectedTip - 1 + static_cast<int>(m_loadingTestTips.size())) % static_cast<int>(m_loadingTestTips.size());
+    }
+    if (m_ui.Button("tip_next", "Next Tip"))
+    {
+        m_loadingTestSelectedTip = (m_loadingTestSelectedTip + 1) % static_cast<int>(m_loadingTestTips.size());
+    }
+    m_ui.PopLayout();
+
+    m_ui.EndPanel();
 }
 
-void App::DrawPauseMenuUi(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit)
+void App::DrawFullLoadingScreen(float progress01, const std::string& tip, const std::string& stepText)
 {
-#if BUILD_WITH_IMGUI
-    ImGui::SetNextWindowSize(ImVec2(360.0F, 240.0F), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5F, 0.5F));
+    const float scale = m_ui.Scale();
+    const int w = m_ui.ScreenWidth();
+    const int h = m_ui.ScreenHeight();
 
-    if (ImGui::Begin("Pause Menu", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
+    const engine::ui::UiRect fullScreen{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h)};
+    m_ui.BeginRootPanel("loading_screen_full", fullScreen, true);
+
+    // Use horizontal layout to center content horizontally
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 0.0F, 0.0F);
+
+    // Left spacer to center horizontally
+    m_ui.Spacer((w - 550.0F * scale) * 0.5F);
+
+    // Nested vertical layout for the content
+    m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Vertical, 0.0F, 0.0F);
+
+    // Top spacer to center vertically
+    m_ui.Spacer(h * 0.35F);
+
+    m_ui.Label("LOADING", m_ui.Theme().colorAccent, 1.8F);
+
+    m_ui.Spacer(30.0F * scale);
+
+    const float progressBarWidth = 500.0F * scale;
+
+    m_ui.ProgressBar("loading_full_progress", progress01, std::to_string(static_cast<int>(progress01 * 100.0F)) + "%", progressBarWidth);
+
+    m_ui.Spacer(40.0F * scale);
+
+    if (!tip.empty())
     {
-        if (ImGui::Button("Resume", ImVec2(-1.0F, 0.0F)))
-        {
-            *closePauseMenu = true;
-        }
-
-        if (ImGui::Button("Return to Main Menu", ImVec2(-1.0F, 0.0F)))
-        {
-            *backToMenu = true;
-        }
-
-        if (ImGui::Button("Settings", ImVec2(-1.0F, 0.0F)))
-        {
-            m_settingsMenuOpen = true;
-            m_settingsOpenedFromPause = true;
-        }
-
-        if (ImGui::Button("Quit", ImVec2(-1.0F, 0.0F)))
-        {
-            *shouldQuit = true;
-        }
-    }
-    ImGui::End();
-#else
-    (void)closePauseMenu;
-    (void)backToMenu;
-    (void)shouldQuit;
-#endif
-}
-
-void App::DrawSettingsUi(bool* closeSettings)
-{
-#if BUILD_WITH_IMGUI
-    if (m_rebindWaiting)
-    {
-        if (m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
-        {
-            m_rebindWaiting = false;
-            m_controlsStatus = "Rebind cancelled.";
-        }
-        else if (const std::optional<int> captured = CapturePressedBindCode(); captured.has_value())
-        {
-            const auto conflict = m_actionBindings.FindConflict(*captured, m_rebindAction, m_rebindSlot);
-            if (conflict.has_value())
-            {
-                m_rebindConflictAction = conflict->first;
-                m_rebindConflictSlot = conflict->second;
-                m_rebindCapturedCode = *captured;
-                m_rebindConflictPopup = true;
-            }
-            else
-            {
-                m_actionBindings.SetCode(m_rebindAction, m_rebindSlot, *captured);
-                m_rebindWaiting = false;
-                m_controlsStatus =
-                    std::string{"Bound "} + platform::ActionBindings::ActionLabel(m_rebindAction) + " to " +
-                    platform::ActionBindings::CodeToLabel(*captured);
-                (void)SaveControlsConfig();
-            }
-        }
+        m_ui.Label("Tip:", m_ui.Theme().colorTextMuted, 0.9F);
+        m_ui.Label(tip, 0.85F);
     }
 
-    ImGui::SetNextWindowSize(ImVec2(920.0F, 680.0F), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
-    if (ImGui::Begin("Settings", closeSettings, ImGuiWindowFlags_NoCollapse))
+    m_ui.Spacer(h * 0.25F);
+
+    if (!stepText.empty())
     {
-        ImGui::TextUnformatted("Persistent settings (config/*.json)");
-        if (m_multiplayerMode == MultiplayerMode::Client)
-        {
-            ImGui::SameLine();
-            ImGui::TextUnformatted("| Server Values active");
-        }
-        ImGui::Separator();
-
-        if (ImGui::BeginTabBar("settings_tabs"))
-        {
-            if (ImGui::BeginTabItem("Controls"))
-            {
-                ImGui::TextWrapped("Action bindings with primary/secondary slots. Click Rebind and press a key or mouse button.");
-                if (m_rebindWaiting)
-                {
-                    ImGui::Text("Waiting input for: %s (%s)",
-                                platform::ActionBindings::ActionLabel(m_rebindAction),
-                                m_rebindSlot == 0 ? "Primary" : "Secondary");
-                    ImGui::TextUnformatted("Press ESC to cancel.");
-                }
-
-                ImGui::Separator();
-                ImGui::BeginChild("controls_bindings", ImVec2(0.0F, 350.0F), true);
-                for (platform::InputAction action : platform::ActionBindings::AllActions())
-                {
-                    const platform::ActionBinding binding = m_actionBindings.Get(action);
-                    ImGui::PushID(static_cast<int>(action));
-                    ImGui::TextUnformatted(platform::ActionBindings::ActionLabel(action));
-                    ImGui::SameLine(240.0F);
-
-                    const bool rebindable = platform::ActionBindings::IsRebindable(action);
-                    if (!rebindable)
-                    {
-                        ImGui::Text("%s", platform::ActionBindings::CodeToLabel(binding.primary).c_str());
-                    }
-                    else
-                    {
-                        if (ImGui::Button((platform::ActionBindings::CodeToLabel(binding.primary) + "##p").c_str(), ImVec2(120.0F, 0.0F)))
-                        {
-                            m_rebindWaiting = true;
-                            m_rebindAction = action;
-                            m_rebindSlot = 0;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button((platform::ActionBindings::CodeToLabel(binding.secondary) + "##s").c_str(), ImVec2(120.0F, 0.0F)))
-                        {
-                            m_rebindWaiting = true;
-                            m_rebindAction = action;
-                            m_rebindSlot = 1;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("Unbind"))
-                        {
-                            m_actionBindings.SetCode(action, 0, platform::ActionBindings::kUnbound);
-                            m_actionBindings.SetCode(action, 1, platform::ActionBindings::kUnbound);
-                            (void)SaveControlsConfig();
-                        }
-                    }
-                    ImGui::PopID();
-                }
-                ImGui::EndChild();
-
-                if (m_rebindConflictPopup)
-                {
-                    ImGui::OpenPopup("Rebind Conflict");
-                    m_rebindConflictPopup = false;
-                }
-                if (ImGui::BeginPopupModal("Rebind Conflict", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-                {
-                    ImGui::Text("Key already used by %s (%s).",
-                                platform::ActionBindings::ActionLabel(m_rebindConflictAction),
-                                m_rebindConflictSlot == 0 ? "Primary" : "Secondary");
-                    ImGui::Text("Override with %s?",
-                                platform::ActionBindings::CodeToLabel(m_rebindCapturedCode).c_str());
-                    if (ImGui::Button("Override"))
-                    {
-                        m_actionBindings.SetCode(m_rebindConflictAction, m_rebindConflictSlot, platform::ActionBindings::kUnbound);
-                        m_actionBindings.SetCode(m_rebindAction, m_rebindSlot, m_rebindCapturedCode);
-                        m_rebindWaiting = false;
-                        (void)SaveControlsConfig();
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel"))
-                    {
-                        m_rebindWaiting = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
-                }
-
-                bool sensitivityChanged = false;
-                sensitivityChanged |= ImGui::SliderFloat("Survivor Look Sensitivity", &m_controlsSettings.survivorSensitivity, 0.0002F, 0.01F, "%.4f");
-                sensitivityChanged |= ImGui::SliderFloat("Killer Look Sensitivity", &m_controlsSettings.killerSensitivity, 0.0002F, 0.01F, "%.4f");
-                sensitivityChanged |= ImGui::Checkbox("Invert Y", &m_controlsSettings.invertY);
-                if (sensitivityChanged)
-                {
-                    ApplyControlsSettings();
-                }
-
-                if (ImGui::Button("Save Controls"))
-                {
-                    ApplyControlsSettings();
-                    if (SaveControlsConfig())
-                    {
-                        m_controlsStatus = "Controls saved to config/controls.json";
-                    }
-                    else
-                    {
-                        m_controlsStatus = "Failed to save controls config.";
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Reset Defaults"))
-                {
-                    m_actionBindings.ResetDefaults();
-                    m_controlsSettings = ControlsSettings{};
-                    ApplyControlsSettings();
-                    (void)SaveControlsConfig();
-                    m_controlsStatus = "Controls reset to defaults.";
-                }
-                if (!m_controlsStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_controlsStatus.c_str());
-                }
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Graphics"))
-            {
-                const char* displayModes[] = {"Windowed", "Fullscreen", "Borderless"};
-                int displayModeIndex = static_cast<int>(m_graphicsEditing.displayMode);
-                if (ImGui::Combo("Display Mode", &displayModeIndex, displayModes, IM_ARRAYSIZE(displayModes)))
-                {
-                    m_graphicsEditing.displayMode = static_cast<DisplayModeSetting>(glm::clamp(displayModeIndex, 0, 2));
-                }
-
-                const std::vector<std::pair<int, int>> resolutions = AvailableResolutions();
-                int resolutionIndex = -1;
-                std::vector<std::string> labels;
-                labels.reserve(resolutions.size());
-                for (std::size_t i = 0; i < resolutions.size(); ++i)
-                {
-                    const auto [w, h] = resolutions[i];
-                    labels.push_back(std::to_string(w) + "x" + std::to_string(h));
-                    if (w == m_graphicsEditing.width && h == m_graphicsEditing.height)
-                    {
-                        resolutionIndex = static_cast<int>(i);
-                    }
-                }
-                if (resolutionIndex < 0 && !resolutions.empty())
-                {
-                    resolutionIndex = 0;
-                }
-
-                if (!labels.empty())
-                {
-                    const char* preview = labels[static_cast<std::size_t>(resolutionIndex)].c_str();
-                    if (ImGui::BeginCombo("Resolution", preview))
-                    {
-                        for (int i = 0; i < static_cast<int>(labels.size()); ++i)
-                        {
-                            const bool selected = i == resolutionIndex;
-                            if (ImGui::Selectable(labels[static_cast<std::size_t>(i)].c_str(), selected))
-                            {
-                                resolutionIndex = i;
-                                m_graphicsEditing.width = resolutions[static_cast<std::size_t>(i)].first;
-                                m_graphicsEditing.height = resolutions[static_cast<std::size_t>(i)].second;
-                            }
-                            if (selected)
-                            {
-                                ImGui::SetItemDefaultFocus();
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                }
-
-                ImGui::Checkbox("VSync", &m_graphicsEditing.vsync);
-                ImGui::SliderInt("FPS Limit (0 = Unlimited)", &m_graphicsEditing.fpsLimit, 0, 240);
-
-                int renderMode = m_graphicsEditing.renderMode == render::RenderMode::Wireframe ? 0 : 1;
-                const char* renderItems[] = {"Wireframe", "Filled"};
-                if (ImGui::Combo("Render Mode", &renderMode, renderItems, IM_ARRAYSIZE(renderItems)))
-                {
-                    m_graphicsEditing.renderMode = renderMode == 0 ? render::RenderMode::Wireframe : render::RenderMode::Filled;
-                }
-
-                const char* shadowItems[] = {"Off", "Low", "Med", "High"};
-                ImGui::Combo("Shadow Quality", &m_graphicsEditing.shadowQuality, shadowItems, IM_ARRAYSIZE(shadowItems));
-                ImGui::SliderFloat("Shadow Distance", &m_graphicsEditing.shadowDistance, 8.0F, 200.0F, "%.0f");
-                const char* aaItems[] = {"None", "FXAA"};
-                ImGui::Combo("Anti-Aliasing", &m_graphicsEditing.antiAliasing, aaItems, IM_ARRAYSIZE(aaItems));
-                const char* texItems[] = {"Low", "Medium", "High"};
-                ImGui::Combo("Texture Quality", &m_graphicsEditing.textureQuality, texItems, IM_ARRAYSIZE(texItems));
-                ImGui::Checkbox("Fog", &m_graphicsEditing.fogEnabled);
-
-                if (ImGui::Button("Apply Graphics"))
-                {
-                    m_graphicsRollback = m_graphicsApplied;
-                    ApplyGraphicsSettings(m_graphicsEditing, true);
-                    if (SaveGraphicsConfig())
-                    {
-                        m_graphicsStatus = "Graphics applied and saved.";
-                    }
-                    else
-                    {
-                        m_graphicsStatus = "Graphics applied, but failed to save config.";
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel"))
-                {
-                    m_graphicsEditing = m_graphicsApplied;
-                    m_graphicsStatus = "Pending graphics changes reverted.";
-                }
-
-                if (m_graphicsAutoConfirmPending)
-                {
-                    const double secondsLeft = std::max(0.0, m_graphicsAutoConfirmDeadline - glfwGetTime());
-                    ImGui::Separator();
-                    ImGui::Text("Confirm display settings: %.1fs left", secondsLeft);
-                    if (ImGui::Button("Keep"))
-                    {
-                        m_graphicsAutoConfirmPending = false;
-                        m_graphicsRollback = m_graphicsApplied;
-                        (void)SaveGraphicsConfig();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Revert"))
-                    {
-                        ApplyGraphicsSettings(m_graphicsRollback, false);
-                        m_graphicsEditing = m_graphicsRollback;
-                        m_graphicsApplied = m_graphicsRollback;
-                        m_graphicsAutoConfirmPending = false;
-                        (void)SaveGraphicsConfig();
-                    }
-                }
-
-                if (!m_graphicsStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_graphicsStatus.c_str());
-                }
-
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Gameplay"))
-            {
-                const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
-                if (!allowEdit)
-                {
-                    ImGui::TextColored(ImVec4(1.0F, 0.8F, 0.2F, 1.0F), "Server Values are authoritative in multiplayer client mode.");
-                    ImGui::BeginDisabled();
-                }
-
-                auto& t = m_gameplayEditing;
-                ImGui::TextUnformatted("Movement");
-                ImGui::SliderFloat("Survivor Walk", &t.survivorWalkSpeed, 0.5F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Sprint", &t.survivorSprintSpeed, 0.5F, 10.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Crouch", &t.survivorCrouchSpeed, 0.1F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Survivor Crawl", &t.survivorCrawlSpeed, 0.1F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Killer Speed", &t.killerMoveSpeed, 0.5F, 12.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Capsules");
-                ImGui::SliderFloat("Survivor Radius", &t.survivorCapsuleRadius, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Survivor Height", &t.survivorCapsuleHeight, 0.9F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Killer Radius", &t.killerCapsuleRadius, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Killer Height", &t.killerCapsuleHeight, 0.9F, 3.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Vault / Combat / Heal");
-                ImGui::SliderFloat("Terror Radius", &t.terrorRadiusMeters, 4.0F, 80.0F, "%.1f");
-                ImGui::SliderFloat("Slow Vault Time", &t.vaultSlowTime, 0.2F, 1.6F, "%.2f");
-                ImGui::SliderFloat("Medium Vault Time", &t.vaultMediumTime, 0.2F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Time", &t.vaultFastTime, 0.15F, 1.0F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Dot", &t.fastVaultDotThreshold, 0.3F, 0.99F, "%.2f");
-                ImGui::SliderFloat("Fast Vault Speed Mult", &t.fastVaultSpeedMultiplier, 0.3F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Short Attack Range", &t.shortAttackRange, 0.5F, 6.0F, "%.2f");
-                ImGui::SliderFloat("Short Attack Angle", &t.shortAttackAngleDegrees, 15.0F, 170.0F, "%.0f");
-                ImGui::SliderFloat("Lunge Hold Min", &t.lungeHoldMinSeconds, 0.02F, 1.2F, "%.2f");
-                ImGui::SliderFloat("Lunge Duration", &t.lungeDurationSeconds, 0.08F, 2.0F, "%.2f");
-                ImGui::SliderFloat("Lunge Boost End Speed", &t.lungeSpeedEnd, 1.0F, 20.0F, "%.2f");
-                ImGui::SliderFloat("Heal Duration", &t.healDurationSeconds, 2.0F, 60.0F, "%.1f");
-                ImGui::SliderFloat("Skillcheck Min", &t.skillCheckMinInterval, 0.5F, 20.0F, "%.1f");
-                ImGui::SliderFloat("Skillcheck Max", &t.skillCheckMaxInterval, 0.5F, 30.0F, "%.1f");
-                ImGui::SliderFloat("Generator Base Seconds", &t.generatorRepairSecondsBase, 20.0F, 180.0F, "%.1f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Items");
-                ImGui::SliderFloat("Medkit Full Heal Charges", &t.medkitFullHealCharges, 4.0F, 64.0F, "%.1f");
-                ImGui::SliderFloat("Medkit Heal Speed Mult", &t.medkitHealSpeedMultiplier, 0.5F, 4.0F, "%.2f");
-                ImGui::SliderFloat("Toolbox Charges", &t.toolboxCharges, 1.0F, 120.0F, "%.1f");
-                ImGui::SliderFloat("Toolbox Drain / sec", &t.toolboxChargeDrainPerSecond, 0.05F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Toolbox Repair Bonus", &t.toolboxRepairSpeedBonus, 0.0F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Flashlight Max Use (s)", &t.flashlightMaxUseSeconds, 1.0F, 30.0F, "%.2f");
-                ImGui::SliderFloat("Flashlight Blind Build (s)", &t.flashlightBlindBuildSeconds, 0.1F, 6.0F, "%.2f");
-                ImGui::SliderFloat("Flashlight Blind Duration (s)", &t.flashlightBlindDurationSeconds, 0.1F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Flashlight Beam Range", &t.flashlightBeamRange, 2.0F, 25.0F, "%.1f");
-                ImGui::SliderFloat("Flashlight Beam Angle", &t.flashlightBeamAngleDegrees, 5.0F, 80.0F, "%.1f");
-                const char* blindStyleItems[] = {"White", "Dark"};
-                ImGui::Combo("Flashlight Blind Style", &t.flashlightBlindStyle, blindStyleItems, 2);
-                ImGui::SliderFloat("Map Channel (s)", &t.mapChannelSeconds, 0.05F, 4.0F, "%.2f");
-                ImGui::SliderInt("Map Uses", &t.mapUses, 0, 20);
-                ImGui::SliderFloat("Map Reveal Range (m)", &t.mapRevealRangeMeters, 4.0F, 120.0F, "%.1f");
-                ImGui::SliderFloat("Map Reveal Duration (s)", &t.mapRevealDurationSeconds, 0.2F, 12.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Powers");
-                ImGui::SliderInt("Trapper Start Carry", &t.trapperStartCarryTraps, 0, 16);
-                ImGui::SliderInt("Trapper Max Carry", &t.trapperMaxCarryTraps, 1, 16);
-                ImGui::SliderInt("Trapper Ground Spawn", &t.trapperGroundSpawnTraps, 0, 48);
-                ImGui::SliderFloat("Trapper Set Time (s)", &t.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
-                ImGui::SliderFloat("Trapper Disarm Time (s)", &t.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Trap Escape Base", &t.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
-                ImGui::SliderFloat("Trap Escape Step", &t.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
-                ImGui::SliderFloat("Trap Escape Max", &t.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
-                ImGui::SliderFloat("Trap Killer Stun (s)", &t.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
-                ImGui::SliderFloat("Wraith Cloak Speed Mult", &t.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
-                ImGui::SliderFloat("Wraith Cloak Transition (s)", &t.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
-                ImGui::SliderFloat("Wraith Uncloak Transition (s)", &t.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
-                ImGui::SliderFloat("Wraith Post-Uncloak Haste (s)", &t.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("Map Generation Weights");
-                ImGui::TextUnformatted("  Classic Loops:");
-                ImGui::SliderFloat("Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Jungle Long", &t.weightJungleGymLong, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Jungle Short", &t.weightJungleGymShort, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Shack", &t.weightShack, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Four Lane", &t.weightFourLane, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Filler A", &t.weightFillerA, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Filler B", &t.weightFillerB, 0.0F, 5.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("  v2 Loop Types:");
-                ImGui::SliderFloat("Weight Long Wall", &t.weightLongWall, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Short Wall", &t.weightShortWall, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight L-Wall Window", &t.weightLWallWindow, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight L-Wall Pallet", &t.weightLWallPallet, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight T-Walls", &t.weightTWalls, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Gym Box", &t.weightGymBox, 0.0F, 5.0F, "%.2f");
-                ImGui::SliderFloat("Weight Debris Pile", &t.weightDebrisPile, 0.0F, 5.0F, "%.2f");
-                ImGui::Separator();
-                ImGui::TextUnformatted("  Constraints:");
-                ImGui::SliderInt("Max Loops", &t.maxLoopsPerMap, 0, 64);
-                ImGui::SliderFloat("Min Loop Distance Tiles", &t.minLoopDistanceTiles, 0.0F, 6.0F, "%.1f");
-                ImGui::SliderInt("Max Safe Pallets", &t.maxSafePallets, 0, 64);
-                ImGui::SliderInt("Max Deadzone Tiles", &t.maxDeadzoneTiles, 1, 8);
-                ImGui::Checkbox("Edge Bias Loops", &t.edgeBiasLoops);
-                ImGui::Separator();
-                ImGui::TextUnformatted("Networking");
-                ImGui::SliderInt("Server Tick Rate", &t.serverTickRate, 30, 60);
-                ImGui::SliderInt("Interpolation Buffer (ms)", &t.interpolationBufferMs, 50, 1000);
-
-                if (!allowEdit)
-                {
-                    ImGui::EndDisabled();
-                }
-
-                if (allowEdit && ImGui::Button("Apply Gameplay Tuning"))
-                {
-                    ApplyGameplaySettings(m_gameplayEditing, false);
-                    if (m_multiplayerMode == MultiplayerMode::Host)
-                    {
-                        SendGameplayTuningToClient();
-                    }
-                    if (SaveGameplayConfig())
-                    {
-                        m_gameplayStatus = "Gameplay tuning applied and saved.";
-                    }
-                    else
-                    {
-                        m_gameplayStatus = "Gameplay tuning applied, but config save failed.";
-                    }
-                }
-                if (allowEdit)
-                {
-                    ImGui::SameLine();
-                }
-                if (ImGui::Button("Reset Gameplay Defaults"))
-                {
-                    m_gameplayEditing = game::gameplay::GameplaySystems::GameplayTuning{};
-                    if (allowEdit)
-                    {
-                        ApplyGameplaySettings(m_gameplayEditing, false);
-                        (void)SaveGameplayConfig();
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel Gameplay Changes"))
-                {
-                    m_gameplayEditing = m_gameplayApplied;
-                }
-
-                ImGui::TextWrapped("Map generation weights and some collider values are safest to verify after reloading map.");
-                if (!m_gameplayStatus.empty())
-                {
-                    ImGui::TextWrapped("%s", m_gameplayStatus.c_str());
-                }
-                ImGui::EndTabItem();
-            }
-
-            ImGui::EndTabBar();
-        }
-
-        ImGui::Separator();
-        if (ImGui::Button("Back"))
-        {
-            *closeSettings = false;
-        }
+        m_ui.Label(stepText, m_ui.Theme().colorTextMuted, 0.8F);
     }
-    ImGui::End();
-#else
-    (void)closeSettings;
-#endif
+
+    m_ui.PopLayout(); // End vertical layout
+    // Right spacer to complete centering is implicit via remaining space
+    m_ui.PopLayout(); // End horizontal layout
+
+    m_ui.EndPanel();
 }
 
 std::string App::RoleNameFromIndex(int index)
@@ -6252,9 +6350,9 @@ std::string App::MapNameFromIndex(int index)
 {
     switch (index)
     {
+        case 0: return "test";
         case 1: return "collision_test";
-        case 2: return "test";
-        case 0:
+        case 2: return "main";
         default: return "main";
     }
 }
