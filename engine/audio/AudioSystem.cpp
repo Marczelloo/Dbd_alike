@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+// Disable Windows min/max macros that conflict with std::min/std::max
+#define NOMINMAX
 #define MINIAUDIO_IMPLEMENTATION
 #include "external/miniaudio/miniaudio.h"
 
