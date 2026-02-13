@@ -140,6 +140,14 @@ Branch: `performance-optimisations`
 28. **Billboard dead code removed** — cleaned up unused billboard rendering paths
 29. **FX system skip emitter copy** — no param copy when no overrides
 
+### Physics & Gameplay
+30. **SphereCastTriggers buffer reuse** — output-param overload avoids per-call vector alloc+sort
+31. **Interaction resolve dedup** — reuse resolved candidate instead of computing 3× per tick
+32. **Spatial grid no full-scan fallback** — removed O(n) fallback when spatial query returns empty
+33. **LOS distance guard** — skip expensive HasLineOfSight raycast when distance > 20m
+34. **Incremental physics update** — eliminated per-tick full `RebuildPhysicsWorld()` (~200+ entity rebuild); killer chase trigger updated in-place via `UpdateTriggerCenter()`; full rebuild only on structural changes (pallet drop/break, trap placement)
+35. **Aspect ratio compute once** — single computation before render branches
+
 ### Deferred (diminishing returns)
 - UBO for light uniforms: ~36 glUniform calls per frame → ~1% frame budget, high std140 complexity
 - Grid static VBO caching: 484 line verts/frame, negligible impact
