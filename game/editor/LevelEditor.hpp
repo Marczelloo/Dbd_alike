@@ -412,6 +412,27 @@ private:
         const engine::render::MaterialParams& material,
         std::string* outLoadError
     ) const;
+    struct CachedMeshSurface
+    {
+        engine::render::Renderer::GpuMeshId gpuMeshId = engine::render::Renderer::kInvalidGpuMesh;
+        unsigned int albedoTexture = 0;
+        bool textured = false;
+    };
+    struct CachedMeshAssetEntry
+    {
+        bool initialized = false;
+        bool loadFailed = false;
+        std::string loadError;
+        engine::assets::MeshData const* meshData = nullptr;
+        std::vector<CachedMeshSurface> surfaces;
+    };
+    [[nodiscard]] bool EnsureCachedMeshAssetEntry(
+        engine::render::Renderer& renderer,
+        const std::string& meshAsset,
+        const CachedMeshAssetEntry** outEntry,
+        std::string* outLoadError
+    ) const;
+    void ReleaseCachedMeshAssets(engine::render::Renderer& renderer) const;
     void ClearMeshAlbedoTextureCache() const;
     void PlaceImportedAssetAtHovered(const std::string& relativeAssetPath);
     void InstantiatePrefabAtHovered(const std::string& prefabId);
@@ -581,6 +602,9 @@ private:
     std::vector<std::string> m_contentPreviewLru;
     std::size_t m_contentPreviewLruCapacity = 192;
     mutable std::unordered_map<std::string, unsigned int> m_meshAlbedoTextures;
+    mutable std::unordered_map<std::string, CachedMeshAssetEntry> m_cachedMeshAssets;
+    mutable std::unordered_map<std::string, engine::render::Renderer::GpuMeshId> m_cachedMeshSurfaceVariants;
+    mutable engine::render::Renderer* m_cachedMeshRenderer = nullptr;
     std::vector<std::string> m_prefabLibrary;
     int m_selectedPrefabIndex = -1;
     std::string m_prefabNewId = "new_prefab";

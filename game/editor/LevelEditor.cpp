@@ -70,6 +70,21 @@ glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
     return glm::mat3(transform);
 }
 
+glm::mat4 ModelMatrixFromTrs(
+    const glm::vec3& position,
+    const glm::vec3& rotationEulerDegrees,
+    const glm::vec3& scale
+)
+{
+    glm::mat4 transform{1.0F};
+    transform = glm::translate(transform, position);
+    transform = glm::rotate(transform, glm::radians(rotationEulerDegrees.y), glm::vec3{0.0F, 1.0F, 0.0F});
+    transform = glm::rotate(transform, glm::radians(rotationEulerDegrees.x), glm::vec3{1.0F, 0.0F, 0.0F});
+    transform = glm::rotate(transform, glm::radians(rotationEulerDegrees.z), glm::vec3{0.0F, 0.0F, 1.0F});
+    transform = glm::scale(transform, scale);
+    return transform;
+}
+
 glm::vec3 RotateExtentsXYZ(const glm::vec3& halfExtents, const glm::vec3& eulerDegrees)
 {
     const glm::mat3 rotation = RotationMatrixFromEulerDegrees(eulerDegrees);
@@ -1030,6 +1045,27 @@ engine::render::MaterialParams ToRenderMaterialParams(const MaterialAsset* mater
     params.unlit = material->shaderType == MaterialShaderType::Unlit;
     return params;
 }
+
+std::string BuildGpuVariantKey(
+    const std::string& meshAsset,
+    int surfaceIndex,
+    const glm::vec3& color,
+    const engine::render::MaterialParams& material
+)
+{
+    const auto c8 = [](float v) {
+        return glm::clamp(static_cast<int>(std::round(glm::clamp(v, 0.0F, 1.0F) * 255.0F)), 0, 255);
+    };
+    const auto p16 = [](float v) {
+        return glm::clamp(static_cast<int>(std::round(v * 1000.0F)), -32768, 32767);
+    };
+
+    std::ostringstream oss;
+    oss << meshAsset << '#' << surfaceIndex << '#'
+        << c8(color.r) << ',' << c8(color.g) << ',' << c8(color.b) << '#'
+        << p16(material.roughness) << ',' << p16(material.metallic) << ',' << p16(material.emissive) << ',' << (material.unlit ? 1 : 0);
+    return oss.str();
+}
 } // namespace
 
 const char* LevelEditor::DockPanelTitle(DockPanel panel) const
@@ -1181,6 +1217,11 @@ void LevelEditor::SaveEditorLayout() const
 
 void LevelEditor::Initialize()
 {
+    if (m_cachedMeshRenderer != nullptr)
+    {
+        ReleaseCachedMeshAssets(*m_cachedMeshRenderer);
+    }
+    m_cachedMeshRenderer = nullptr;
     LevelAssetIO::EnsureAssetDirectories();
     m_assetRegistry.EnsureAssetDirectories();
     RefreshLibraries();
@@ -4163,27 +4204,23 @@ bool LevelEditor::DrawModelAssetInstance(
         return false;
     }
 
-    std::string loadError;
-    const std::filesystem::path absolute = m_assetRegistry.AbsolutePath(meshAsset);
-    const engine::assets::MeshData* meshData = m_meshLibrary.LoadMesh(absolute, &loadError);
-    if (meshData == nullptr || !meshData->loaded)
+    const CachedMeshAssetEntry* entry = nullptr;
+    if (!EnsureCachedMeshAssetEntry(renderer, meshAsset, &entry, outLoadError) || entry == nullptr || entry->meshData == nullptr)
     {
-        if (outLoadError != nullptr)
-        {
-            *outLoadError = loadError;
-        }
         return false;
     }
 
-    const float uniformScale = ComputeMeshAssetUniformScale(*meshData, targetHalfExtents);
+    const float uniformScale = ComputeMeshAssetUniformScale(*entry->meshData, targetHalfExtents);
     const glm::vec3 modelScale = glm::vec3{uniformScale} * drawScale;
+    const glm::mat4 modelMatrix = ModelMatrixFromTrs(drawPosition, drawRotation, modelScale);
 
-    if (!meshData->surfaces.empty())
+    if (!entry->meshData->surfaces.empty())
     {
-        for (std::size_t surfaceIndex = 0; surfaceIndex < meshData->surfaces.size(); ++surfaceIndex)
+        for (std::size_t surfaceIndex = 0; surfaceIndex < entry->meshData->surfaces.size(); ++surfaceIndex)
         {
-            const auto& surface = meshData->surfaces[surfaceIndex];
-            const unsigned int albedoTexture = GetOrCreateMeshSurfaceAlbedoTexture(meshAsset, surfaceIndex, surface);
+            const auto& surface = entry->meshData->surfaces[surfaceIndex];
+            const CachedMeshSurface& cachedSurface = entry->surfaces[surfaceIndex];
+            const unsigned int albedoTexture = cachedSurface.albedoTexture;
             if (albedoTexture != 0)
             {
                 renderer.DrawTexturedMesh(
@@ -4197,25 +4234,64 @@ bool LevelEditor::DrawModelAssetInstance(
             }
             else
             {
-                renderer.DrawMesh(
-                    surface.geometry,
-                    drawPosition,
-                    drawRotation,
-                    modelScale,
-                    color,
-                    material);
+                const std::string variantKey =
+                    BuildGpuVariantKey(meshAsset, static_cast<int>(surfaceIndex), color, material);
+                auto variantIt = m_cachedMeshSurfaceVariants.find(variantKey);
+                if (variantIt == m_cachedMeshSurfaceVariants.end())
+                {
+                    const engine::render::Renderer::GpuMeshId uploaded = renderer.UploadMesh(surface.geometry, color, material);
+                    if (uploaded != engine::render::Renderer::kInvalidGpuMesh)
+                    {
+                        variantIt = m_cachedMeshSurfaceVariants.emplace(variantKey, uploaded).first;
+                    }
+                }
+
+                if (variantIt != m_cachedMeshSurfaceVariants.end() &&
+                    variantIt->second != engine::render::Renderer::kInvalidGpuMesh)
+                {
+                    renderer.DrawGpuMesh(variantIt->second, modelMatrix);
+                }
+                else
+                {
+                    renderer.DrawMesh(
+                        surface.geometry,
+                        drawPosition,
+                        drawRotation,
+                        modelScale,
+                        color,
+                        material);
+                }
             }
         }
     }
     else
     {
-        renderer.DrawMesh(
-            meshData->geometry,
-            drawPosition,
-            drawRotation,
-            modelScale,
-            color,
-            material);
+        const std::string variantKey = BuildGpuVariantKey(meshAsset, -1, color, material);
+        auto variantIt = m_cachedMeshSurfaceVariants.find(variantKey);
+        if (variantIt == m_cachedMeshSurfaceVariants.end())
+        {
+            const engine::render::Renderer::GpuMeshId uploaded = renderer.UploadMesh(entry->meshData->geometry, color, material);
+            if (uploaded != engine::render::Renderer::kInvalidGpuMesh)
+            {
+                variantIt = m_cachedMeshSurfaceVariants.emplace(variantKey, uploaded).first;
+            }
+        }
+
+        if (variantIt != m_cachedMeshSurfaceVariants.end() &&
+            variantIt->second != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            renderer.DrawGpuMesh(variantIt->second, modelMatrix);
+        }
+        else
+        {
+            renderer.DrawMesh(
+                entry->meshData->geometry,
+                drawPosition,
+                drawRotation,
+                modelScale,
+                color,
+                material);
+        }
     }
 
     if (outLoadError != nullptr)
@@ -4225,8 +4301,87 @@ bool LevelEditor::DrawModelAssetInstance(
     return true;
 }
 
+bool LevelEditor::EnsureCachedMeshAssetEntry(
+    engine::render::Renderer& renderer,
+    const std::string& meshAsset,
+    const CachedMeshAssetEntry** outEntry,
+    std::string* outLoadError
+) const
+{
+    CachedMeshAssetEntry& entry = m_cachedMeshAssets[meshAsset];
+    if (!entry.initialized)
+    {
+        std::string loadError;
+        const std::filesystem::path absolute = m_assetRegistry.AbsolutePath(meshAsset);
+        entry.meshData = m_meshLibrary.LoadMesh(absolute, &loadError);
+        entry.initialized = true;
+        entry.loadFailed = (entry.meshData == nullptr) || !entry.meshData->loaded;
+        entry.loadError = loadError;
+
+        if (!entry.loadFailed && entry.meshData != nullptr)
+        {
+            if (!entry.meshData->surfaces.empty())
+            {
+                entry.surfaces.resize(entry.meshData->surfaces.size());
+                for (std::size_t surfaceIndex = 0; surfaceIndex < entry.meshData->surfaces.size(); ++surfaceIndex)
+                {
+                    const auto& surface = entry.meshData->surfaces[surfaceIndex];
+                    CachedMeshSurface& cachedSurface = entry.surfaces[surfaceIndex];
+                    cachedSurface.albedoTexture = GetOrCreateMeshSurfaceAlbedoTexture(meshAsset, surfaceIndex, surface);
+                    cachedSurface.textured = cachedSurface.albedoTexture != 0;
+                }
+            }
+            else
+            {
+                entry.surfaces.resize(1);
+            }
+        }
+    }
+
+    if (entry.loadFailed)
+    {
+        if (outLoadError != nullptr)
+        {
+            *outLoadError = entry.loadError;
+        }
+        if (outEntry != nullptr)
+        {
+            *outEntry = nullptr;
+        }
+        return false;
+    }
+
+    if (outLoadError != nullptr)
+    {
+        outLoadError->clear();
+    }
+    if (outEntry != nullptr)
+    {
+        *outEntry = &entry;
+    }
+    (void)renderer;
+    return true;
+}
+
+void LevelEditor::ReleaseCachedMeshAssets(engine::render::Renderer& renderer) const
+{
+    for (auto& [_, gpuId] : m_cachedMeshSurfaceVariants)
+    {
+        if (gpuId != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            renderer.FreeGpuMesh(gpuId);
+        }
+    }
+    m_cachedMeshSurfaceVariants.clear();
+    m_cachedMeshAssets.clear();
+}
+
 void LevelEditor::ClearMeshAlbedoTextureCache() const
 {
+    if (m_cachedMeshRenderer != nullptr)
+    {
+        ReleaseCachedMeshAssets(*m_cachedMeshRenderer);
+    }
 #if BUILD_WITH_IMGUI
     for (auto& [_, texture] : m_meshAlbedoTextures)
     {
@@ -10389,6 +10544,15 @@ void LevelEditor::Update(
 
 void LevelEditor::Render(engine::render::Renderer& renderer) const
 {
+    if (m_cachedMeshRenderer != &renderer)
+    {
+        if (m_cachedMeshRenderer != nullptr)
+        {
+            ReleaseCachedMeshAssets(*m_cachedMeshRenderer);
+        }
+        m_cachedMeshRenderer = &renderer;
+    }
+
     const bool materialLabVisible = m_materialLabViewMode != MaterialLabViewMode::Off;
     const bool materialLabOverlay = m_materialLabViewMode == MaterialLabViewMode::Overlay;
     const bool materialLabDedicated = m_materialLabViewMode == MaterialLabViewMode::Dedicated;
@@ -10409,6 +10573,36 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
                                         ? glm::vec3{0.0F, m_materialLabSphereRadius + 0.8F, 0.0F}
                                         : (m_cameraPosition + previewForward * 5.6F + orbitOffset);
     const glm::vec3 previewFloorCenter = previewCenter + glm::vec3{0.0F, -m_materialLabSphereRadius - 0.28F, 0.0F};
+
+    auto drawMaterialPreviewSphere = [&](const glm::vec3& center, float yawDegrees, float radius, const glm::vec3& color, const engine::render::MaterialParams& material) {
+        static const engine::render::MeshGeometry kMaterialLabSphere = BuildUvSphereGeometry(36, 64);
+        const std::string variantKey = BuildGpuVariantKey("__editor/material_preview_sphere", 0, color, material);
+        auto variantIt = m_cachedMeshSurfaceVariants.find(variantKey);
+        if (variantIt == m_cachedMeshSurfaceVariants.end())
+        {
+            const engine::render::Renderer::GpuMeshId uploaded = renderer.UploadMesh(kMaterialLabSphere, color, material);
+            if (uploaded != engine::render::Renderer::kInvalidGpuMesh)
+            {
+                variantIt = m_cachedMeshSurfaceVariants.emplace(variantKey, uploaded).first;
+            }
+        }
+
+        if (variantIt != m_cachedMeshSurfaceVariants.end() &&
+            variantIt->second != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            renderer.DrawGpuMesh(variantIt->second, ModelMatrixFromTrs(center, glm::vec3{0.0F, yawDegrees, 0.0F}, glm::vec3{radius}));
+        }
+        else
+        {
+            renderer.DrawMesh(
+                kMaterialLabSphere,
+                center,
+                glm::vec3{0.0F, yawDegrees, 0.0F},
+                glm::vec3{radius},
+                color,
+                material);
+        }
+    };
 
     engine::render::EnvironmentSettings environment = m_environmentEditing.id.empty() ? CurrentEnvironmentSettings() : ToRenderEnvironment(m_environmentEditing);
     if (materialLabVisible && !m_materialLabDirectionalLightEnabled)
@@ -10464,21 +10658,18 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
             );
         }
 
-        static const engine::render::MeshGeometry kMaterialLabSphere = BuildUvSphereGeometry(36, 64);
         const glm::vec3 previewColor = glm::vec3{
             m_materialEditing.baseColor.r,
             m_materialEditing.baseColor.g,
             m_materialEditing.baseColor.b,
         };
         const engine::render::MaterialParams previewMaterial = ToRenderMaterialParams(&m_materialEditing);
-        renderer.DrawMesh(
-            kMaterialLabSphere,
+        drawMaterialPreviewSphere(
             previewCenter,
-            glm::vec3{0.0F, previewYawDegrees, 0.0F},
-            glm::vec3{m_materialLabSphereRadius},
+            previewYawDegrees,
+            m_materialLabSphereRadius,
             glm::clamp(previewColor, glm::vec3{0.0F}, glm::vec3{1.0F}),
-            previewMaterial
-        );
+            previewMaterial);
         if (m_debugView)
         {
             renderer.DrawOverlayLine(
@@ -10921,15 +11112,12 @@ void LevelEditor::Render(engine::render::Renderer& renderer) const
             m_materialEditing.baseColor.b,
         };
         const engine::render::MaterialParams previewMaterial = ToRenderMaterialParams(&m_materialEditing);
-        static const engine::render::MeshGeometry kMaterialLabSphere = BuildUvSphereGeometry(36, 64);
-        renderer.DrawMesh(
-            kMaterialLabSphere,
+        drawMaterialPreviewSphere(
             previewCenter,
-            glm::vec3{0.0F, previewYawDegrees, 0.0F},
-            glm::vec3{m_materialLabSphereRadius},
+            previewYawDegrees,
+            m_materialLabSphereRadius,
             glm::clamp(previewColor, glm::vec3{0.0F}, glm::vec3{1.0F}),
-            previewMaterial
-        );
+            previewMaterial);
         if (m_debugView)
         {
             renderer.DrawOverlayLine(previewCenter, previewCenter + glm::vec3{0.0F, m_materialLabSphereRadius + 0.8F, 0.0F}, glm::vec3{0.95F, 0.8F, 0.25F});
