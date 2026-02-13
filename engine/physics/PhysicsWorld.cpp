@@ -64,6 +64,19 @@ void PhysicsWorld::AddTrigger(const TriggerVolume& trigger)
     m_triggers.push_back(trigger);
 }
 
+bool PhysicsWorld::UpdateTriggerCenter(engine::scene::Entity entity, const glm::vec3& newCenter)
+{
+    for (TriggerVolume& trigger : m_triggers)
+    {
+        if (trigger.entity == entity)
+        {
+            trigger.center = newCenter;
+            return true;
+        }
+    }
+    return false;
+}
+
 MoveResult PhysicsWorld::MoveCapsule(
     const glm::vec3& currentPosition,
     float radius,

@@ -298,7 +298,21 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     (void)input;
     (void)controlsEnabled;
 
-    RebuildPhysicsWorld();
+    // Rebuild physics only when world geometry changed (pallet drop/break, trap placement, etc.).
+    // For the killer chase trigger (which moves every tick), update its position in-place.
+    if (m_physicsDirty)
+    {
+        RebuildPhysicsWorld();
+        m_physicsDirty = false;
+    }
+    else if (m_killer != 0)
+    {
+        const auto kIt = m_world.Transforms().find(m_killer);
+        if (kIt != m_world.Transforms().end())
+        {
+            m_physics.UpdateTriggerCenter(m_killer, kIt->second.position);
+        }
+    }
 
     RoleCommand survivorCommand = m_localSurvivorCommand;
     RoleCommand killerCommand = m_localKillerCommand;

@@ -82,6 +82,9 @@ public:
     void AddSolidBox(const SolidBox& box);
     void AddTrigger(const TriggerVolume& trigger);
 
+    /// Update center of an existing trigger by entity. Returns true if found.
+    bool UpdateTriggerCenter(engine::scene::Entity entity, const glm::vec3& newCenter);
+
     [[nodiscard]] const std::vector<SolidBox>& Solids() const { return m_solids; }
     [[nodiscard]] const std::vector<TriggerVolume>& Triggers() const { return m_triggers; }
 
