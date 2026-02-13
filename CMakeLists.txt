@@ -82,11 +82,18 @@ set(ENGINE_SOURCES
     engine/net/NetworkSession.cpp
     engine/net/LanDiscovery.cpp
     engine/render/Renderer.cpp
+    engine/render/Frustum.cpp
+    engine/render/StaticBatcher.cpp
     engine/physics/PhysicsWorld.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
     game/ui/LoadingScreen.cpp
     game/ui/LoadingManager.cpp
+    game/ui/SkillCheckWheel.cpp
+    game/ui/GeneratorProgressBar.cpp
+    game/ui/ScreenEffects.cpp
+    game/ui/PerkLoadoutEditor.cpp
+    game/ui/LobbyScene.cpp
     game/maps/TileGenerator.cpp
     game/gameplay/GameplaySystems.cpp
     game/gameplay/SpawnSystem.cpp
@@ -94,6 +101,7 @@ set(ENGINE_SOURCES
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp
+    ui/DeveloperToolbar.cpp
 )
 
 add_executable(asym_horror ${ENGINE_SOURCES})

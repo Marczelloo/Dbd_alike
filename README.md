@@ -56,6 +56,8 @@ W grze: `Esc` otwiera Pause Menu (`Resume`, `Return to Main Menu`, `Quit`).
 - `F1`: toggle HUD overlay
 - `F2`: toggle debug draw (colliders/triggers/LOS/tile overlay)
 - `F3`: toggle render mode (`wireframe` <-> `filled`)
+- `F6`: toggle UI test panel
+- `F7`: toggle loading screen test panel
 - `F11`: fullscreen
 - `Esc`: pause menu
 
@@ -377,7 +379,6 @@ ImGui is kept for developer/debug windows only (console/debug overlays/editor in
 
 Quick UI debug toggles:
 - `F6` -> custom UI Test Panel (buttons, dropdown, sliders, input, progress, keybind capture)
-- `F10` -> toggle legacy ImGui menus/HUD fallback
 
 Settings are now available directly from:
 - `Main Menu -> Settings`

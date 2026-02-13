@@ -17,6 +17,8 @@
 #include "engine/fx/FxSystem.hpp"
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
+#include "engine/render/Frustum.hpp"
+#include "engine/render/StaticBatcher.hpp"
 #include "engine/scene/World.hpp"
 #include "game/gameplay/PerkSystem.hpp"
 #include "game/maps/TileGenerator.hpp"
@@ -66,6 +68,7 @@ struct HudState
 
     std::string mapName = "test";
     std::string roleName = "Survivor";
+    bool isInGame = false;
     std::string cameraModeName = "3rd Person";
     std::string renderModeName = "wireframe";
     std::string interactionPrompt;
@@ -131,11 +134,18 @@ struct HudState
         float activeRemainingSeconds = 0.0F;
         float cooldownRemainingSeconds = 0.0F;
         int stacks = 0;
+        int tier = 1;
+        float maxCooldownSeconds = 0.0F;
     };
     std::vector<ActivePerkDebug> activePerksSurvivor;
     std::vector<ActivePerkDebug> activePerksKiller;
     float speedModifierSurvivor = 1.0F;
     float speedModifierKiller = 1.0F;
+
+    // Perk HUD slots (for graphical display)
+    static constexpr std::size_t kPerkSlotCount = 4;
+    std::array<ActivePerkDebug, kPerkSlotCount> survivorPerkSlots{};
+    std::array<ActivePerkDebug, kPerkSlotCount> killerPerkSlots{};
 };
 
 class GameplaySystems
@@ -293,7 +303,7 @@ public:
     void FixedUpdate(float fixedDt, const engine::platform::Input& input, bool controlsEnabled);
     void Update(float deltaSeconds, const engine::platform::Input& input, bool controlsEnabled);
 
-    void Render(engine::render::Renderer& renderer) const;
+    void Render(engine::render::Renderer& renderer, float aspectRatio);
     [[nodiscard]] glm::mat4 BuildViewProjection(float aspectRatio) const;
     [[nodiscard]] glm::vec3 CameraPosition() const { return m_cameraPosition; }
     [[nodiscard]] HudState BuildHudState() const;
@@ -731,6 +741,9 @@ private:
     perks::PerkSystem m_perkSystem;
     perks::PerkLoadout m_survivorPerks;
     perks::PerkLoadout m_killerPerks;
+
+    engine::render::Frustum m_frustum{};
+    engine::render::StaticBatcher m_staticBatcher{};
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);
 };

@@ -8,6 +8,8 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include "engine/render/Frustum.hpp"
+
 namespace engine::render
 {
 enum class RenderMode
@@ -92,6 +94,9 @@ public:
     void SetPostFxPulse(const glm::vec3& color, float intensity);
     void SetLightingEnabled(bool enabled);
     [[nodiscard]] bool LightingEnabled() const { return m_lightingEnabled; }
+    [[nodiscard]] const Frustum& GetFrustum() const { return m_frustum; }
+    [[nodiscard]] unsigned int GetSolidShaderProgram() const { return m_solidProgram; }
+    [[nodiscard]] int GetSolidViewProjLocation() const { return m_solidViewProjLocation; }
     void SetCameraWorldPosition(const glm::vec3& position);
 
     void BeginFrame(const glm::vec3& clearColor);
@@ -136,7 +141,27 @@ public:
         const MaterialParams& material,
         unsigned int textureId
     );
-    void DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor);
+    void DrawGrid(int halfSize, float step, const glm::vec3& majorColor, const glm::vec3& minorColor, const glm::vec4& filledColor = glm::vec4{0.0F});
+    void DrawCircle(
+        const glm::vec3& center,
+        float radius,
+        int segments,
+        const glm::vec3& color,
+        bool overlay = false
+    );
+
+    struct BillboardData
+    {
+        glm::vec3 position{0.0F};
+        float size = 0.1F;
+        glm::vec4 color{1.0F};
+    };
+
+    void DrawBillboards(
+        const BillboardData* billboards,
+        std::size_t count,
+        const glm::vec3& cameraPosition
+    );
 
 private:
     struct LineVertex
@@ -266,5 +291,6 @@ private:
     float m_cloudPhase = 0.0F;
     glm::vec3 m_postFxPulseColor{1.0F, 0.45F, 0.35F};
     float m_postFxPulseIntensity = 0.0F;
+    Frustum m_frustum{};
 };
 } // namespace engine::render
