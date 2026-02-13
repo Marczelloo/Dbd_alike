@@ -67,3 +67,4 @@ config/gameplay_tuning.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+nul

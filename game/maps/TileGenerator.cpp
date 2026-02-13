@@ -1010,6 +1010,7 @@ GeneratedMap TileGenerator::GenerateTestMap() const
     map.walls.push_back(BoxSpawn{glm::vec3{0.0F, 1.0F, 0.0F}, glm::vec3{3.0F, 1.0F, 0.6F}});
     map.windows.push_back(WindowSpawn{glm::vec3{0.0F, 1.0F, 0.7F}, glm::vec3{1.0F, 1.0F, 0.18F}, glm::vec3{0.0F, 0.0F, 1.0F}});
     map.pallets.push_back(PalletSpawn{glm::vec3{3.4F, 0.6F, 2.2F}, glm::vec3{0.95F, 0.6F, 0.2F}});
+    map.generatorSpawns.push_back(glm::vec3{0.0F, 1.0F, -4.0F});
     map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F}, glm::vec3{24.0F, 0.05F, 24.0F}, 0, 0});
     return map;
 }

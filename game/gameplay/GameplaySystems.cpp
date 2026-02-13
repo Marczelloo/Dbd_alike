@@ -4621,7 +4621,11 @@ void GameplaySystems::UpdateHookStages(float fixedDt, bool hookAttemptPressed, b
             m_skillCheckNeedle += m_skillCheckNeedleSpeed * fixedDt;
             if (hookSkillCheckPressed)
             {
-                const bool success = m_skillCheckNeedle >= m_skillCheckSuccessStart && m_skillCheckNeedle <= m_skillCheckSuccessEnd;
+                constexpr float kHitMargin = 0.06F;
+                const float expandedStart = m_skillCheckSuccessStart - kHitMargin;
+                const float expandedEnd = m_skillCheckSuccessEnd + kHitMargin;
+                
+                const bool success = m_skillCheckNeedle >= expandedStart && m_skillCheckNeedle <= expandedEnd;
                 CompleteSkillCheck(success, false);
             }
             else if (m_skillCheckNeedle >= 1.0F)
@@ -4635,7 +4639,7 @@ void GameplaySystems::UpdateHookStages(float fixedDt, bool hookAttemptPressed, b
             if (m_hookSkillCheckTimeToNext <= 0.0F)
             {
                 std::uniform_real_distribution<float> zoneStartDist(0.16F, 0.80F);
-                std::uniform_real_distribution<float> zoneSizeDist(0.10F, 0.18F);
+                std::uniform_real_distribution<float> zoneSizeDist(0.07F, 0.12F);
                 const float zoneStart = zoneStartDist(m_rng);
                 const float zoneSize = zoneSizeDist(m_rng);
                 m_skillCheckSuccessStart = zoneStart;
@@ -4724,7 +4728,12 @@ void GameplaySystems::UpdateGeneratorRepair(bool holdingRepair, bool skillCheckP
         m_skillCheckNeedle += m_skillCheckNeedleSpeed * fixedDt;
         if (skillCheckPressed)
         {
-            const bool success = m_skillCheckNeedle >= m_skillCheckSuccessStart && m_skillCheckNeedle <= m_skillCheckSuccessEnd;
+            // Add margin for forgiveness - makes hitbox larger
+            constexpr float kHitMargin = 0.06F;
+            const float expandedStart = m_skillCheckSuccessStart - kHitMargin;
+            const float expandedEnd = m_skillCheckSuccessEnd + kHitMargin;
+            
+            const bool success = m_skillCheckNeedle >= expandedStart && m_skillCheckNeedle <= expandedEnd;
             CompleteSkillCheck(success, false);
         }
         else if (m_skillCheckNeedle >= 1.0F)
@@ -4738,7 +4747,7 @@ void GameplaySystems::UpdateGeneratorRepair(bool holdingRepair, bool skillCheckP
     if (m_skillCheckTimeToNext <= 0.0F)
     {
         std::uniform_real_distribution<float> zoneStartDist(0.14F, 0.82F);
-        std::uniform_real_distribution<float> zoneSizeDist(0.08F, 0.16F);
+        std::uniform_real_distribution<float> zoneSizeDist(0.06F, 0.11F);
 
         const float zoneStart = zoneStartDist(m_rng);
         const float zoneSize = zoneSizeDist(m_rng);
@@ -4867,7 +4876,11 @@ void GameplaySystems::UpdateSelfHeal(bool holdingHeal, bool skillCheckPressed, f
         m_skillCheckNeedle += m_skillCheckNeedleSpeed * fixedDt;
         if (skillCheckPressed)
         {
-            const bool success = m_skillCheckNeedle >= m_skillCheckSuccessStart && m_skillCheckNeedle <= m_skillCheckSuccessEnd;
+            constexpr float kHitMargin = 0.06F;
+            const float expandedStart = m_skillCheckSuccessStart - kHitMargin;
+            const float expandedEnd = m_skillCheckSuccessEnd + kHitMargin;
+            
+            const bool success = m_skillCheckNeedle >= expandedStart && m_skillCheckNeedle <= expandedEnd;
             CompleteSkillCheck(success, false);
         }
         else if (m_skillCheckNeedle >= 1.0F)
