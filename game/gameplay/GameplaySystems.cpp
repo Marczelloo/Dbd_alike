@@ -3387,6 +3387,8 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     m_loopDebugTiles.clear();
     m_spawnPoints.clear();
     m_nextSpawnPointId = 1;
+    m_highPolyMeshes.clear();
+    m_highPolyMeshesGenerated = false;
 
     m_loopDebugTiles.reserve(generated.tiles.size());
     for (const auto& tile : generated.tiles)
@@ -3523,9 +3525,8 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     }
 
     // Generate high-poly meshes for benchmark map GPU stress test
-    if (!generated.highPolyMeshes.empty() && !m_highPolyMeshesGenerated)
+    if (!generated.highPolyMeshes.empty())
     {
-        m_highPolyMeshes.clear();
         m_highPolyMeshes.reserve(generated.highPolyMeshes.size());
         
         for (const auto& meshSpawn : generated.highPolyMeshes)
@@ -3562,7 +3563,6 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
             
             m_highPolyMeshes.push_back(std::move(mesh));
         }
-        m_highPolyMeshesGenerated = true;
     }
 
     // Use DBD-inspired spawn system if enabled, otherwise use legacy spawns
