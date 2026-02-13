@@ -15,6 +15,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <iomanip>
 #include <thread>
 
 #include <glad/glad.h>
@@ -1208,6 +1209,38 @@ bool App::Run()
         };
         context.profilerBenchmarkStop = []() {
             engine::core::Profiler::Instance().StopBenchmark();
+        };
+
+        // Automated perf test callbacks.
+        context.perfTest = [this](const std::string& mapName, int frames) {
+            // Start a solo session on the specified map, then begin benchmark.
+            std::string normalizedMap = mapName;
+            if (normalizedMap == "random" || normalizedMap == "random_generation" || normalizedMap == "main_map")
+            {
+                normalizedMap = "main";
+            }
+            StartSoloSession(normalizedMap, m_sessionRoleName);
+            engine::core::Profiler::Instance().StartBenchmark(frames);
+        };
+
+        context.perfReport = []() -> std::string {
+            const auto& result = engine::core::Profiler::Instance().LastBenchmark();
+            if (result.totalFrames == 0)
+            {
+                return "";
+            }
+            std::ostringstream ss;
+            ss << "=== Benchmark Results ===\n"
+               << "  Frames:        " << result.totalFrames << "\n"
+               << "  Duration:      " << std::fixed << std::setprecision(2) << result.durationSeconds << "s\n"
+               << "  Avg FPS:       " << std::fixed << std::setprecision(1) << result.avgFps << "\n"
+               << "  Min FPS:       " << std::fixed << std::setprecision(1) << result.minFps << "\n"
+               << "  Max FPS:       " << std::fixed << std::setprecision(1) << result.maxFps << "\n"
+               << "  1% Low FPS:    " << std::fixed << std::setprecision(1) << result.onePercentLow << "\n"
+               << "  Avg Frame:     " << std::fixed << std::setprecision(3) << result.avgFrameTimeMs << "ms\n"
+               << "  P99 Frame:     " << std::fixed << std::setprecision(3) << result.p99FrameTimeMs << "ms\n"
+               << "=========================";
+            return ss.str();
         };
 
         m_console.Render(context, currentFps, hudState);

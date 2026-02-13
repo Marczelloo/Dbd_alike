@@ -661,7 +661,8 @@ std::string CommandCategoryForUsage(const std::string& usage)
         command == "toggle_fullscreen" || command == "render_mode" || command == "audio_play" ||
         command == "audio_loop" || command == "audio_stop_all" ||
         command == "perf" || command == "perf_pin" || command == "perf_compact" ||
-        command == "benchmark" || command == "benchmark_stop")
+        command == "benchmark" || command == "benchmark_stop" ||
+        command == "perf_test" || command == "perf_report")
     {
         return "System";
     }
@@ -944,6 +945,43 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             if (context.profilerBenchmarkStop) {
                 context.profilerBenchmarkStop();
                 LogSuccess("Benchmark stopped");
+            }
+        });
+
+        RegisterCommand("perf_test [map] [frames]", "Run automated perf test on a map (default: main, 600 frames)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (!context.perfTest)
+            {
+                LogError("perf_test not available");
+                return;
+            }
+            std::string mapName = "main";
+            int frames = 600;
+            if (tokens.size() > 1) mapName = tokens[1];
+            if (tokens.size() > 2)
+            {
+                try { frames = std::stoi(tokens[2]); }
+                catch (...) { frames = 600; }
+            }
+            if (frames < 60) frames = 60;
+            if (frames > 10000) frames = 10000;
+            LogInfo("Starting perf test: map=" + mapName + " frames=" + std::to_string(frames));
+            context.perfTest(mapName, frames);
+        });
+
+        RegisterCommand("perf_report", "Print last benchmark results", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (!context.perfReport)
+            {
+                LogError("perf_report not available");
+                return;
+            }
+            const std::string report = context.perfReport();
+            if (report.empty())
+            {
+                LogInfo("No benchmark results available. Run 'benchmark' or 'perf_test' first.");
+            }
+            else
+            {
+                LogInfo(report);
             }
         });
 
