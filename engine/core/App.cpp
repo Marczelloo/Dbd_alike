@@ -34,6 +34,8 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 #else
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -302,6 +304,24 @@ bool App::Run()
 {
     OpenNetworkLogFile();
     BuildLocalIpv4List();
+
+#ifdef _WIN32
+    struct ScopedHighResolutionTimer
+    {
+        bool enabled = false;
+        ScopedHighResolutionTimer()
+        {
+            enabled = (timeBeginPeriod(1) == TIMERR_NOERROR);
+        }
+        ~ScopedHighResolutionTimer()
+        {
+            if (enabled)
+            {
+                (void)timeEndPeriod(1);
+            }
+        }
+    } highResolutionTimer;
+#endif
 
     (void)LoadControlsConfig();
     (void)LoadGraphicsConfig();
@@ -584,6 +604,7 @@ bool App::Run()
     float currentFps = 0.0F;
     double fpsAccumulator = 0.0;
     int fpsFrames = 0;
+    auto nextFrameDeadline = std::chrono::steady_clock::now();
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
@@ -894,7 +915,7 @@ bool App::Run()
         {
             const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
-            
+
             m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
             game::ui::ScreenEffectsState screenState;
             screenState.terrorRadiusActive = hudState.terrorRadiusVisible;
@@ -903,7 +924,7 @@ bool App::Run()
             screenState.lowHealthActive = (hudState.survivorStateName == "Injured" || hudState.survivorStateName == "Downed");
             screenState.lowHealthIntensity = hudState.survivorStateName == "Downed" ? 0.6F : 0.3F;
             m_screenEffects.Render(screenState);
-            
+
             if (hudState.skillCheckActive)
             {
                 if (!m_skillCheckWheel.IsActive())
@@ -927,7 +948,7 @@ bool App::Run()
             }
             m_skillCheckWheel.Update(static_cast<float>(m_time.DeltaSeconds()));
             m_skillCheckWheel.Render();
-            
+
             game::ui::GeneratorProgressState genState;
             genState.isActive = hudState.repairingGenerator || hudState.generatorsCompleted > 0;
             genState.isRepairing = hudState.repairingGenerator;
@@ -956,11 +977,11 @@ bool App::Run()
         if (m_connectingLoadingActive)
         {
             const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
-            
+
             // Solo mode dismisses faster (2s), multiplayer has 15s timeout
             const bool isSoloMode = m_joinTargetIp.empty();
             const double timeout = isSoloMode ? 2.0 : 15.0;
-            
+
             if (elapsed > timeout)
             {
                 std::cout << "[Loading] Timeout after " << timeout << "s, dismissing loading screen\n";
@@ -970,7 +991,7 @@ bool App::Run()
             {
                 // Fake progress: asymptotically approach 0.95 over ~8 seconds
                 const float fakeProgress = std::min(0.95F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
-                
+
                 std::string step;
                 std::string tip;
                 if (isSoloMode)
@@ -1015,6 +1036,7 @@ bool App::Run()
             toolbarContext.showMovementWindow = &m_showMovementWindow;
             toolbarContext.showStatsWindow = &m_showStatsWindow;
             toolbarContext.showControlsWindow = &m_showControlsWindow;
+            toolbarContext.profilerToggle = [this]() { m_profilerOverlay.Toggle(); };
             toolbarContext.showUiTestPanel = &m_showUiTestPanel;
             toolbarContext.showLoadingScreenTestPanel = &m_showLoadingScreenTestPanel;
             toolbarContext.fps = currentFps;
@@ -1329,7 +1351,38 @@ bool App::Run()
             m_window.SwapBuffers();
         }
 
-        profiler.EndFrame();
+        int effectiveFpsLimit = m_fpsLimit;
+        if (m_appMode == AppMode::Lobby && !m_vsyncEnabled)
+        {
+            effectiveFpsLimit = 60;
+        }
+
+        // Avoid dual-throttling (VSync + manual cap), which causes frame pacing jitter.
+        // Use manual FPS limiter only when VSync is disabled.
+        if (!m_vsyncEnabled && effectiveFpsLimit > 0)
+        {
+            const auto targetDuration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / static_cast<double>(effectiveFpsLimit)));
+
+            const auto now = std::chrono::steady_clock::now();
+            if (nextFrameDeadline < now)
+            {
+                nextFrameDeadline = now;
+            }
+            nextFrameDeadline += targetDuration;
+
+            // With high-resolution timer enabled on Windows, direct sleep_until gives
+            // smoother pacing and lower CPU usage than spin/yield busy waiting.
+            if (nextFrameDeadline > std::chrono::steady_clock::now())
+            {
+                std::this_thread::sleep_until(nextFrameDeadline);
+            }
+        }
+        else
+        {
+            // Reset timeline when limiter is inactive to avoid drift after runtime toggles.
+            nextFrameDeadline = std::chrono::steady_clock::now();
+        }
 
         const double frameEnd = glfwGetTime();
         const double frameDelta = frameEnd - frameStart;
@@ -1342,15 +1395,7 @@ bool App::Run()
             fpsFrames = 0;
         }
 
-        if (!m_vsyncEnabled && m_fpsLimit > 0)
-        {
-            const double targetSeconds = 1.0 / static_cast<double>(m_fpsLimit);
-            const double elapsed = glfwGetTime() - frameStart;
-            if (elapsed < targetSeconds)
-            {
-                std::this_thread::sleep_for(std::chrono::duration<double>(targetSeconds - elapsed));
-            }
-        }
+        profiler.EndFrame();
     }
 
     TransitionNetworkState(NetworkState::Disconnecting, "Application shutdown");
@@ -5644,57 +5689,6 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         return true;
     };
 
-    const engine::ui::UiRect topLeft{
-        m_hudLayout.topLeftOffset.x * scale,
-        m_hudLayout.topLeftOffset.y * scale,
-        420.0F * scale,
-        260.0F * scale,
-    };
-    m_ui.BeginPanel("hud_top_left_custom", topLeft, true);
-    m_ui.Label(hudState.roleName + " | " + hudState.cameraModeName, 1.05F);
-    m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
-    m_ui.Label("Render: " + hudState.renderModeName + " | FPS: " + std::to_string(static_cast<int>(fps)), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Speed: " + std::to_string(hudState.playerSpeed) + " | Grounded: " + (hudState.grounded ? "yes" : "no"), m_ui.Theme().colorTextMuted);
-    m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
-    m_ui.Label(
-        "Generators: " + std::to_string(hudState.generatorsCompleted) + "/" + std::to_string(hudState.generatorsTotal),
-        m_ui.Theme().colorAccent
-    );
-    m_ui.Label(
-        "Survivor: " + hudState.survivorCharacterId + " | Killer: " + hudState.killerCharacterId,
-        m_ui.Theme().colorTextMuted
-    );
-    m_ui.Label(
-        "Item: " + hudState.survivorItemId +
-            " [" + hudState.survivorItemAddonA + ", " + hudState.survivorItemAddonB + "]"
-            " charges=" + std::to_string(hudState.survivorItemCharges) +
-            " uses=" + std::to_string(hudState.survivorItemUsesRemaining),
-        hudState.survivorItemActive ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
-    );
-    m_ui.Label(
-        "Power: " + hudState.killerPowerId +
-            " [" + hudState.killerPowerAddonA + ", " + hudState.killerPowerAddonB + "]"
-            " traps=" + std::to_string(hudState.activeTrapCount) +
-            " carry=" + std::to_string(hudState.carriedTrapCount),
-        m_ui.Theme().colorTextMuted
-    );
-    if (hudState.killerPowerId == "wraith_cloak")
-    {
-        m_ui.Label(
-            std::string("Wraith: ") + (hudState.wraithCloaked ? "CLOAKED" : "VISIBLE") +
-                " haste=" + std::to_string(hudState.wraithPostUncloakHasteSeconds),
-            hudState.wraithCloaked ? m_ui.Theme().colorAccent : m_ui.Theme().colorTextMuted
-        );
-    }
-    if (hudState.survivorStateName == "Trapped")
-    {
-        m_ui.Label(
-            "TRAPPED attempts: " + std::to_string(hudState.trappedEscapeAttempts) +
-                " chance: " + std::to_string(static_cast<int>(hudState.trappedEscapeChance * 100.0F)) + "%",
-            m_ui.Theme().colorDanger
-        );
-    }
-    m_ui.EndPanel();
     const bool showOverlay = m_showDebugOverlay;
     const bool showMovement = m_showMovementWindow && showOverlay;
     const bool showStats = m_showStatsWindow && showOverlay;

@@ -2497,6 +2497,27 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess("FPS limit: " + std::to_string(fps));
         });
 
+        RegisterCommand("fps_info", "Show current FPS limiting state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            std::ostringstream ss;
+            ss << "=== FPS State ===\n";
+            bool vsyncEnabled = false;
+            if (context.vsync != nullptr)
+            {
+                vsyncEnabled = *context.vsync;
+                ss << "  VSync: " << (vsyncEnabled ? "ON" : "OFF") << "\n";
+            }
+            if (context.fpsLimit != nullptr)
+            {
+                ss << "  FPS Limit: " << *context.fpsLimit << "\n";
+                if (vsyncEnabled && *context.fpsLimit > 0)
+                {
+                    ss << "  Manual limiter: inactive (VSync pacing active)\n";
+                }
+            }
+            ss << "=================";
+            LogSuccess(ss.str());
+        });
+
         RegisterCommand("set_tick 30|60", "Set fixed simulation tick rate", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (tokens.size() != 2 || context.setTickRate == nullptr)
             {

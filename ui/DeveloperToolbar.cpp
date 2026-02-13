@@ -233,6 +233,18 @@ void DeveloperToolbar::Render(const ToolbarContext& context)
             }
         }
 
+        if (context.profilerToggle)
+        {
+            if (ImGui::Button("Profiler"))
+            {
+                context.profilerToggle();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Toggle Performance Profiler (prof command)");
+            }
+        }
+
         ImGui::PopStyleColor(3);
 
         // Separator before F6/F7 tools

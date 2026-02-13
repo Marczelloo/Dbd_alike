@@ -93,6 +93,17 @@ As of 2026-02-12, the following refactoring has been completed:
 - Expand baking outputs (albedo/normal/roughness export in modular pipeline).
 - Add cache manifest (`.cache/manifest.json`) with per-asset hash keys.
 
+## Update (2026-02-13): FPS Limit Fix
+
+### Fixed
+- **FPS limit not respected when VSync enabled**
+  - Root cause: dual throttling (`VSync` + manual sleep limiter) caused uneven frame pacing and perceived stutter.
+  - Fix: manual FPS limiter runs only when `VSync` is OFF; when `VSync` is ON, swap interval pacing is used.
+  - Improvement: limiter uses a steadier `steady_clock` schedule (`sleep_until` + short yield window) to reduce jitter when uncapped by VSync.
+  - Fix (follow-up): FPS/profiler timing now measures frame duration **after** limiter wait, so displayed FPS reflects actual presented cadence.
+  - Fix (follow-up 2, Windows): enable high-resolution timer (`timeBeginPeriod(1)`) during app run and remove busy spin/yield tail from limiter. This reduces CPU usage and stabilizes cap accuracy.
+  - File: `engine/core/App.cpp` main loop frame timing
+
 ## Update (2026-02-14): Profiler + High-Poly + Editor API follow-up
 
 ### Completed
