@@ -1162,20 +1162,6 @@ void Renderer::DrawBillboards(
         return;
     }
 
-    glm::vec3 camForward = glm::normalize(cameraPosition);
-    if (glm::length(camForward) < 0.5F)
-    {
-        camForward = glm::vec3{0.0F, 0.0F, -1.0F};
-    }
-
-    glm::vec3 up{0.0F, 1.0F, 0.0F};
-    glm::vec3 right = glm::normalize(glm::cross(up, camForward));
-    if (glm::length(right) < 0.1F)
-    {
-        right = glm::vec3{1.0F, 0.0F, 0.0F};
-    }
-    up = glm::normalize(glm::cross(camForward, right));
-
     for (std::size_t i = 0; i < count; ++i)
     {
         const BillboardData& b = billboards[i];

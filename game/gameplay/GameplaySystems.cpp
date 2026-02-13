@@ -410,18 +410,24 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     if (survivorCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Survivor))
     {
         ExecuteInteractionForRole(m_survivor, survivorCandidate);
+        m_physicsDirty = true;
     }
     const InteractionCandidate killerCandidate = ResolveInteractionCandidateFromView(m_killer);
     if (killerCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Killer))
     {
         ExecuteInteractionForRole(m_killer, killerCandidate);
+        m_physicsDirty = true;
     }
 
     UpdateKillerAttack(killerCommand, fixedDt);
 
     UpdatePalletBreak(fixedDt);
 
-    RebuildPhysicsWorld();
+    if (m_physicsDirty)
+    {
+        RebuildPhysicsWorld();
+        m_physicsDirty = false;
+    }
     UpdateChaseState(fixedDt);
     UpdateBloodlust(fixedDt);
     UpdateInteractionCandidate();
@@ -4202,6 +4208,7 @@ void GameplaySystems::UpdatePalletBreak(float fixedDt)
     {
         pallet.state = engine::scene::PalletState::Broken;
         pallet.halfExtents = glm::vec3{0.12F, 0.08F, 0.12F};
+        m_physicsDirty = true;
         auto transformIt = m_world.Transforms().find(m_killerBreakingPallet);
         if (transformIt != m_world.Transforms().end())
         {
@@ -4592,13 +4599,13 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
     }
 
     // Fallback: if camera cast misses while sprinting, still resolve entities from local trigger volumes.
-    const std::vector<engine::physics::TriggerHit> nearbyVaultTriggers = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
         engine::physics::TriggerKind::Vault
     );
-    for (const engine::physics::TriggerHit& hit : nearbyVaultTriggers)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (!visited.insert(hit.entity).second)
         {
@@ -4607,13 +4614,13 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
         processTriggerEntity(hit.entity, 0.12F);
     }
 
-    const std::vector<engine::physics::TriggerHit> nearbyInteractionTriggers = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
         engine::physics::TriggerKind::Interaction
     );
-    for (const engine::physics::TriggerHit& hit : nearbyInteractionTriggers)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (!visited.insert(hit.entity).second)
         {
@@ -4669,7 +4676,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildWindowVaultCandidate
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransform.position,
         actor.capsuleRadius,
         actor.capsuleHeight,
@@ -4677,7 +4684,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildWindowVaultCandidate
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == windowEntity)
         {
@@ -4752,7 +4759,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildStandingPalletCandid
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -4760,7 +4767,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildStandingPalletCandid
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == palletEntity)
         {
@@ -4828,7 +4835,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildDroppedPalletCandida
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -4836,7 +4843,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildDroppedPalletCandida
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == palletEntity)
         {
@@ -5054,7 +5061,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildGeneratorRepairCandi
         return candidate;
     }
 
-    const std::vector<engine::physics::TriggerHit> hits = m_physics.QueryCapsuleTriggers(
+    m_physics.QueryCapsuleTriggers(m_triggerHitBuf,
         actorTransformIt->second.position,
         actorIt->second.capsuleRadius,
         actorIt->second.capsuleHeight,
@@ -5062,7 +5069,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildGeneratorRepairCandi
     );
 
     bool inTrigger = false;
-    for (const engine::physics::TriggerHit& hit : hits)
+    for (const engine::physics::TriggerHit& hit : m_triggerHitBuf)
     {
         if (hit.entity == generatorEntity)
         {

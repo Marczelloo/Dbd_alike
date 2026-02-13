@@ -208,6 +208,19 @@ std::vector<TriggerHit> PhysicsWorld::QueryCapsuleTriggers(
 ) const
 {
     std::vector<TriggerHit> result;
+    QueryCapsuleTriggers(result, position, radius, capsuleHeight, kind);
+    return result;
+}
+
+void PhysicsWorld::QueryCapsuleTriggers(
+    std::vector<TriggerHit>& result,
+    const glm::vec3& position,
+    float radius,
+    float capsuleHeight,
+    TriggerKind kind
+) const
+{
+    result.clear();
     const float capsuleHalfSegment = std::max(0.0F, capsuleHeight * 0.5F - radius);
 
     for (const TriggerVolume& trigger : m_triggers)
@@ -227,8 +240,6 @@ std::vector<TriggerHit> PhysicsWorld::QueryCapsuleTriggers(
             result.push_back(TriggerHit{trigger.entity, trigger.kind});
         }
     }
-
-    return result;
 }
 
 std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(

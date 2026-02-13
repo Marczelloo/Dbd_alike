@@ -109,6 +109,15 @@ public:
         TriggerKind kind
     ) const;
 
+    /// Output-parameter version that reuses caller's buffer (avoids heap allocation).
+    void QueryCapsuleTriggers(
+        std::vector<TriggerHit>& out,
+        const glm::vec3& position,
+        float radius,
+        float capsuleHeight,
+        TriggerKind kind
+    ) const;
+
     [[nodiscard]] std::vector<TriggerCastHit> SphereCastTriggers(
         const glm::vec3& from,
         const glm::vec3& to,

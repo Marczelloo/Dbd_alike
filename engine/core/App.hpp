@@ -247,7 +247,7 @@ private:
     void ApplyAudioSettings();
     bool LoadTerrorRadiusProfile(const std::string& killerId);
     void StopTerrorRadiusAudio();
-    void UpdateTerrorRadiusAudio(float deltaSeconds);
+    void UpdateTerrorRadiusAudio(float deltaSeconds, const game::gameplay::HudState& hudState);
     [[nodiscard]] std::string DumpTerrorRadiusState() const;
     void SendGameplayTuningToClient();
     void ApplyMapEnvironment(const std::string& mapName);

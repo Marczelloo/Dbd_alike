@@ -536,21 +536,44 @@ void UiSystem::EndFrame()
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
 
+    // Consolidate all batch vertices into one upload to reduce driver overhead.
+    std::size_t totalVertices = 0;
     for (const DrawBatch& batch : m_batches)
     {
-        if (batch.vertices.empty())
+        totalVertices += batch.vertices.size();
+    }
+    if (totalVertices > 0)
+    {
+        // Upload all vertices in one glBufferData call.
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(totalVertices * sizeof(QuadVertex)), nullptr, GL_DYNAMIC_DRAW);
+        GLintptr offset = 0;
+        for (const DrawBatch& batch : m_batches)
         {
-            continue;
+            if (!batch.vertices.empty())
+            {
+                glBufferSubData(GL_ARRAY_BUFFER, offset, static_cast<GLsizeiptr>(batch.vertices.size() * sizeof(QuadVertex)), batch.vertices.data());
+                offset += static_cast<GLintptr>(batch.vertices.size() * sizeof(QuadVertex));
+            }
         }
-        const int sx = batch.clip.x;
-        const int syTop = batch.clip.y;
-        const int sw = batch.clip.w;
-        const int sh = batch.clip.h;
-        const int sy = m_screenHeight - (syTop + sh);
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(sx, std::max(0, sy), sw, sh);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(batch.vertices.size() * sizeof(QuadVertex)), batch.vertices.data());
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batch.vertices.size()));
+
+        // Draw each batch as a sub-range with its scissor rect.
+        GLint vertexOffset = 0;
+        for (const DrawBatch& batch : m_batches)
+        {
+            if (batch.vertices.empty())
+            {
+                continue;
+            }
+            const int sx = batch.clip.x;
+            const int syTop = batch.clip.y;
+            const int sw = batch.clip.w;
+            const int sh = batch.clip.h;
+            const int sy = m_screenHeight - (syTop + sh);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(sx, std::max(0, sy), sw, sh);
+            glDrawArrays(GL_TRIANGLES, vertexOffset, static_cast<GLsizei>(batch.vertices.size()));
+            vertexOffset += static_cast<GLint>(batch.vertices.size());
+        }
     }
 
     glDisable(GL_SCISSOR_TEST);

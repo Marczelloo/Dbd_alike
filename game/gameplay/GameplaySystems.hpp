@@ -1079,6 +1079,8 @@ private:
     bool m_trapPreviewActive = false;
     bool m_trapPreviewValid = true;
     engine::render::Frustum m_frustum{};
+    bool m_physicsDirty = false; // Set when interactions change collision geometry; triggers deferred RebuildPhysicsWorld.
+    mutable std::vector<engine::physics::TriggerHit> m_triggerHitBuf; // Reusable buffer for trigger queries (avoids per-call heap alloc).
     engine::render::StaticBatcher m_staticBatcher{};
 
     [[nodiscard]] static engine::scene::Role OppositeRole(engine::scene::Role role);

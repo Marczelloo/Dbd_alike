@@ -706,13 +706,15 @@ bool App::Run()
             m_time.ConsumeFixedStep();
         }
 
+        std::optional<game::gameplay::HudState> frameHudState;
         if (inGame)
         {
             PROFILE_SCOPE("Update");
             const bool canLookLocally = controlsEnabled && m_multiplayerMode != MultiplayerMode::Client;
             m_gameplay.Update(static_cast<float>(m_time.DeltaSeconds()), m_input, canLookLocally);
             m_audio.SetListener(m_gameplay.CameraPosition(), m_gameplay.CameraForward());
-            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()));
+            frameHudState = m_gameplay.BuildHudState();
+            UpdateTerrorRadiusAudio(static_cast<float>(m_time.DeltaSeconds()), *frameHudState);
         }
         else if (inEditor)
         {
@@ -774,7 +776,6 @@ bool App::Run()
         bool shouldQuit = false;
         bool closePauseMenu = false;
         bool backToMenu = false;
-        std::optional<game::gameplay::HudState> frameHudState;
 
         m_console.BeginFrame();
 
@@ -869,7 +870,6 @@ bool App::Run()
 
         if (m_appMode == AppMode::InGame)
         {
-            frameHudState = m_gameplay.BuildHudState();
             const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
             
@@ -3830,7 +3830,7 @@ void App::StopTerrorRadiusAudio()
     m_terrorAudioProfile.loaded = false;
 }
 
-void App::UpdateTerrorRadiusAudio(float deltaSeconds)
+void App::UpdateTerrorRadiusAudio(float deltaSeconds, const game::gameplay::HudState& hudState)
 {
     if (!m_terrorAudioProfile.loaded || m_appMode != AppMode::InGame)
     {
@@ -3862,8 +3862,6 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds)
         m_chaseWasActive = false;
         return;
     }
-
-    const game::gameplay::HudState hudState = m_gameplay.BuildHudState();
 
     // Early exit for Killer: only chase layer matters
     if (localPlayerIsKiller)
