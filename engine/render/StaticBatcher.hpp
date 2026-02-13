@@ -24,7 +24,7 @@ public:
     void AddBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec3& color);
     void EndBuild();
 
-    void Render(const glm::mat4& viewProjection, const Frustum& frustum, unsigned int shaderProgram, int viewProjLocation);
+    void Render(const glm::mat4& viewProjection, const Frustum& frustum, unsigned int shaderProgram, int viewProjLocation, int modelLocation = -1);
     void Clear();
 
     [[nodiscard]] bool IsBuilt() const { return m_built; }

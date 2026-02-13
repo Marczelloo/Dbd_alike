@@ -2162,28 +2162,8 @@ GeneratedMap TileGenerator::GenerateBenchmarkMap() const
         });
     }
     
-    // High-res grid planes (terrain-like, many vertices)
-    // 64x64 grid = ~8k quads = ~16k triangles per plane
-    // Raised to Y=0.35 to sit on top of pedestal (at Y=0.3)
-    for (int plane = 0; plane < 4; ++plane)
-    {
-        const float planeAngle = static_cast<float>(plane) * glm::radians(90.0F) + glm::radians(22.5F);
-        const glm::vec3 planePos = highPolyCenter + glm::vec3{
-            glm::cos(planeAngle) * 15.0F,
-            0.05F,  // Very thin, sitting just above pedestal
-            glm::sin(planeAngle) * 15.0F
-        };
-        
-        map.highPolyMeshes.push_back(HighPolyMeshSpawn{
-            planePos,
-            glm::vec3{0.0F, glm::degrees(planeAngle), 0.0F},
-            glm::vec3{4.0F, 0.1F, 4.0F},  // Thin Y scale
-            glm::vec3{0.3F, 0.35F + static_cast<float>(plane) * 0.1F, 0.3F},
-            HighPolyMeshSpawn::Type::GridPlane,
-            6,  // 64x64 grid = ~16k triangles
-            false  // No shadows for ground planes
-        });
-    }
+    // Grid planes removed — they looked like grass and added ~64k triangles
+    // with no meaningful collision or gameplay purpose.
     
     // Spiral staircases (many small steps = many triangles)
     for (int stair = 0; stair < 2; ++stair)

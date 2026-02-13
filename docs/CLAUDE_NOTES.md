@@ -350,5 +350,61 @@ Fixes:
 
 **Known Limitations**:
 - OpenGL context is single-threaded (all GPU submit on main thread)
-- Vertex buffer building (Renderer::DrawMesh) is still sequential
+- ~~Vertex buffer building (Renderer::DrawMesh) is still sequential~~ — Solved by GPU mesh cache (see below)
 - Full parallel rendering would require Vulkan/DX12 or thread-local GL contexts
+
+## Update (2026-02-14): GPU Mesh Cache + Memory Leak Fix
+
+Branch: `performance-optimisations`
+
+### Root Cause Analysis
+
+**111ms Render Submit bottleneck**: `DrawMesh()` transformed every vertex CPU-side every frame:
+`position = pos + rotation * (p * scale)` per vertex, pushed into `m_solidVertices`, then
+re-uploaded ~489K vertices via `glBufferSubData` each frame.
+
+**Memory leak on map change**: `std::vector::clear()` retains allocated capacity.
+High-poly MeshGeometry data (hundreds of thousands of vec3/u16 elements) stayed allocated.
+
+**0/27 threading**: JobSystem only triggers for >256 items; real CPU work was per-vertex
+transforms in DrawMesh which is inherently sequential. Eliminated entirely by GPU cache.
+
+### GPU Mesh Cache System
+
+New API in `engine/render/Renderer`:
+- `UploadMesh(geometry)` → uploads vertex data to persistent GPU VBO+VAO (GL_STATIC_DRAW), returns `GpuMeshId`
+- `DrawGpuMesh(id, modelMatrix)` → queues draw with per-instance model matrix
+- `FreeGpuMesh(id)` / `FreeAllGpuMeshes()` → deletes GL resources
+
+Solid vertex shader now uses `uniform mat4 uModel`:
+- `gl_Position = uViewProjection * uModel * vec4(aPosition, 1.0)`
+- `vNormal = mat3(uModel) * aNormal`
+- Identity matrix set for immediate-mode draws (backward compatible)
+
+### High-Poly Mesh Rendering Rewrite
+
+`RenderHighPolyMeshes()` now uses lazy GPU upload:
+1. First frame: uploads geometry via `UploadMesh()`, then clears CPU-side geometry data
+2. Subsequent frames: issues `DrawGpuMesh()` with model matrix (translate/rotate/scale)
+3. No per-frame vertex transforms, no CPU-side geometry retained after upload
+
+### Memory Leak Fixes
+
+1. **Swap-to-empty pattern** in `BuildSceneFromGeneratedMap()`:
+   `{ std::vector<HighPolyMesh> empty; m_highPolyMeshes.swap(empty); }` — forces RAM release
+2. **GPU resource cleanup**: `FreeGpuMesh()` called for all uploaded meshes before map change
+3. **PhysicsWorld::Clear()**: Added `shrink_to_fit()` for m_solids, m_triggers, scratch buffers
+4. **Transient buffer shrink**: BeginFrame reclaims `m_solidVertices` capacity when >256K and >4× last frame usage
+
+### Other Optimizations
+- **DrawGrid**: halfSize reduced 60→40 (fewer grid lines drawn)
+- **StaticBatcher**: passes model matrix location, sets identity for static geometry
+
+### Files Modified
+- `engine/render/Renderer.hpp` — GPU mesh cache API, GpuMeshId/GpuMeshInfo/GpuMeshDraw types
+- `engine/render/Renderer.cpp` — Shader uModel uniform, GPU cache implementation, buffer shrink
+- `engine/render/StaticBatcher.hpp/.cpp` — Model matrix uniform support
+- `engine/physics/PhysicsWorld.cpp` — shrink_to_fit in Clear()
+- `game/gameplay/GameplaySystems.hpp` — GpuMeshId fields, upload flag, renderer pointer
+- `game/gameplay/GameplaySystems.cpp` — Lazy GPU upload, swap-to-empty cleanup, DrawGrid reduction
+- `game/maps/TileGenerator.cpp` — Removed GridPlane "grass" from benchmark Zone 16

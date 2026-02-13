@@ -45,10 +45,14 @@ int CellCoord(float value, float cellSize)
 void PhysicsWorld::Clear()
 {
     m_solids.clear();
+    m_solids.shrink_to_fit();
     m_triggers.clear();
+    m_triggers.shrink_to_fit();
     m_spatialCells.clear();
     m_spatialScratch.clear();
+    m_spatialScratch.shrink_to_fit();
     m_spatialVisitStamp.clear();
+    m_spatialVisitStamp.shrink_to_fit();
     m_spatialCurrentStamp = 1;
     m_spatialDirty = true;
 }

@@ -322,3 +322,33 @@ For benchmark high-poly meshes, render full geometry only within a near distance
 ### Trade-offs
 - Pro: Significant perf gain on stress map and camera sweeps.
 - Con: Distant geometry fidelity is intentionally reduced.
+
+## GPU Mesh Cache: Static Upload vs Per-Frame DrawMesh (2026-02-14)
+
+### Decision
+Upload high-poly mesh geometry to persistent GPU VBOs once, then draw via per-instance model matrix uniform — instead of CPU-transforming every vertex each frame.
+
+### Rationale
+1. **Performance**: DrawMesh() transformed ~489K vertices CPU-side every frame (111ms). GPU upload once + model matrix draw eliminates this entirely.
+2. **Memory**: CPU-side geometry data freed after GPU upload — no longer retained in RAM.
+3. **Compatibility**: Solid vertex shader now uses `uModel` uniform; identity matrix set for legacy immediate draws (fully backward compatible).
+4. **Simplicity**: Clean API — `UploadMesh()` / `DrawGpuMesh()` / `FreeGpuMesh()`.
+
+### Trade-offs
+- Pro: Eliminates largest CPU bottleneck; frees geometry RAM; no regression for existing draws.
+- Con: Mesh geometry is immutable after upload (fine for static props; dynamic meshes still use DrawMesh).
+
+## Memory Leak Fix: Swap-to-Empty vs clear() (2026-02-14)
+
+### Decision
+Use swap-to-empty idiom + shrink_to_fit instead of clear() for map-change cleanup.
+
+### Rationale
+1. `std::vector::clear()` retains allocated capacity — hundreds of MB never returned to OS on map change.
+2. Swap-to-empty (`{ std::vector<T> tmp; v.swap(tmp); }`) guarantees deallocation.
+3. `shrink_to_fit()` in PhysicsWorld::Clear() for secondary containers.
+4. Transient renderer buffer (`m_solidVertices`) uses capacity heuristic: shrink when >256K and >4× last frame usage.
+
+### Trade-offs
+- Pro: RAM drops correctly on map change; no indefinite growth.
+- Con: Re-allocation cost on next map load (negligible — one-time during load).

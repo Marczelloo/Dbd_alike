@@ -141,7 +141,8 @@ void StaticBatcher::Render(
     const glm::mat4& viewProjection,
     const Frustum& frustum,
     unsigned int shaderProgram,
-    int viewProjLocation
+    int viewProjLocation,
+    int modelLocation
 )
 {
     if (!m_built || m_vao == 0 || m_chunks.empty())
@@ -207,6 +208,11 @@ void StaticBatcher::Render(
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(viewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+    if (modelLocation >= 0)
+    {
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(identity));
+    }
 
     glBindVertexArray(m_vao);
     glMultiDrawArrays(

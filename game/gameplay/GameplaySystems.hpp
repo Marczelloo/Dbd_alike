@@ -877,6 +877,7 @@ private:
         const glm::vec3& survivorPos); // Uses ±35° center FOV (DBD-like)
 
     engine::core::EventBus* m_eventBus = nullptr;
+    engine::render::Renderer* m_rendererPtr = nullptr;  // Set on first Render call, used for GPU resource cleanup.
 
     engine::scene::World m_world;
     engine::physics::PhysicsWorld m_physics;
@@ -1172,6 +1173,8 @@ private:
     {
         engine::render::MeshGeometry geometry;
         engine::render::MeshGeometry mediumLodGeometry;
+        engine::render::Renderer::GpuMeshId gpuFullLod = engine::render::Renderer::kInvalidGpuMesh;
+        engine::render::Renderer::GpuMeshId gpuMediumLod = engine::render::Renderer::kInvalidGpuMesh;
         glm::vec3 position{0.0F};
         glm::vec3 rotation{0.0F};
         glm::vec3 scale{1.0F};
@@ -1180,6 +1183,7 @@ private:
     };
     std::vector<HighPolyMesh> m_highPolyMeshes;
     bool m_highPolyMeshesGenerated = false;
+    bool m_highPolyMeshesUploaded = false;
 };
 
 } // namespace game::gameplay

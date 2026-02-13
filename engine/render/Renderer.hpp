@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/mat4x4.hpp>
@@ -166,6 +167,33 @@ public:
         const glm::vec3& cameraPosition
     );
 
+    // ─── GPU Mesh Cache (static geometry uploaded once, drawn per frame via model matrix) ───
+
+    using GpuMeshId = std::uint32_t;
+    static constexpr GpuMeshId kInvalidGpuMesh = 0;
+
+    struct GpuMeshInfo
+    {
+        unsigned int vao = 0;
+        unsigned int vbo = 0;
+        std::uint32_t vertexCount = 0;
+    };
+
+    /// Upload a MeshGeometry to a persistent GPU VBO.  Returns a handle for DrawGpuMesh.
+    /// Vertex data is baked in object-space (position, normal, single color, material).
+    GpuMeshId UploadMesh(const MeshGeometry& mesh, const glm::vec3& color, const MaterialParams& material = {});
+
+    /// Draw a previously-uploaded GPU mesh with a model matrix (position/rotation/scale).
+    void DrawGpuMesh(GpuMeshId id, const glm::mat4& modelMatrix);
+
+    /// Free a GPU mesh (VBO + VAO).  Safe to call with kInvalidGpuMesh.
+    void FreeGpuMesh(GpuMeshId id);
+
+    /// Free all GPU meshes.
+    void FreeAllGpuMeshes();
+
+    [[nodiscard]] int GetSolidModelLocation() const { return m_solidModelLocation; }
+
 private:
     struct LineVertex
     {
@@ -297,5 +325,19 @@ private:
     glm::vec3 m_postFxPulseColor{1.0F, 0.45F, 0.35F};
     float m_postFxPulseIntensity = 0.0F;
     Frustum m_frustum{};
+    int m_solidModelLocation = -1;
+    std::size_t m_lastFrameSolidCount = 0;  // For transient buffer shrink heuristic.
+
+    // GPU mesh cache
+    GpuMeshId m_nextGpuMeshId = 1;
+    std::unordered_map<GpuMeshId, GpuMeshInfo> m_gpuMeshes;
+
+    // Pending GPU mesh draws for the current frame (rendered in EndFrame after immediate-mode solid pass).
+    struct GpuMeshDraw
+    {
+        GpuMeshId meshId = kInvalidGpuMesh;
+        glm::mat4 modelMatrix{1.0F};
+    };
+    std::vector<GpuMeshDraw> m_gpuMeshDraws;
 };
 } // namespace engine::render

@@ -830,6 +830,7 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
 
 void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRatio)
 {
+    m_rendererPtr = &renderer;
     const glm::mat4 viewProjection = BuildViewProjection(aspectRatio);
     m_frustum.Extract(viewProjection);
 
@@ -980,7 +981,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
 
     renderer.SetSpotLights(std::move(m_runtimeSpotLights));
 
-    renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F}, glm::vec4{0.09F, 0.11F, 0.13F, 1.0F});
+    renderer.DrawGrid(40, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F}, glm::vec4{0.09F, 0.11F, 0.13F, 1.0F});
 
     renderer.DrawLine(glm::vec3{0.0F}, glm::vec3{2.0F, 0.0F, 0.0F}, glm::vec3{1.0F, 0.2F, 0.2F});
     renderer.DrawLine(glm::vec3{0.0F}, glm::vec3{0.0F, 2.0F, 0.0F}, glm::vec3{0.2F, 1.0F, 0.2F});
@@ -1025,7 +1026,8 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             viewProjection,
             m_frustum,
             renderer.GetSolidShaderProgram(),
-            renderer.GetSolidViewProjLocation()
+            renderer.GetSolidViewProjLocation(),
+            renderer.GetSolidModelLocation()
         );
     }
 
@@ -3388,8 +3390,20 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     m_loopDebugTiles.clear();
     m_spawnPoints.clear();
     m_nextSpawnPointId = 1;
-    m_highPolyMeshes.clear();
+
+    // Free GPU mesh resources before clearing the vector.
+    if (m_rendererPtr)
+    {
+        for (auto& mesh : m_highPolyMeshes)
+        {
+            m_rendererPtr->FreeGpuMesh(mesh.gpuFullLod);
+            m_rendererPtr->FreeGpuMesh(mesh.gpuMediumLod);
+        }
+    }
+    // Swap-to-empty to actually release RAM (clear() only resets size, not capacity).
+    { std::vector<HighPolyMesh> empty; m_highPolyMeshes.swap(empty); }
     m_highPolyMeshesGenerated = false;
+    m_highPolyMeshesUploaded = false;
 
     m_loopDebugTiles.reserve(generated.tiles.size());
     for (const auto& tile : generated.tiles)
@@ -7235,6 +7249,26 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
         return;
     }
 
+    // ─── Lazy GPU upload: move geometry to GPU VBOs once, then free CPU-side data ───
+    if (!m_highPolyMeshesUploaded)
+    {
+        for (auto& mesh : m_highPolyMeshes)
+        {
+            if (!mesh.geometry.positions.empty())
+            {
+                mesh.gpuFullLod = renderer.UploadMesh(mesh.geometry, mesh.color);
+                // Free CPU-side geometry data after GPU upload.
+                mesh.geometry = {};
+            }
+            if (!mesh.mediumLodGeometry.positions.empty())
+            {
+                mesh.gpuMediumLod = renderer.UploadMesh(mesh.mediumLodGeometry, mesh.color * 0.96F, engine::render::MaterialParams{0.65F, 0.0F, 0.0F, false});
+                mesh.mediumLodGeometry = {};
+            }
+        }
+        m_highPolyMeshesUploaded = true;
+    }
+
     // Frustum culling helper
     auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
         const glm::vec3 mins = center - halfExtents;
@@ -7312,34 +7346,32 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
         return a.second < b.second;
     });
 
-    // Render visible meshes (must be on main thread for OpenGL)
+    // Build model matrix helper
+    auto buildModelMatrix = [](const glm::vec3& position, const glm::vec3& rotation, const glm::vec3& scale) -> glm::mat4 {
+        glm::mat4 model{1.0F};
+        model = glm::translate(model, position);
+        model = glm::rotate(model, glm::radians(rotation.y), glm::vec3{0.0F, 1.0F, 0.0F});
+        model = glm::rotate(model, glm::radians(rotation.x), glm::vec3{1.0F, 0.0F, 0.0F});
+        model = glm::rotate(model, glm::radians(rotation.z), glm::vec3{0.0F, 0.0F, 1.0F});
+        model = glm::scale(model, scale);
+        return model;
+    };
+
+    // Render visible meshes using GPU-cached draw calls
     std::size_t fullDetailDraws = 0;
     for (const auto& [idx, distanceSq] : sortedVisible)
     {
         const auto& mesh = m_highPolyMeshes[idx];
+        const glm::mat4 modelMatrix = buildModelMatrix(mesh.position, mesh.rotation, mesh.scale);
 
-        if (distanceSq <= kHighPolyFullDetailDistanceSq && fullDetailDraws < kMaxFullDetailMeshes)
+        if (distanceSq <= kHighPolyFullDetailDistanceSq && fullDetailDraws < kMaxFullDetailMeshes && mesh.gpuFullLod != engine::render::Renderer::kInvalidGpuMesh)
         {
-            renderer.DrawMesh(
-                mesh.geometry,
-                mesh.position,
-                mesh.rotation,
-                mesh.scale,
-                mesh.color,
-                engine::render::MaterialParams{0.55F, 0.0F, 0.0F, false}
-            );
+            renderer.DrawGpuMesh(mesh.gpuFullLod, modelMatrix);
             ++fullDetailDraws;
         }
-        else if (distanceSq <= kHighPolyMediumDetailDistanceSq && !mesh.mediumLodGeometry.positions.empty())
+        else if (distanceSq <= kHighPolyMediumDetailDistanceSq && mesh.gpuMediumLod != engine::render::Renderer::kInvalidGpuMesh)
         {
-            renderer.DrawMesh(
-                mesh.mediumLodGeometry,
-                mesh.position,
-                mesh.rotation,
-                mesh.scale,
-                mesh.color * 0.96F,
-                engine::render::MaterialParams{0.65F, 0.0F, 0.0F, false}
-            );
+            renderer.DrawGpuMesh(mesh.gpuMediumLod, modelMatrix);
         }
         else
         {

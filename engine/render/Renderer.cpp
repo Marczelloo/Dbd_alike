@@ -56,6 +56,7 @@ layout (location = 2) in vec3 aColor;
 layout (location = 3) in vec4 aMaterial;
 
 uniform mat4 uViewProjection;
+uniform mat4 uModel;
 
 out vec3 vNormal;
 out vec3 vColor;
@@ -64,11 +65,12 @@ out vec4 vMaterial;
 
 void main()
 {
-    vNormal = aNormal;
+    vec4 worldPos = uModel * vec4(aPosition, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = mat3(uModel) * aNormal;
     vColor = aColor;
-    vWorldPos = aPosition;
     vMaterial = aMaterial;
-    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position = uViewProjection * worldPos;
 }
 )";
 
@@ -432,6 +434,7 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 
     m_lineViewProjLocation = glGetUniformLocation(m_lineProgram, "uViewProjection");
     m_solidViewProjLocation = glGetUniformLocation(m_solidProgram, "uViewProjection");
+    m_solidModelLocation = glGetUniformLocation(m_solidProgram, "uModel");
     m_solidCameraPosLocation = glGetUniformLocation(m_solidProgram, "uCameraPos");
     m_solidLightingEnabledLocation = glGetUniformLocation(m_solidProgram, "uLightingEnabled");
     m_solidLightDirLocation = glGetUniformLocation(m_solidProgram, "uLightDir");
@@ -477,6 +480,8 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 
 void Renderer::Shutdown()
 {
+    FreeAllGpuMeshes();
+
     if (m_lineVbo != 0)
     {
         glDeleteBuffers(1, &m_lineVbo);
@@ -611,6 +616,21 @@ void Renderer::BeginFrame(const glm::vec3& clearColor)
     m_solidVertices.clear();
     m_texturedVertices.clear();
     m_texturedBatches.clear();
+    m_gpuMeshDraws.clear();
+
+    // Periodically reclaim excess transient buffer capacity (e.g. after leaving benchmark).
+    // If capacity is >4× the last frame's usage or >256K, shrink to save RAM.
+    constexpr std::size_t kShrinkThreshold = 256U * 1024U;
+    if (m_solidVertices.capacity() > kShrinkThreshold && m_solidVertices.capacity() > m_lastFrameSolidCount * 4)
+    {
+        m_solidVertices.shrink_to_fit();
+        m_solidVertices.reserve(std::max<std::size_t>(32768, m_lastFrameSolidCount * 2));
+    }
+    if (m_lineVertices.capacity() > kShrinkThreshold)
+    {
+        m_lineVertices.shrink_to_fit();
+        m_lineVertices.reserve(8192);
+    }
 
     m_cloudPhase += 0.016F;
     glm::vec3 finalClear = clearColor;
@@ -730,6 +750,8 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
     {
         glUseProgram(m_solidProgram);
         glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(identity));
         uploadLightUniforms(
             m_solidLightDirLocation, m_solidLightColorLocation, m_solidLightIntensityLocation,
             m_solidCameraPosLocation, m_solidLightingEnabledLocation,
@@ -749,6 +771,44 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_solidVertices.size()));
         profiler.RecordDrawCall(static_cast<std::uint32_t>(m_solidVertices.size()), static_cast<std::uint32_t>(m_solidVertices.size() / 3));
         profiler.StatsMut().solidVboBytes = solidBytes;
+    }
+
+    // ─── GPU-cached mesh pass (uses same solid shader with per-draw model matrix) ───
+    if (!m_gpuMeshDraws.empty())
+    {
+        // Ensure solid shader is bound with correct shared uniforms.
+        const bool solidWasActive = !m_solidVertices.empty(); // shader already set up
+        if (!solidWasActive)
+        {
+            glUseProgram(m_solidProgram);
+            glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
+            uploadLightUniforms(
+                m_solidLightDirLocation, m_solidLightColorLocation, m_solidLightIntensityLocation,
+                m_solidCameraPosLocation, m_solidLightingEnabledLocation,
+                m_solidFogEnabledLocation, m_solidFogColorLocation, m_solidFogDensityLocation,
+                m_solidFogStartLocation, m_solidFogEndLocation,
+                m_solidPointLightCountLocation, m_solidPointLightPosRangeLocation, m_solidPointLightColorIntensityLocation,
+                m_solidSpotLightCountLocation, m_solidSpotLightPosRangeLocation, m_solidSpotLightDirInnerCosLocation,
+                m_solidSpotLightColorIntensityLocation, m_solidSpotLightOuterCosLocation
+            );
+        }
+
+        for (const GpuMeshDraw& draw : m_gpuMeshDraws)
+        {
+            const auto it = m_gpuMeshes.find(draw.meshId);
+            if (it == m_gpuMeshes.end() || it->second.vertexCount == 0)
+            {
+                continue;
+            }
+            glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(draw.modelMatrix));
+            glBindVertexArray(it->second.vao);
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(it->second.vertexCount));
+            profiler.RecordDrawCall(it->second.vertexCount, it->second.vertexCount / 3);
+        }
+
+        // Reset model matrix back to identity for subsequent passes.
+        const glm::mat4 identity{1.0F};
+        glUniformMatrix4fv(m_solidModelLocation, 1, GL_FALSE, glm::value_ptr(identity));
     }
 
     // ─── Textured pass ───
@@ -830,6 +890,8 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
 
     // No glBindBuffer(0)/glBindVertexArray(0)/glUseProgram(0) cleanup needed —
     // next frame's BeginFrame/EndFrame will set fresh state.
+
+    m_lastFrameSolidCount = m_solidVertices.size();
 }
 
 void Renderer::DrawLine(const glm::vec3& from, const glm::vec3& to, const glm::vec3& color)
@@ -1234,6 +1296,151 @@ void Renderer::DrawBillboards(
         m_solidVertices.push_back(SolidVertex{cornerRD, normal, color, material});
         m_solidVertices.push_back(SolidVertex{cornerRU, normal, color, material});
     }
+}
+
+// ─── GPU Mesh Cache ─────────────────────────────────────────────────────────
+
+Renderer::GpuMeshId Renderer::UploadMesh(const MeshGeometry& mesh, const glm::vec3& color, const MaterialParams& material)
+{
+    if (mesh.positions.empty())
+    {
+        return kInvalidGpuMesh;
+    }
+
+    // Build vertex data in object space (no transform applied).
+    const glm::vec4 packedMaterial{
+        glm::clamp(material.roughness, 0.0F, 1.0F),
+        glm::clamp(material.metallic, 0.0F, 1.0F),
+        glm::max(0.0F, material.emissive),
+        material.unlit ? 1.0F : 0.0F,
+    };
+
+    std::vector<SolidVertex> vertices;
+
+    auto emitTri = [&](std::uint32_t ia, std::uint32_t ib, std::uint32_t ic) {
+        if (ia >= mesh.positions.size() || ib >= mesh.positions.size() || ic >= mesh.positions.size())
+        {
+            return;
+        }
+        const glm::vec3& a = mesh.positions[ia];
+        const glm::vec3& b = mesh.positions[ib];
+        const glm::vec3& c = mesh.positions[ic];
+
+        glm::vec3 fallbackNormal = glm::cross(b - a, c - a);
+        if (glm::length(fallbackNormal) > 1.0e-6F)
+        {
+            fallbackNormal = glm::normalize(fallbackNormal);
+        }
+        else
+        {
+            fallbackNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+        }
+        const glm::vec3 nA = ia < mesh.normals.size() ? mesh.normals[ia] : fallbackNormal;
+        const glm::vec3 nB = ib < mesh.normals.size() ? mesh.normals[ib] : fallbackNormal;
+        const glm::vec3 nC = ic < mesh.normals.size() ? mesh.normals[ic] : fallbackNormal;
+        const glm::vec3 cA = glm::clamp(ia < mesh.colors.size() ? color * mesh.colors[ia] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+        const glm::vec3 cB = glm::clamp(ib < mesh.colors.size() ? color * mesh.colors[ib] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+        const glm::vec3 cC = glm::clamp(ic < mesh.colors.size() ? color * mesh.colors[ic] : color, glm::vec3{0.0F}, glm::vec3{1.0F});
+
+        vertices.push_back(SolidVertex{a, nA, cA, packedMaterial});
+        vertices.push_back(SolidVertex{b, nB, cB, packedMaterial});
+        vertices.push_back(SolidVertex{c, nC, cC, packedMaterial});
+    };
+
+    if (!mesh.indices.empty())
+    {
+        vertices.reserve(mesh.indices.size());
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
+        {
+            emitTri(mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]);
+        }
+    }
+    else
+    {
+        vertices.reserve(mesh.positions.size());
+        for (std::uint32_t i = 0; i + 2 < static_cast<std::uint32_t>(mesh.positions.size()); i += 3)
+        {
+            emitTri(i, i + 1, i + 2);
+        }
+    }
+
+    if (vertices.empty())
+    {
+        return kInvalidGpuMesh;
+    }
+
+    unsigned int vao = 0;
+    unsigned int vbo = 0;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(SolidVertex)), vertices.data(), GL_STATIC_DRAW);
+
+    constexpr GLsizei stride = sizeof(SolidVertex);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, position)));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, normal)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, color)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SolidVertex, material)));
+    glEnableVertexAttribArray(3);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    const GpuMeshId id = m_nextGpuMeshId++;
+    m_gpuMeshes[id] = GpuMeshInfo{vao, vbo, static_cast<std::uint32_t>(vertices.size())};
+    return id;
+}
+
+void Renderer::DrawGpuMesh(GpuMeshId id, const glm::mat4& modelMatrix)
+{
+    if (id == kInvalidGpuMesh)
+    {
+        return;
+    }
+    m_gpuMeshDraws.push_back(GpuMeshDraw{id, modelMatrix});
+}
+
+void Renderer::FreeGpuMesh(GpuMeshId id)
+{
+    if (id == kInvalidGpuMesh)
+    {
+        return;
+    }
+    const auto it = m_gpuMeshes.find(id);
+    if (it == m_gpuMeshes.end())
+    {
+        return;
+    }
+    if (it->second.vbo != 0)
+    {
+        glDeleteBuffers(1, &it->second.vbo);
+    }
+    if (it->second.vao != 0)
+    {
+        glDeleteVertexArrays(1, &it->second.vao);
+    }
+    m_gpuMeshes.erase(it);
+}
+
+void Renderer::FreeAllGpuMeshes()
+{
+    for (auto& [id, info] : m_gpuMeshes)
+    {
+        if (info.vbo != 0)
+        {
+            glDeleteBuffers(1, &info.vbo);
+        }
+        if (info.vao != 0)
+        {
+            glDeleteVertexArrays(1, &info.vao);
+        }
+    }
+    m_gpuMeshes.clear();
 }
 
 unsigned int Renderer::CompileShader(unsigned int type, const char* source)
