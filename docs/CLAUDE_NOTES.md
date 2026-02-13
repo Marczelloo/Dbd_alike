@@ -201,3 +201,61 @@ Branch: `performance-optimisations`
 
 - Reuse the existing perk system style (registry + loadout + active state + aggregated modifiers),
   but implement a separate data-driven framework for items/powers/add-ons to avoid mixing concerns.
+
+## Update (2026-02-13): Benchmark Map Implementation
+
+### New Feature: Comprehensive Benchmark Scene
+
+**Command**: `load map benchmark`
+
+**Purpose**: 
+1. Visual benchmark for rendering performance under load
+2. Collision edge case testing for physics validation
+3. AI/chase scenario stress testing
+
+**Map Statistics**:
+- Arena size: 100m x 100m (2.5x larger than main map)
+- 15 distinct test zones
+- ~400+ collision boxes
+- 16 windows, 16+ pallets
+- 4 corner spawn positions
+
+**Test Zones**:
+
+| Zone | Name | Purpose | Elements |
+|------|------|---------|----------|
+| 1 | Corner Corridors | Tight corner collision | 4 L-corridors (NW, NE, SW, SE), 1.2m wide |
+| 2 | Spiral Maze | Continuous collision checks | 4-ring spiral with segmented walls |
+| 3 | Staircase Pyramid | Step-up/gravity test | 6-tier pyramid with 0.5m height steps |
+| 4 | Pillar Forest | Rendering + broadphase | 4 rings × 16-64 pillars = ~160 pillars |
+| 5 | Narrow Slalom | Capsule slide test | 10 gates, 1.8m width |
+| 6 | Density Grid | Worst-case broadphase | 12×12 grid, ~100 small obstacles |
+| 7 | Complex Intersection | Multi-vault scenario | Central hub, 4 windows, 4 pallets |
+| 8 | Edge Case Corners | Acute angle collision | V-shaped walls at 30° angle |
+| 9 | Multi-Tier Platforms | Elevation changes | 4 platforms with 1.2m height differences |
+| 10 | Chaos Scatter | Random navigation | 40 random debris pieces |
+| 11 | Tunnel Gallery | LOS calculations | 30m tunnel with side passages |
+| 12 | Concentric Rings | Radial LOS test | 3 rings with 4 cardinal gaps each |
+| 13 | Biased Steps | Slanted surfaces | 8 stepped platforms |
+| 14 | Bridge Crossing | Precision movement | 20m bridge with 1.5m width |
+| 15 | Pallet Gallery | Rapid pallet cycling | 3×3 pallet grid |
+
+**Key Files Modified**:
+- `game/maps/TileGenerator.hpp`: Added `GenerateBenchmarkMap()` declaration
+- `game/maps/TileGenerator.cpp`: ~700 lines of zone generation code
+- `game/gameplay/GameplaySystems.hpp`: Added `MapType::Benchmark`
+- `game/gameplay/GameplaySystems.cpp`: Map name routing, `MapToName()` support
+- `ui/DeveloperConsole.cpp`: Updated command help
+
+**Debug Features**:
+- Tile debug markers for zone visualization
+- 5 generators distributed across zones
+- F2 shows colliders/triggers overlay
+
+**Testing Checklist**:
+1. `load map benchmark` - Verify map loads without errors
+2. Test collision in each zone (especially spiral, acute corners)
+3. Verify FPS with full scene rendered (filled vs wireframe)
+4. Test all windows and pallets function correctly
+5. Verify LOS calculations around concentric rings and tunnel
+6. Test chase scenarios through complex zones

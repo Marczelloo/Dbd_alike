@@ -1,6 +1,10 @@
 #pragma once
 
-namespace engine::core { class Profiler; }
+#include "engine/core/Profiler.hpp"
+
+namespace engine::core { 
+    class Profiler; 
+}
 
 namespace engine::ui
 {
@@ -32,6 +36,8 @@ private:
     void DrawRenderStats(engine::core::Profiler& profiler);
     void DrawBenchmarkPanel(engine::core::Profiler& profiler);
     void DrawCompactOverlay(engine::core::Profiler& profiler);
+    void DrawSystemTimings(engine::core::Profiler& profiler);
+    void DrawFrameTimeHistogram(engine::core::Profiler& profiler);
 
     bool m_visible = false;
     bool m_pinned = false;
@@ -40,6 +46,17 @@ private:
     // Graph state.
     float m_graphMax = 16.67F; // initial scale = 60 FPS
     bool m_autoScale = true;
+
+    // Update rate control.
+    float m_updateInterval = 0.0F;    // seconds (0 = every frame)
+    float m_timeSinceUpdate = 0.0F;
+    bool m_paused = false;
+    bool m_pauseOnAlt = true;         // auto-pause when Alt held
+
+    // Cached stats for display when paused/slow update.
+    engine::core::FrameStats m_cachedStats{};
+    std::vector<engine::core::ProfileSection> m_cachedSections;
+    bool m_hasCachedData = false;
 };
 
 } // namespace engine::ui

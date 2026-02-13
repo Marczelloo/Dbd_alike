@@ -341,7 +341,8 @@ public:
     {
         Test,
         Main,
-        CollisionTest
+        CollisionTest,
+        Benchmark
     };
 
     enum class CameraMode
@@ -1138,6 +1139,7 @@ private:
     void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
     void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
     void RenderBloodPools(engine::render::Renderer& renderer, bool localIsKiller) const;
+    void RenderHighPolyMeshes(engine::render::Renderer& renderer);
     [[nodiscard]] bool CanSeeScratchMarks(bool localIsKiller) const;
     [[nodiscard]] bool CanSeeBloodPools(bool localIsKiller) const;
 
@@ -1164,6 +1166,19 @@ private:
 
     // Cached vector to avoid per-frame heap allocation in Render().
     std::vector<engine::render::SpotLight> m_runtimeSpotLights;
+
+    // High-poly meshes for GPU stress testing (benchmark map)
+    struct HighPolyMesh
+    {
+        engine::render::MeshGeometry geometry;
+        glm::vec3 position{0.0F};
+        glm::vec3 rotation{0.0F};
+        glm::vec3 scale{1.0F};
+        glm::vec3 color{1.0F};
+        glm::vec3 halfExtents{1.0F};  // For frustum culling
+    };
+    std::vector<HighPolyMesh> m_highPolyMeshes;
+    bool m_highPolyMeshesGenerated = false;
 };
 
 } // namespace game::gameplay

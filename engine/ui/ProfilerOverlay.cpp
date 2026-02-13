@@ -27,40 +27,100 @@ void ProfilerOverlay::Draw([[maybe_unused]] engine::core::Profiler& profiler)
         return;
     }
 
-    const auto& stats = profiler.Stats();
+    // Check for Alt-held pause.
+    const bool altHeld = ImGui::GetIO().KeyAlt;
+    const bool shouldPause = m_pauseOnAlt && altHeld;
+    m_paused = shouldPause;
+
+    // Update cached data if not paused and interval elapsed.
+    const float dt = ImGui::GetIO().DeltaTime;
+    if (!m_paused)
+    {
+        m_timeSinceUpdate += dt;
+        if (m_timeSinceUpdate >= m_updateInterval)
+        {
+            m_timeSinceUpdate = 0.0F;
+            m_cachedStats = profiler.Stats();
+            m_cachedSections = profiler.Sections();
+            m_hasCachedData = true;
+        }
+    }
+
+    // Use cached data if available, otherwise live data.
+    const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
+    const auto& sections = m_hasCachedData ? m_cachedSections : profiler.Sections();
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     if (m_pinned)
     {
-        // When pinned, position at top-right of viewport.
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0F, viewport->WorkPos.y + 5.0F), ImGuiCond_Once);
-        ImGui::SetNextWindowSize(ImVec2(410.0F, 520.0F), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(410.0F, 560.0F), ImGuiCond_Once);
     }
     else
     {
-        ImGui::SetNextWindowSize(ImVec2(450.0F, 580.0F), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(450.0F, 620.0F), ImGuiCond_FirstUseEver);
     }
 
     bool open = m_visible;
     if (ImGui::Begin("Performance Profiler", &open, flags))
     {
-        // Header: FPS + frame time.
+        // Header with pause indicator.
+        if (m_paused)
+        {
+            ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "[PAUSED - Alt held]");
+            ImGui::SameLine();
+        }
+        
+        bool overBudget = stats.totalFrameMs > 16.67F;
+        ImVec4 msColor = overBudget ? ImVec4(1.0F, 0.5F, 0.3F, 1.0F) : ImVec4(0.4F, 1.0F, 0.4F, 1.0F);
+        
         ImGui::TextColored(ImVec4(0.4F, 1.0F, 0.4F, 1.0F), "FPS: %.0f", stats.fps);
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0F, 1.0F, 0.5F, 1.0F), " Avg: %.0f", stats.avgFps);
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0F, 0.6F, 0.3F, 1.0F), " 1%%Low: %.0f", stats.onePercentLowFps);
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.7F, 0.7F, 0.7F, 1.0F), " %.2f ms", stats.totalFrameMs);
+        ImGui::TextColored(msColor, " %.2f ms", stats.totalFrameMs);
+
+        float budgetPct = (stats.totalFrameMs / 16.67F) * 100.0F;
+        ImGui::Text("Frame Budget: ");
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, overBudget ? ImVec4(1.0F, 0.3F, 0.3F, 1.0F) : ImVec4(0.3F, 0.8F, 0.3F, 1.0F));
+        ImGui::ProgressBar(std::min(budgetPct / 100.0F, 1.0F), ImVec2(150.0F, 0.0F));
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::TextColored(msColor, "%.1f%%", budgetPct);
+
+        // Update rate controls.
+        ImGui::Separator();
+        ImGui::PushItemWidth(100.0F);
+        ImGui::SliderFloat("Update interval (s)", &m_updateInterval, 0.0F, 2.0F, "%.2f");
+        ImGui::SameLine();
+        ImGui::Checkbox("Pause on Alt", &m_pauseOnAlt);
+        ImGui::SameLine();
+        if (ImGui::Button(m_paused ? "Resume" : "Pause"))
+        {
+            m_paused = !m_paused;
+            if (!m_paused)
+            {
+                m_timeSinceUpdate = m_updateInterval; // Force immediate update
+            }
+        }
+        ImGui::PopItemWidth();
 
         ImGui::Separator();
 
         if (ImGui::BeginTabBar("ProfilerTabs"))
         {
-            if (ImGui::BeginTabItem("Frame Graph"))
+            if (ImGui::BeginTabItem("Overview"))
             {
                 DrawFrameTimeGraph(profiler);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Systems"))
+            {
+                DrawSystemTimings(profiler);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Sections"))
@@ -71,6 +131,11 @@ void ProfilerOverlay::Draw([[maybe_unused]] engine::core::Profiler& profiler)
             if (ImGui::BeginTabItem("Render"))
             {
                 DrawRenderStats(profiler);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Distribution"))
+            {
+                DrawFrameTimeHistogram(profiler);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Benchmark"))
@@ -173,7 +238,7 @@ void ProfilerOverlay::DrawFrameTimeGraph([[maybe_unused]] engine::core::Profiler
 void ProfilerOverlay::DrawSectionTable([[maybe_unused]] engine::core::Profiler& profiler)
 {
 #ifdef IMGUI_ENABLED
-    const auto& sections = profiler.Sections();
+    const auto& sections = m_hasCachedData ? m_cachedSections : profiler.Sections();
 
     if (sections.empty())
     {
@@ -183,11 +248,11 @@ void ProfilerOverlay::DrawSectionTable([[maybe_unused]] engine::core::Profiler& 
 
     if (ImGui::BeginTable("Sections", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp))
     {
-        ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_None, 3.0F);
-        ImGui::TableSetupColumn("Time (ms)", ImGuiTableColumnFlags_None, 1.5F);
-        ImGui::TableSetupColumn("Avg (ms)", ImGuiTableColumnFlags_None, 1.5F);
-        ImGui::TableSetupColumn("Peak (ms)", ImGuiTableColumnFlags_None, 1.5F);
-        ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_None, 1.0F);
+        ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_WidthStretch, 3.0F);
+        ImGui::TableSetupColumn("Time (ms)", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+        ImGui::TableSetupColumn("Avg (ms)", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+        ImGui::TableSetupColumn("Peak (ms)", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+        ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_WidthStretch, 1.0F);
         ImGui::TableHeadersRow();
 
         for (const auto& section : sections)
@@ -219,22 +284,78 @@ void ProfilerOverlay::DrawSectionTable([[maybe_unused]] engine::core::Profiler& 
 void ProfilerOverlay::DrawRenderStats([[maybe_unused]] engine::core::Profiler& profiler)
 {
 #ifdef IMGUI_ENABLED
-    const auto& stats = profiler.Stats();
+    const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
 
-    ImGui::Text("Draw Calls: %u", stats.drawCalls);
-    ImGui::Text("Vertices Submitted: %u", stats.verticesSubmitted);
-    ImGui::Text("Triangles Submitted: %u", stats.trianglesSubmitted);
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 1.0F, 1.0F), "Draw Statistics");
     ImGui::Separator();
+    
+    if (ImGui::BeginTable("DrawStats", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 2.0F);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+        ImGui::TableHeadersRow();
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("Draw Calls");
+        ImGui::TableNextColumn(); ImGui::Text("%u", stats.drawCalls);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("Vertices");
+        ImGui::TableNextColumn(); ImGui::Text("%u", stats.verticesSubmitted);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("Triangles");
+        ImGui::TableNextColumn(); ImGui::Text("%u", stats.trianglesSubmitted);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("UI Batches");
+        ImGui::TableNextColumn(); ImGui::Text("%u", stats.uiBatches);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("UI Vertices");
+        ImGui::TableNextColumn(); ImGui::Text("%u", stats.uiVertices);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 1.0F, 1.0F), "Culling & Batching");
+    ImGui::Separator();
+    
     ImGui::Text("Static Batch Chunks: %u / %u visible", stats.staticBatchChunksVisible, stats.staticBatchChunksTotal);
+    if (stats.staticBatchChunksTotal > 0)
+    {
+        float visPct = (static_cast<float>(stats.staticBatchChunksVisible) / static_cast<float>(stats.staticBatchChunksTotal)) * 100.0F;
+        ImGui::ProgressBar(visPct / 100.0F, ImVec2(100.0F, 0.0F));
+        ImGui::SameLine();
+        ImGui::Text("%.1f%%", visPct);
+    }
+    
+    const std::uint32_t totalDyn = stats.dynamicObjectsDrawn + stats.dynamicObjectsCulled;
     ImGui::Text("Dynamic Objects: %u drawn, %u culled", stats.dynamicObjectsDrawn, stats.dynamicObjectsCulled);
+    if (totalDyn > 0)
+    {
+        float drawPct = (static_cast<float>(stats.dynamicObjectsDrawn) / static_cast<float>(totalDyn)) * 100.0F;
+        ImGui::ProgressBar(drawPct / 100.0F, ImVec2(100.0F, 0.0F));
+        ImGui::SameLine();
+        ImGui::Text("%.1f%% visible", drawPct);
+    }
+
     ImGui::Separator();
-    ImGui::Text("UI Batches: %u", stats.uiBatches);
-    ImGui::Text("UI Vertices: %u", stats.uiVertices);
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 1.0F, 1.0F), "GPU Memory (VBO)");
     ImGui::Separator();
-    ImGui::Text("VBO Usage:");
-    ImGui::Text("  Solid:    %zu KB", stats.solidVboBytes / 1024);
-    ImGui::Text("  Textured: %zu KB", stats.texturedVboBytes / 1024);
-    ImGui::Text("  Lines:    %zu KB", stats.lineVboBytes / 1024);
+    
+    const std::size_t totalMem = stats.solidVboBytes + stats.texturedVboBytes + stats.lineVboBytes;
+    ImGui::Text("Total: %.2f MB", static_cast<float>(totalMem) / (1024.0F * 1024.0F));
+    ImGui::Indent();
+    const float totalMemF = static_cast<float>(totalMem > 0 ? totalMem : 1);
+    ImGui::Text("Solid:    %zu KB (%.1f%%)", stats.solidVboBytes / 1024,
+                100.0F * static_cast<float>(stats.solidVboBytes) / totalMemF);
+    ImGui::Text("Textured: %zu KB (%.1f%%)", stats.texturedVboBytes / 1024,
+                100.0F * static_cast<float>(stats.texturedVboBytes) / totalMemF);
+    ImGui::Text("Lines:    %zu KB (%.1f%%)", stats.lineVboBytes / 1024,
+                100.0F * static_cast<float>(stats.lineVboBytes) / totalMemF);
+    ImGui::Unindent();
 #endif
 }
 
@@ -292,16 +413,32 @@ void ProfilerOverlay::DrawBenchmarkPanel([[maybe_unused]] engine::core::Profiler
 void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler& profiler)
 {
 #ifdef IMGUI_ENABLED
-    const auto& stats = profiler.Stats();
+    // Check for Alt-held pause.
+    const bool altHeld = ImGui::GetIO().KeyAlt;
+    const bool shouldPause = m_pauseOnAlt && altHeld;
+    m_paused = shouldPause;
+
+    // Update cached data if not paused and interval elapsed.
+    const float dt = ImGui::GetIO().DeltaTime;
+    if (!m_paused)
+    {
+        m_timeSinceUpdate += dt;
+        if (m_timeSinceUpdate >= m_updateInterval)
+        {
+            m_timeSinceUpdate = 0.0F;
+            m_cachedStats = profiler.Stats();
+            m_hasCachedData = true;
+        }
+    }
+
+    const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    // Position at bottom-right corner
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 2.0F, 
                                    viewport->WorkPos.y + viewport->WorkSize.y - 2.0F),
                             ImGuiCond_Always, ImVec2(1.0F, 1.0F));
     ImGui::SetNextWindowSize(ImVec2(0.0F, 0.0F));
 
-    // Remove NoInputs to allow interaction for close button
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -312,7 +449,12 @@ void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler
 
     if (ImGui::Begin("##CompactProfiler", nullptr, flags))
     {
-        // Color-code FPS.
+        if (m_paused)
+        {
+            ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "||");
+            ImGui::SameLine();
+        }
+
         ImVec4 fpsColor = (stats.fps >= 120.0F) ? ImVec4(0.3F, 1.0F, 0.3F, 1.0F) :
                           (stats.fps >= 60.0F)  ? ImVec4(0.5F, 1.0F, 0.5F, 1.0F) :
                           (stats.fps >= 30.0F)  ? ImVec4(1.0F, 1.0F, 0.3F, 1.0F) :
@@ -320,11 +462,19 @@ void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler
 
         ImGui::TextColored(fpsColor, "%.0f FPS", stats.fps);
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6F, 0.6F, 0.6F, 1.0F), "%.2fms", stats.totalFrameMs);
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6F, 0.6F, 0.6F, 1.0F), "DC:%u V:%u", stats.drawCalls, stats.verticesSubmitted);
         
-        // Click anywhere to expand, or click X to close
+        bool overBudget = stats.totalFrameMs > 16.67F;
+        ImVec4 msColor = overBudget ? ImVec4(1.0F, 0.4F, 0.4F, 1.0F) : ImVec4(0.6F, 0.8F, 0.6F, 1.0F);
+        ImGui::TextColored(msColor, "%.2fms", stats.totalFrameMs);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6F, 0.6F, 0.6F, 1.0F), "DC:%u", stats.drawCalls);
+        ImGui::SameLine();
+        
+        std::size_t totalGpuMem = stats.solidVboBytes + stats.texturedVboBytes + stats.lineVboBytes;
+        ImGui::TextColored(ImVec4(0.7F, 0.7F, 1.0F, 1.0F), "GPU:%.0fM", static_cast<float>(totalGpuMem) / (1024.0F * 1024.0F));
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.9F, 0.7F, 0.5F, 1.0F), "RAM:%.0fM", static_cast<float>(stats.systemRamBytes) / (1024.0F * 1024.0F));
+        
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5F, 0.2F, 0.2F, 0.6F));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8F, 0.3F, 0.3F, 0.8F));
@@ -334,17 +484,14 @@ void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler
         }
         ImGui::PopStyleColor(2);
         
-        // Make entire window clickable to expand to full mode
         if (ImGui::IsItemHovered() || ImGui::IsWindowHovered())
         {
             if (ImGui::IsMouseClicked(0) && !ImGui::IsItemHovered())
             {
-                // Left click on window (not on X button) -> expand to full mode
                 m_compactMode = false;
             }
         }
         
-        // Tooltip
         if (ImGui::IsWindowHovered())
         {
             ImGui::SetTooltip("Click to expand | X to close\nOr use: perf_compact off");
@@ -353,6 +500,144 @@ void ProfilerOverlay::DrawCompactOverlay([[maybe_unused]] engine::core::Profiler
     ImGui::End();
 
     ImGui::PopStyleVar(2);
+#endif
+}
+
+void ProfilerOverlay::DrawSystemTimings([[maybe_unused]] engine::core::Profiler& profiler)
+{
+#ifdef IMGUI_ENABLED
+    const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
+    const auto& sections = m_hasCachedData ? m_cachedSections : profiler.Sections();
+
+    float frameMs = (stats.totalFrameMs > 0.001F) ? stats.totalFrameMs : 0.001F;
+    ImGui::Text("Frame Budget: %.2f / 16.67 ms", frameMs);
+    float budgetPct = (frameMs / 16.67F) * 100.0F;
+    ImVec4 budgetColor = (budgetPct <= 80.0F) ? ImVec4(0.3F, 1.0F, 0.3F, 1.0F) :
+                         (budgetPct <= 100.0F) ? ImVec4(1.0F, 1.0F, 0.3F, 1.0F) :
+                                                  ImVec4(1.0F, 0.3F, 0.3F, 1.0F);
+    
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, budgetColor);
+    ImGui::ProgressBar(std::min(budgetPct / 100.0F, 1.0F), ImVec2(120.0F, 0.0F), "");
+    ImGui::PopStyleColor();
+    
+    ImGui::Separator();
+    
+    if (ImGui::BeginTable("SystemTimings", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("System", ImGuiTableColumnFlags_WidthStretch, 2.0F);
+        ImGui::TableSetupColumn("Time (ms)", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+        ImGui::TableSetupColumn("% of Frame", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+        ImGui::TableHeadersRow();
+
+        auto row = [frameMs](const char* name, float ms) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", name);
+            ImGui::TableNextColumn();
+            
+            ImVec4 color = (ms < 1.0F) ? ImVec4(0.4F, 1.0F, 0.4F, 1.0F) :
+                           (ms < 4.0F) ? ImVec4(1.0F, 1.0F, 0.4F, 1.0F) :
+                                         ImVec4(1.0F, 0.4F, 0.4F, 1.0F);
+            ImGui::TextColored(color, "%.3f", ms);
+            ImGui::TableNextColumn();
+            
+            float pct = (ms / frameMs) * 100.0F;
+            ImGui::Text("%.1f%%", pct);
+        };
+
+        row("Update", stats.updateMs);
+        row("Physics", stats.physicsMs);
+        row("Render Submit", stats.renderSubmitMs);
+        row("Render GPU", stats.renderGpuMs);
+        row("UI", stats.uiMs);
+        row("FX", stats.fxMs);
+        row("Audio", stats.audioMs);
+        row("Swap", stats.swapMs);
+        row("Input", stats.inputMs);
+        row("Network", stats.networkMs);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6F, 0.8F, 1.0F, 1.0F), "Profiled Sections (%zu):", sections.size());
+    
+    float totalProfiled = 0.0F;
+    for (const auto& sec : sections)
+    {
+        totalProfiled += sec.currentMs;
+    }
+    ImGui::Text("  Total in sections: %.3f ms", totalProfiled);
+    ImGui::Text("  Untracked: %.3f ms", std::max(0.0F, frameMs - totalProfiled));
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6F, 0.8F, 1.0F, 1.0F), "Memory:");
+    const std::size_t gpuMem = stats.solidVboBytes + stats.texturedVboBytes + stats.lineVboBytes;
+    ImGui::Text("  GPU VBO: %.2f MB", static_cast<float>(gpuMem) / (1024.0F * 1024.0F));
+    ImGui::Text("  System RAM: %.1f MB", static_cast<float>(stats.systemRamBytes) / (1024.0F * 1024.0F));
+#endif
+}
+
+void ProfilerOverlay::DrawFrameTimeHistogram([[maybe_unused]] engine::core::Profiler& profiler)
+{
+#ifdef IMGUI_ENABLED
+    const auto& stats = m_hasCachedData ? m_cachedStats : profiler.Stats();
+    const auto& history = profiler.FrameTimeHistory();
+
+    constexpr std::size_t kMaxSamples = 256;
+    float samples[kMaxSamples];
+    history.CopyHistory(samples, kMaxSamples);
+    const int count = static_cast<int>(std::min(kMaxSamples, history.Count()));
+
+    if (count == 0)
+    {
+        ImGui::Text("No data yet.");
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 0.8F, 1.0F), "Frame Time Percentiles (last %d frames):", count);
+    ImGui::Separator();
+
+    auto pctRow = [](const char* label, float ms, float targetFps) {
+        ImGui::Text("%s:", label);
+        ImGui::SameLine(80);
+        ImVec4 color = (ms <= 1000.0F / targetFps) ? ImVec4(0.4F, 1.0F, 0.4F, 1.0F) :
+                                                     ImVec4(1.0F, 0.5F, 0.3F, 1.0F);
+        ImGui::TextColored(color, "%.2f ms", ms);
+        ImGui::SameLine(160);
+        float fps = (ms > 0.001F) ? (1000.0F / ms) : 0.0F;
+        ImGui::Text("(%.0f fps)", fps);
+    };
+
+    pctRow("Median (P50)", stats.frameTimeP50, 60.0F);
+    pctRow("P90", stats.frameTimeP90, 60.0F);
+    pctRow("P95", stats.frameTimeP95, 60.0F);
+    pctRow("P99", stats.frameTimeP99, 60.0F);
+    pctRow("1% Low", 1000.0F / std::max(stats.onePercentLowFps, 1.0F), 60.0F);
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 0.8F, 1.0F), "Distribution:");
+
+    float maxMs = 0.0F;
+    for (int i = 0; i < count; ++i)
+    {
+        maxMs = std::max(maxMs, samples[i]);
+    }
+    maxMs = std::min(maxMs, 50.0F);
+
+    ImGui::PlotHistogram("##FrameTimeHist", samples, count, 0, 
+                         "Frame time distribution", 0.0F, maxMs * 1.1F, ImVec2(0, 100));
+
+    ImGui::TextColored(ImVec4(0.5F, 0.5F, 0.5F, 1.0F), "Max displayed: %.1f ms", maxMs);
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8F, 0.8F, 0.8F, 1.0F), "Reference Targets:");
+    ImGui::BulletText("16.67 ms = 60 fps");
+    ImGui::BulletText("11.11 ms = 90 fps");
+    ImGui::BulletText(" 8.33 ms = 120 fps");
+    ImGui::BulletText(" 6.94 ms = 144 fps");
+    ImGui::BulletText(" 4.17 ms = 240 fps");
 #endif
 }
 

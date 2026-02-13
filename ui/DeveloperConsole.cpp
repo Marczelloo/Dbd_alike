@@ -1281,10 +1281,10 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess(std::string("Noclip ") + (enabled ? "enabled" : "disabled"));
         });
 
-        RegisterCommand("load map test|main|main_map|collision_test", "Load gameplay scene", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("load map test|main|main_map|collision_test|benchmark", "Load gameplay scene", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 3 || tokens[1] != "map")
             {
-                LogError("Usage: load map test|main|main_map|collision_test");
+                LogError("Usage: load map test|main|main_map|collision_test|benchmark");
                 return;
             }
 

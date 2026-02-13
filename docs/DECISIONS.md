@@ -243,3 +243,26 @@ Move toward a modular Blender pipeline with a single CLI entrypoint and generato
 ### Follow-up
 - Add hash-based cache manifest for stronger invalidation than mtime.
 - Expand modular baking path to output full texture sets and metadata.
+
+## Benchmark Map: Zone-Based Design vs Monolithic (2026-02-13)
+
+### Decision
+Use 15 distinct testing zones with clear purposes instead of a single heterogeneous map.
+
+### Rationale
+1. **Debuggability**: When a collision bug occurs, the zone immediately indicates what geometry pattern is problematic.
+2. **Benchmarking**: FPS/performance can be correlated to specific zone types (pillar forest = instancing, grid = broadphase).
+3. **Testing**: Each zone tests a specific game mechanic (step-up, acute angles, LOS, pallet cycling).
+4. **Visual variety**: Different colored zones make the map more interesting and easier to navigate.
+
+### Zone Design Principles
+- **Corner Corridors**: 1.2m width = minimum viable for capsule navigation
+- **Spiral Maze**: Continuous wall curvature tests collision response smoothness
+- **Pillar Forest**: ~160 pillars tests broadphase efficiency and draw call batching
+- **Acute Corners**: 30° V-angle is the extreme case where collision response can fail
+- **Concentric Rings**: Cardinal gaps test radial LOS with multiple occluders
+
+### Trade-offs
+- Pro: Clear test boundaries, easy to isolate problems
+- Pro: Good visual benchmark with varied geometry complexity
+- Con: Not representative of actual gameplay maps (intentionally extreme)

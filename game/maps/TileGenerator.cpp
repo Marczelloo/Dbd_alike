@@ -14,6 +14,7 @@
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/trigonometric.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -1469,6 +1470,816 @@ GeneratedMap TileGenerator::GenerateCollisionTestMap() const
     map.windows.push_back(WindowSpawn{glm::vec3{-1.0F, 1.0F, 8.6F}, glm::vec3{0.9F, 1.0F, 0.18F}, glm::vec3{0.0F, 0.0F, 1.0F}});
     map.pallets.push_back(PalletSpawn{glm::vec3{3.0F, 0.6F, 7.2F}, glm::vec3{0.95F, 0.6F, 0.2F}});
     map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F}, glm::vec3{22.0F, 0.05F, 22.0F}, 0, 0});
+    return map;
+}
+
+GeneratedMap TileGenerator::GenerateBenchmarkMap() const
+{
+    // ============================================================
+    // COMPREHENSIVE BENCHMARK MAP
+    // Tests: collision edge cases, rendering stress, AI scenarios
+    // ============================================================
+    GeneratedMap map;
+    
+    // --- Global layout: 100m x 100m arena ---
+    constexpr float kMapHalf = 50.0F;
+    
+    // Spawn points at corners
+    map.survivorSpawn = glm::vec3{-35.0F, 1.05F, -35.0F};
+    map.killerSpawn = glm::vec3{35.0F, 1.05F, 35.0F};
+    map.survivorSpawns = {
+        glm::vec3{-35.0F, 1.05F, -35.0F},
+        glm::vec3{-35.0F, 1.05F, 35.0F},
+        glm::vec3{35.0F, 1.05F, -35.0F},
+        glm::vec3{35.0F, 1.05F, 35.0F}
+    };
+    map.useDbdSpawns = true;
+    
+    // --- Ground plane ---
+    map.walls.push_back(BoxSpawn{glm::vec3{0.0F, -0.5F, 0.0F}, glm::vec3{kMapHalf, 0.5F, kMapHalf}});
+    
+    // ============================================================
+    // ZONE 1: CORNER CORRIDORS (collision precision test)
+    // Tight corners test capsule-slide and step-up mechanics
+    // ============================================================
+    
+    // Tight L-corridor at NW corner
+    constexpr float corridorWidth = 1.2F;
+    constexpr float wallThickness = 0.28F;
+    
+    // Outer walls of L-corridor
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F, 1.0F, -45.0F}, glm::vec3{10.0F, 1.0F, wallThickness / 2.0F}}); // Top
+    map.walls.push_back(BoxSpawn{glm::vec3{-45.0F, 1.0F, -40.0F}, glm::vec3{wallThickness / 2.0F, 1.0F, 10.0F}}); // Left
+    // Inner corner piece
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F + corridorWidth, 1.0F, -40.0F + corridorWidth}, glm::vec3{8.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F + corridorWidth, 1.0F, -40.0F + corridorWidth}, glm::vec3{wallThickness / 2.0F, 1.0F, 8.0F}});
+    
+    // Window in L-corridor
+    map.windows.push_back(WindowSpawn{
+        glm::vec3{-42.0F, 1.0F, -42.0F},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{-0.707F, 0.0F, 0.707F}
+    });
+    
+    // Duplicate tight L-corridor at NE corner (mirrored)
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F, 1.0F, -45.0F}, glm::vec3{10.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{45.0F, 1.0F, -40.0F}, glm::vec3{wallThickness / 2.0F, 1.0F, 10.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F - corridorWidth, 1.0F, -40.0F + corridorWidth}, glm::vec3{8.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F - corridorWidth, 1.0F, -40.0F + corridorWidth}, glm::vec3{wallThickness / 2.0F, 1.0F, 8.0F}});
+    
+    map.windows.push_back(WindowSpawn{
+        glm::vec3{42.0F, 1.0F, -42.0F},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{0.707F, 0.0F, 0.707F}
+    });
+
+    // Tight L-corridor at SW corner
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F, 1.0F, 45.0F}, glm::vec3{10.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{-45.0F, 1.0F, 40.0F}, glm::vec3{wallThickness / 2.0F, 1.0F, 10.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F + corridorWidth, 1.0F, 40.0F - corridorWidth}, glm::vec3{8.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{-40.0F + corridorWidth, 1.0F, 40.0F - corridorWidth}, glm::vec3{wallThickness / 2.0F, 1.0F, 8.0F}});
+    
+    map.windows.push_back(WindowSpawn{
+        glm::vec3{-42.0F, 1.0F, 42.0F},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{-0.707F, 0.0F, -0.707F}
+    });
+
+    // Tight L-corridor at SE corner
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F, 1.0F, 45.0F}, glm::vec3{10.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{45.0F, 1.0F, 40.0F}, glm::vec3{wallThickness / 2.0F, 1.0F, 10.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F - corridorWidth, 1.0F, 40.0F - corridorWidth}, glm::vec3{8.0F, 1.0F, wallThickness / 2.0F}});
+    map.walls.push_back(BoxSpawn{glm::vec3{40.0F - corridorWidth, 1.0F, 40.0F - corridorWidth}, glm::vec3{wallThickness / 2.0F, 1.0F, 8.0F}});
+    
+    map.windows.push_back(WindowSpawn{
+        glm::vec3{42.0F, 1.0F, 42.0F},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{0.707F, 0.0F, -0.707F}
+    });
+    
+    // ============================================================
+    // ZONE 2: SPIRAL MAZE (collision stress test)
+    // Continuous collision checks against many walls
+    // ============================================================
+    
+    // Outer ring of spiral (center-left area)
+    const glm::vec3 spiralCenter{-20.0F, 0.0F, 0.0F};
+    constexpr float spiralOuterRadius = 12.0F;
+    constexpr float spiralWallThickness = 0.3F;
+    constexpr float spiralGap = 2.4F;
+    
+    // Circular-ish spiral made of segments
+    for (int ring = 0; ring < 4; ++ring)
+    {
+        const float radius = spiralOuterRadius - ring * (spiralGap + spiralWallThickness);
+        const int segments = static_cast<int>(radius * 2.5F) + 8; // More segments for outer rings
+        const float arcPerSegment = glm::radians(360.0F / static_cast<float>(segments));
+        
+        for (int i = 0; i < segments; ++i)
+        {
+            // Skip a gap segment for entry/exit
+            if (i == segments / (4 - ring)) // Different gap position per ring
+                continue;
+            
+            const float angle1 = static_cast<float>(i) * arcPerSegment;
+            const float angle2 = (static_cast<float>(i) + 0.9F) * arcPerSegment; // Slight gap between wall segments
+            
+            const glm::vec3 p1 = spiralCenter + glm::vec3{
+                glm::cos(angle1) * radius,
+                1.0F,
+                glm::sin(angle1) * radius
+            };
+            const glm::vec3 p2 = spiralCenter + glm::vec3{
+                glm::cos(angle2) * radius,
+                1.0F,
+                glm::sin(angle2) * radius
+            };
+            
+            // Approximate wall segment with box
+            const glm::vec3 wallCenter = (p1 + p2) * 0.5F;
+            const float wallLength = glm::length(p2 - p1) * 0.5F + 0.1F;
+            const float tangentAngle = std::atan2(p2.z - p1.z, p2.x - p1.x);
+            
+            // Simplified: use thin box along segment
+            map.walls.push_back(BoxSpawn{
+                wallCenter,
+                glm::vec3{wallLength, 1.0F, spiralWallThickness * 0.5F}
+            });
+        }
+    }
+    
+    // Add pallet inside spiral center
+    map.pallets.push_back(PalletSpawn{
+        spiralCenter + glm::vec3{0.0F, 0.6F, 0.0F},
+        glm::vec3{0.95F, 0.6F, 0.2F}
+    });
+    
+    // ============================================================
+    // ZONE 3: STAIRCASE PYRAMID (step-up / gravity test)
+    // Tiered platforms testing capsule step-up mechanics
+    // ============================================================
+    
+    const glm::vec3 pyramidCenter{20.0F, 0.0F, 0.0F};
+    constexpr float pyramidBaseSize = 16.0F;
+    constexpr int pyramidTiers = 6;
+    
+    for (int tier = 0; tier < pyramidTiers; ++tier)
+    {
+        const float tierSize = pyramidBaseSize - tier * 2.5F;
+        const float tierHeight = static_cast<float>(tier) * 0.5F;
+        
+        // Solid tier (as a thin floor piece)
+        map.walls.push_back(BoxSpawn{
+            pyramidCenter + glm::vec3{0.0F, tierHeight, 0.0F},
+            glm::vec3{tierSize * 0.5F, 0.25F, tierSize * 0.5F}
+        });
+        
+        // Small walls on edges for visual interest
+        if (tier < pyramidTiers - 1)
+        {
+            // Corner pillars
+            const float cornerOffset = tierSize * 0.45F;
+            for (int corner = 0; corner < 4; ++corner)
+            {
+                const float cx = cornerOffset * ((corner % 2 == 0) ? 1.0F : -1.0F);
+                const float cz = cornerOffset * ((corner < 2) ? 1.0F : -1.0F);
+                map.walls.push_back(BoxSpawn{
+                    pyramidCenter + glm::vec3{cx, tierHeight + 0.5F, cz},
+                    glm::vec3{0.4F, 0.5F, 0.4F}
+                });
+            }
+        }
+    }
+    
+    // Window at top of pyramid for vault test
+    map.windows.push_back(WindowSpawn{
+        pyramidCenter + glm::vec3{0.0F, static_cast<float>(pyramidTiers) * 0.5F, 0.0F},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{0.0F, 0.0F, 1.0F}
+    });
+    
+    // ============================================================
+    // ZONE 4: TIGHT PILLAR FOREST (rendering + collision pressure)
+    // Many small obstacles to test broadphase and rendering
+    // ============================================================
+    
+    const glm::vec3 forestCenter{0.0F, 0.0F, 25.0F};
+    constexpr float forestRadius = 18.0F;
+    constexpr int pillarRings = 4;
+    constexpr int pillarsPerRing = 16;
+    
+    for (int ring = 1; ring <= pillarRings; ++ring)
+    {
+        const float ringRadius = forestRadius * static_cast<float>(ring) / static_cast<float>(pillarRings);
+        const int pillarsThisRing = pillarsPerRing * ring;
+        
+        for (int i = 0; i < pillarsThisRing; ++i)
+        {
+            const float angle = static_cast<float>(i) * glm::radians(360.0F / static_cast<float>(pillarsThisRing));
+            // Offset alternating rings for honeycomb pattern
+            const float angleOffset = (ring % 2 == 0) ? glm::radians(360.0F / static_cast<float>(pillarsThisRing) * 0.5F) : 0.0F;
+            
+            const glm::vec3 pillarPos = forestCenter + glm::vec3{
+                glm::cos(angle + angleOffset) * ringRadius,
+                0.75F,
+                glm::sin(angle + angleOffset) * ringRadius
+            };
+            
+            // Small pillar (varied sizes for visual interest)
+            const float pillarHalfWidth = 0.25F + 0.1F * static_cast<float>(ring % 3);
+            map.walls.push_back(BoxSpawn{
+                pillarPos,
+                glm::vec3{pillarHalfWidth, 0.75F, pillarHalfWidth}
+            });
+        }
+    }
+    
+    // Pallet in center of pillar forest
+    map.pallets.push_back(PalletSpawn{
+        forestCenter + glm::vec3{0.0F, 0.6F, 0.0F},
+        glm::vec3{0.95F, 0.6F, 0.2F}
+    });
+    
+    // ============================================================
+    // ZONE 5: NARROW SLALOM (capsule slide test)
+    // Zigzag walls forcing constant direction changes
+    // ============================================================
+    
+    const glm::vec3 slalomStart{-20.0F, 0.0F, 30.0F};
+    constexpr float slalomLength = 30.0F;
+    constexpr int slalomGates = 10;
+    constexpr float slalomGateWidth = 1.8F;
+    constexpr float slalomGateThickness = 0.25F;
+    
+    for (int gate = 0; gate < slalomGates; ++gate)
+    {
+        const float zPos = slalomStart.z - static_cast<float>(gate) * (slalomLength / slalomGates);
+        const float xOffset = (gate % 2 == 0) ? 2.0F : -2.0F;
+        
+        // Left wall of gate
+        map.walls.push_back(BoxSpawn{
+            slalomStart + glm::vec3{xOffset - slalomGateWidth, 1.0F, zPos},
+            glm::vec3{slalomGateThickness, 1.0F, 1.5F}
+        });
+        
+        // Right wall of gate
+        map.walls.push_back(BoxSpawn{
+            slalomStart + glm::vec3{xOffset + slalomGateWidth, 1.0F, zPos},
+            glm::vec3{slalomGateThickness, 1.0F, 1.5F}
+        });
+        
+        // Small connecting wall between gates for visual continuity
+        if (gate > 0)
+        {
+            const float prevXOffset = ((gate - 1) % 2 == 0) ? 2.0F : -2.0F;
+            map.walls.push_back(BoxSpawn{
+                slalomStart + glm::vec3{(xOffset + prevXOffset) * 0.5F, 0.5F, zPos + (slalomLength / slalomGates) * 0.5F},
+                glm::vec3{glm::abs(xOffset - prevXOffset) * 0.5F + 0.3F, 0.5F, slalomGateThickness}
+            });
+        }
+    }
+    
+    // ============================================================
+    // ZONE 6: DENSITY GRID (worst-case broadphase test)
+    // Dense grid of small obstacles
+    // ============================================================
+    
+    const glm::vec3 gridStart{25.0F, 0.0F, -25.0F};
+    constexpr int gridSize = 12;
+    constexpr float gridSpacing = 3.0F;
+    constexpr float gridObstacleSize = 0.4F;
+    
+    for (int x = 0; x < gridSize; ++x)
+    {
+        for (int z = 0; z < gridSize; ++z)
+        {
+            // Skip some cells for paths
+            if ((x + z) % 3 == 0)
+                continue;
+            
+            const glm::vec3 obstaclePos = gridStart + glm::vec3{
+                static_cast<float>(x) * gridSpacing,
+                gridObstacleSize + 0.1F,
+                static_cast<float>(z) * gridSpacing
+            };
+            
+            // Varied heights
+            const float heightVar = 0.3F + 0.4F * static_cast<float>((x * gridSize + z) % 4);
+            
+            map.walls.push_back(BoxSpawn{
+                obstaclePos,
+                glm::vec3{gridObstacleSize, heightVar, gridObstacleSize}
+            });
+        }
+    }
+    
+    // ============================================================
+    // ZONE 7: COMPLEX INTERSECTION (multi-vault scenario)
+    // Central hub with multiple windows/pallets in close proximity
+    // ============================================================
+    
+    const glm::vec3 hubCenter{0.0F, 0.0F, -20.0F};
+    
+    // Central platform
+    map.walls.push_back(BoxSpawn{
+        hubCenter + glm::vec3{0.0F, 0.25F, 0.0F},
+        glm::vec3{6.0F, 0.25F, 6.0F}
+    });
+    
+    // Four corner walls with vaults
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const float angle = static_cast<float>(corner) * glm::radians(90.0F);
+        const glm::vec3 wallDir = glm::vec3{glm::cos(angle), 0.0F, glm::sin(angle)};
+        
+        // Wall perpendicular to direction
+        const glm::vec3 wallCenter = hubCenter + wallDir * 5.0F;
+        const glm::vec3 wallTangent = glm::vec3{-wallDir.z, 0.0F, wallDir.x};
+        
+        map.walls.push_back(BoxSpawn{
+            wallCenter - wallTangent * 2.0F,
+            glm::vec3{1.8F, 1.0F, 0.28F}
+        });
+        map.walls.push_back(BoxSpawn{
+            wallCenter + wallTangent * 2.0F,
+            glm::vec3{1.8F, 1.0F, 0.28F}
+        });
+        
+        // Window between wall segments
+        map.windows.push_back(WindowSpawn{
+            wallCenter,
+            glm::vec3{0.9F, 1.0F, 0.18F},
+            wallDir
+        });
+    }
+    
+    // Pallets around central hub
+    for (int pallet = 0; pallet < 4; ++pallet)
+    {
+        const float angle = static_cast<float>(pallet) * glm::radians(90.0F) + glm::radians(45.0F);
+        const glm::vec3 palletPos = hubCenter + glm::vec3{
+            glm::cos(angle) * 8.0F,
+            0.6F,
+            glm::sin(angle) * 8.0F
+        };
+        
+        map.pallets.push_back(PalletSpawn{
+            palletPos,
+            glm::vec3{0.95F, 0.6F, 0.2F}
+        });
+    }
+    
+    // ============================================================
+    // ZONE 8: EDGE CASE CORNERS (V-shaped, acute angles)
+    // Tests collision response at acute angles
+    // ============================================================
+    
+    const glm::vec3 acuteCenter{35.0F, 0.0F, -35.0F};
+    
+    // V-shaped wall (acute 30-degree angle)
+    for (int side = 0; side < 2; ++side)
+    {
+        const float baseAngle = glm::radians(side == 0 ? -60.0F : -120.0F);
+        const glm::vec3 wallDir = glm::vec3{glm::cos(baseAngle), 0.0F, glm::sin(baseAngle)};
+        
+        for (int segment = 0; segment < 5; ++segment)
+        {
+            const glm::vec3 segCenter = acuteCenter + wallDir * (2.0F + static_cast<float>(segment) * 1.5F);
+            map.walls.push_back(BoxSpawn{
+                segCenter,
+                glm::vec3{0.8F, 1.0F, 0.28F}
+            });
+        }
+    }
+    
+    // Pallet at V-point
+    map.pallets.push_back(PalletSpawn{
+        acuteCenter + glm::vec3{0.0F, 0.6F, 2.0F},
+        glm::vec3{0.95F, 0.6F, 0.2F}
+    });
+    
+    // ============================================================
+    // ZONE 9: MULTI-TIER PLATFORMS (elevation changes)
+    // Tests falling/step-down and jumping mechanics
+    // ============================================================
+    
+    const glm::vec3 tierCenter{-35.0F, 0.0F, 25.0F};
+    constexpr int tierLevels = 4;
+    
+    for (int tier = 0; tier < tierLevels; ++tier)
+    {
+        const float tierHeight = static_cast<float>(tier) * 1.2F;
+        const float tierSize = 8.0F - static_cast<float>(tier) * 1.5F;
+        const float tierOffset = static_cast<float>(tier) * 3.0F;
+        
+        // Platform
+        map.walls.push_back(BoxSpawn{
+            tierCenter + glm::vec3{tierOffset, tierHeight + 0.2F, 0.0F},
+            glm::vec3{tierSize, 0.2F, tierSize}
+        });
+        
+        // Ramp connector (simplified as angled wall - just cosmetic)
+        if (tier > 0)
+        {
+            map.walls.push_back(BoxSpawn{
+                tierCenter + glm::vec3{tierOffset - 1.5F, tierHeight - 0.3F, 0.0F},
+                glm::vec3{0.8F, 0.8F, 1.5F}
+            });
+        }
+    }
+    
+    // ============================================================
+    // ZONE 10: CHAOS SCATTER (random debris field)
+    // Randomly placed obstacles for unpredictable navigation
+    // ============================================================
+    
+    const glm::vec3 chaosCenter{0.0F, 0.0F, -40.0F};
+    constexpr int chaosCount = 40;
+    constexpr float chaosRadius = 15.0F;
+    
+    // Use deterministic "random" for reproducibility
+    for (int i = 0; i < chaosCount; ++i)
+    {
+        // Simple pseudo-random from index
+        const float angle = static_cast<float>(i * 137) * 0.0174533F; // ~prime multiple for distribution
+        const float radius = chaosRadius * (0.3F + 0.7F * (static_cast<float>((i * 73) % 100) / 100.0F));
+        
+        const glm::vec3 debrisPos = chaosCenter + glm::vec3{
+            glm::cos(angle) * radius,
+            0.3F + 0.3F * static_cast<float>(i % 4),
+            glm::sin(angle) * radius
+        };
+        
+        const float debrisSize = 0.3F + 0.2F * static_cast<float>(i % 5);
+        
+        map.walls.push_back(BoxSpawn{
+            debrisPos,
+            glm::vec3{debrisSize, debrisSize * 0.8F, debrisSize}
+        });
+    }
+    
+    // ============================================================
+    // ZONE 11: TUNNEL GALLERY (long corridor with side passages)
+    // Tests LOS calculations and tight space movement
+    // ============================================================
+    
+    const glm::vec3 tunnelStart{-45.0F, 0.0F, 0.0F};
+    constexpr float tunnelLength = 30.0F;
+    constexpr float tunnelWidth = 3.0F;
+    
+    // Ceiling for tunnel (simulated with overhead boxes)
+    for (int section = 0; section < 10; ++section)
+    {
+        const float zPos = tunnelStart.z + static_cast<float>(section) * (tunnelLength / 10.0F);
+        
+        // Top wall
+        map.walls.push_back(BoxSpawn{
+            tunnelStart + glm::vec3{0.0F, 2.2F, zPos},
+            glm::vec3{tunnelWidth, 0.3F, 1.4F}
+        });
+        
+        // Side walls with gaps
+        if (section % 2 == 0)
+        {
+            map.walls.push_back(BoxSpawn{
+                tunnelStart + glm::vec3{-tunnelWidth, 1.0F, zPos},
+                glm::vec3{0.3F, 1.0F, 1.4F}
+            });
+            map.walls.push_back(BoxSpawn{
+                tunnelStart + glm::vec3{tunnelWidth, 1.0F, zPos},
+                glm::vec3{0.3F, 1.0F, 1.4F}
+            });
+        }
+        
+        // Side passages every other section
+        if (section % 3 == 0)
+        {
+            // Small alcove on each side
+            map.walls.push_back(BoxSpawn{
+                tunnelStart + glm::vec3{-tunnelWidth - 2.0F, 1.0F, zPos},
+                glm::vec3{2.0F, 1.0F, 0.4F}
+            });
+            map.walls.push_back(BoxSpawn{
+                tunnelStart + glm::vec3{tunnelWidth + 2.0F, 1.0F, zPos},
+                glm::vec3{2.0F, 1.0F, 0.4F}
+            });
+        }
+    }
+    
+    // Window at tunnel end
+    map.windows.push_back(WindowSpawn{
+        tunnelStart + glm::vec3{0.0F, 1.0F, tunnelStart.z + tunnelLength},
+        glm::vec3{0.9F, 1.0F, 0.18F},
+        glm::vec3{0.0F, 0.0F, 1.0F}
+    });
+    
+    // ============================================================
+    // ZONE 12: CONCENTRIC RINGS (radial LOS test)
+    // Tests visibility calculation around curved obstacles
+    // ============================================================
+    
+    const glm::vec3 ringsCenter{35.0F, 0.0F, 0.0F};
+    constexpr float ringsOuterRadius = 15.0F;
+    constexpr int ringCount = 3;
+    
+    for (int ring = 0; ring < ringCount; ++ring)
+    {
+        const float radius = ringsOuterRadius - static_cast<float>(ring) * 4.0F;
+        const int arcSegments = static_cast<int>(radius * 2.0F);
+        
+        for (int seg = 0; seg < arcSegments; ++seg)
+        {
+            // Leave 4 gaps per ring at cardinal directions
+            const float segAngle = static_cast<float>(seg) * glm::radians(360.0F / static_cast<float>(arcSegments));
+            const float gapAngle = glm::radians(15.0F);
+            bool nearGap = false;
+            
+            for (int gap = 0; gap < 4; ++gap)
+            {
+                const float gapCenter = static_cast<float>(gap) * glm::radians(90.0F);
+                if (std::abs(segAngle - gapCenter) < gapAngle || std::abs(segAngle - gapCenter - 2.0F * glm::pi<float>()) < gapAngle)
+                {
+                    nearGap = true;
+                    break;
+                }
+            }
+            
+            if (nearGap)
+                continue;
+            
+            const glm::vec3 segCenter = ringsCenter + glm::vec3{
+                glm::cos(segAngle) * radius,
+                1.0F,
+                glm::sin(segAngle) * radius
+            };
+            
+            map.walls.push_back(BoxSpawn{
+                segCenter,
+                glm::vec3{0.5F, 1.0F, 0.5F}
+            });
+        }
+    }
+    
+    // Pallet in center of rings
+    map.pallets.push_back(PalletSpawn{
+        ringsCenter + glm::vec3{0.0F, 0.6F, 0.0F},
+        glm::vec3{0.95F, 0.6F, 0.2F}
+    });
+    
+    // ============================================================
+    // ZONE 13: BIASED STEPS (slanted surfaces test)
+    // Series of angled walls testing projectile/climb mechanics
+    // ============================================================
+    
+    const glm::vec3 stepsCenter{-15.0F, 0.0F, -35.0F};
+    constexpr int stepsCount = 8;
+    
+    for (int step = 0; step < stepsCount; ++step)
+    {
+        const float stepAngle = glm::radians(15.0F * static_cast<float>(step) - 60.0F);
+        const float stepHeight = 0.3F * static_cast<float>(step);
+        const float stepOffset = static_cast<float>(step) * 2.0F;
+        
+        map.walls.push_back(BoxSpawn{
+            stepsCenter + glm::vec3{stepOffset, stepHeight + 0.3F, 0.0F},
+            glm::vec3{1.0F, 0.3F, 2.5F}
+        });
+    }
+    
+    // ============================================================
+    // ZONE 14: BRIDGE CROSSING (gap traversal)
+    // Narrow bridge over "pit" testing precision movement
+    // ============================================================
+    
+    const glm::vec3 bridgeStart{10.0F, 0.0F, 40.0F};
+    constexpr float bridgeLength = 20.0F;
+    constexpr float bridgeWidth = 1.5F;
+    
+    // Bridge platform
+    map.walls.push_back(BoxSpawn{
+        bridgeStart + glm::vec3{0.0F, 0.2F, 0.0F},
+        glm::vec3{bridgeWidth, 0.2F, bridgeLength}
+    });
+    
+    // Railings (thin walls on sides)
+    for (int rail = 0; rail < 2; ++rail)
+    {
+        const float xOffset = (rail == 0) ? bridgeWidth : -bridgeWidth;
+        for (int seg = 0; seg < 10; ++seg)
+        {
+            // Leave gaps in railing
+            if (seg % 3 == 1)
+                continue;
+            
+            const float zPos = -static_cast<float>(seg) * (bridgeLength / 10.0F);
+            map.walls.push_back(BoxSpawn{
+                bridgeStart + glm::vec3{xOffset, 0.8F, zPos},
+                glm::vec3{0.15F, 0.6F, bridgeLength / 10.0F * 0.8F}
+            });
+        }
+    }
+    
+    // Platforms at bridge ends
+    map.walls.push_back(BoxSpawn{
+        bridgeStart + glm::vec3{0.0F, 0.2F, -bridgeLength - 2.0F},
+        glm::vec3{4.0F, 0.2F, 3.0F}
+    });
+    map.walls.push_back(BoxSpawn{
+        bridgeStart + glm::vec3{0.0F, 0.2F, 3.0F},
+        glm::vec3{4.0F, 0.2F, 3.0F}
+    });
+    
+    // ============================================================
+    // ZONE 15: PALLET GALLERY (rapid pallet cycling test)
+    // Many pallets in close proximity for interaction stress
+    // ============================================================
+    
+    const glm::vec3 palletCenter{20.0F, 0.0F, 30.0F};
+    constexpr int palletGrid = 3;
+    constexpr float palletSpacing = 5.0F;
+    
+    for (int px = 0; px < palletGrid; ++px)
+    {
+        for (int pz = 0; pz < palletGrid; ++pz)
+        {
+            const glm::vec3 pos = palletCenter + glm::vec3{
+                static_cast<float>(px - 1) * palletSpacing,
+                0.6F,
+                static_cast<float>(pz - 1) * palletSpacing
+            };
+            
+            map.pallets.push_back(PalletSpawn{
+                pos,
+                glm::vec3{0.95F, 0.6F, 0.2F}
+            });
+            
+            // Small wall behind each pallet
+            map.walls.push_back(BoxSpawn{
+                pos + glm::vec3{0.0F, 1.0F, 1.5F},
+                glm::vec3{1.2F, 1.0F, 0.28F}
+            });
+        }
+    }
+    
+    // ============================================================
+    // ZONE 16: HIGH-POLY GARDEN (GPU stress test)
+    // High-polygon meshes to tank FPS and test GPU limits
+    // ============================================================
+    
+    // High-poly icosphere cluster (center of map, highly visible)
+    // Icosphere detail levels: 4=~2.5k tris, 5=~10k tris, 6=~40k tris
+    const glm::vec3 highPolyCenter{0.0F, 0.0F, 0.0F};
+    
+    // Central massive icosphere (detail 6 = ~40k triangles)
+    map.highPolyMeshes.push_back(HighPolyMeshSpawn{
+        highPolyCenter + glm::vec3{0.0F, 3.0F, 0.0F},
+        glm::vec3{0.0F, 0.0F, 0.0F},
+        glm::vec3{2.5F, 2.5F, 2.5F},
+        glm::vec3{0.7F, 0.4F, 0.3F},
+        HighPolyMeshSpawn::Type::IcoSphere,
+        6,  // ~40,960 triangles
+        true
+    });
+    
+    // Surrounding ring of high-poly toruses (detail 5 = ~10k tris each)
+    for (int ring = 0; ring < 8; ++ring)
+    {
+        const float angle = static_cast<float>(ring) * glm::radians(45.0F);
+        const glm::vec3 torusPos = highPolyCenter + glm::vec3{
+            glm::cos(angle) * 8.0F,
+            1.5F + static_cast<float>(ring % 2) * 0.5F,
+            glm::sin(angle) * 8.0F
+        };
+        
+        map.highPolyMeshes.push_back(HighPolyMeshSpawn{
+            torusPos,
+            glm::vec3{0.0F, glm::degrees(angle), 0.0F},
+            glm::vec3{0.8F, 0.8F, 0.8F},
+            glm::vec3{0.4F, 0.5F + static_cast<float>(ring) * 0.05F, 0.6F},
+            HighPolyMeshSpawn::Type::Torus,
+            5,  // ~10k triangles each
+            true
+        });
+    }
+    
+    // High-res grid planes (terrain-like, many vertices)
+    // 64x64 grid = ~8k quads = ~16k triangles per plane
+    // Raised to Y=0.35 to sit on top of pedestal (at Y=0.3)
+    for (int plane = 0; plane < 4; ++plane)
+    {
+        const float planeAngle = static_cast<float>(plane) * glm::radians(90.0F) + glm::radians(22.5F);
+        const glm::vec3 planePos = highPolyCenter + glm::vec3{
+            glm::cos(planeAngle) * 15.0F,
+            0.05F,  // Very thin, sitting just above pedestal
+            glm::sin(planeAngle) * 15.0F
+        };
+        
+        map.highPolyMeshes.push_back(HighPolyMeshSpawn{
+            planePos,
+            glm::vec3{0.0F, glm::degrees(planeAngle), 0.0F},
+            glm::vec3{4.0F, 0.1F, 4.0F},  // Thin Y scale
+            glm::vec3{0.3F, 0.35F + static_cast<float>(plane) * 0.1F, 0.3F},
+            HighPolyMeshSpawn::Type::GridPlane,
+            6,  // 64x64 grid = ~16k triangles
+            false  // No shadows for ground planes
+        });
+    }
+    
+    // Spiral staircases (many small steps = many triangles)
+    for (int stair = 0; stair < 2; ++stair)
+    {
+        const float stairAngle = static_cast<float>(stair) * glm::radians(180.0F) + glm::radians(45.0F);
+        const glm::vec3 stairPos = highPolyCenter + glm::vec3{
+            glm::cos(stairAngle) * 12.0F,
+            0.0F,
+            glm::sin(stairAngle) * 12.0F
+        };
+        
+        map.highPolyMeshes.push_back(HighPolyMeshSpawn{
+            stairPos,
+            glm::vec3{0.0F, glm::degrees(stairAngle), 0.0F},
+            glm::vec3{1.2F, 1.2F, 1.2F},
+            glm::vec3{0.5F, 0.4F, 0.3F},
+            HighPolyMeshSpawn::Type::SpiralStair,
+            5,  // 64 steps = many triangles
+            true
+        });
+    }
+    
+    // Additional stress test: small high-poly spheres scattered
+    for (int scatter = 0; scatter < 16; ++scatter)
+    {
+        const float scatterAngle = static_cast<float>(scatter) * glm::radians(22.5F);
+        const float scatterRadius = 6.0F + static_cast<float>(scatter % 4) * 2.0F;
+        const glm::vec3 scatterPos = highPolyCenter + glm::vec3{
+            glm::cos(scatterAngle) * scatterRadius,
+            0.8F + static_cast<float>(scatter % 3) * 0.4F,
+            glm::sin(scatterAngle) * scatterRadius
+        };
+        
+        map.highPolyMeshes.push_back(HighPolyMeshSpawn{
+            scatterPos,
+            glm::vec3{0.0F, 0.0F, 0.0F},
+            glm::vec3{0.4F, 0.4F, 0.4F},
+            glm::vec3{0.6F, 0.7F, 0.9F},
+            HighPolyMeshSpawn::Type::IcoSphere,
+            5,  // ~10k triangles each
+            true
+        });
+    }
+    
+    // Collision pedestal for high-poly garden (so player can walk around)
+    // Raised above ground to avoid z-fighting with main floor
+    map.walls.push_back(BoxSpawn{
+        highPolyCenter + glm::vec3{0.0F, 0.15F, 0.0F},
+        glm::vec3{20.0F, 0.15F, 20.0F}
+    });
+    
+    // Small collision boxes around each torus (cosmetic collision)
+    for (int ring = 0; ring < 8; ++ring)
+    {
+        const float angle = static_cast<float>(ring) * glm::radians(45.0F);
+        const glm::vec3 torusPos = highPolyCenter + glm::vec3{
+            glm::cos(angle) * 8.0F,
+            1.5F,
+            glm::sin(angle) * 8.0F
+        };
+        
+        map.walls.push_back(BoxSpawn{
+            torusPos,
+            glm::vec3{1.2F, 1.2F, 1.2F}
+        });
+    }
+    
+    // ============================================================
+    // GENERATOR PLACEMENTS (5 generators scattered)
+    // ============================================================
+    
+    map.generatorSpawns = {
+        glm::vec3{-30.0F, 1.0F, -10.0F},
+        glm::vec3{30.0F, 1.0F, -15.0F},
+        glm::vec3{0.0F, 1.0F, 10.0F},
+        glm::vec3{-25.0F, 1.0F, 35.0F},
+        glm::vec3{25.0F, 1.0F, 25.0F}
+    };
+    
+    // ============================================================
+    // TILE DEBUG INFO (for visualization)
+    // ============================================================
+    
+    // Add tile markers for key zones
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{-20.0F, 0.05F, 0.0F}, glm::vec3{14.0F, 0.05F, 14.0F}, 1, 0});   // Spiral
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{20.0F, 0.05F, 0.0F}, glm::vec3{9.0F, 0.05F, 9.0F}, 2, 0});      // Pyramid
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F, 0.05F, 25.0F}, glm::vec3{20.0F, 0.05F, 20.0F}, 3, 0});    // Pillars
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{-20.0F, 0.05F, 30.0F}, glm::vec3{18.0F, 0.05F, 18.0F}, 4, 0});  // Slalom
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{25.0F, 0.05F, -25.0F}, glm::vec3{20.0F, 0.05F, 20.0F}, 5, 0});  // Grid
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F, 0.05F, -20.0F}, glm::vec3{10.0F, 0.05F, 10.0F}, 6, 0});   // Hub
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{35.0F, 0.05F, -35.0F}, glm::vec3{8.0F, 0.05F, 8.0F}, 7, 0});    // Acute
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{-35.0F, 0.05F, 25.0F}, glm::vec3{12.0F, 0.05F, 12.0F}, 8, 0});  // Tiers
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F, 0.05F, -40.0F}, glm::vec3{15.0F, 0.05F, 8.0F}, 9, 0});    // Chaos
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{35.0F, 0.05F, 0.0F}, glm::vec3{16.0F, 0.05F, 16.0F}, 10, 0});   // Rings
+    map.tiles.push_back(GeneratedMap::TileDebug{glm::vec3{0.0F, 0.05F, 0.0F}, glm::vec3{20.0F, 0.05F, 20.0F}, 11, 0});    // High-Poly Garden
+    
     return map;
 }
 

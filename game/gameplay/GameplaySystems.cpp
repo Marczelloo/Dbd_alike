@@ -31,6 +31,7 @@ namespace
 {
 constexpr float kGravity = -20.0F;
 constexpr float kPi = 3.1415926535F;
+constexpr float kPovLodBufferScale = 1.10F; // 10% frustum edge buffer for low-LOD fallback
 
 engine::scene::Entity SpawnActor(
     engine::scene::World& world,
@@ -106,6 +107,7 @@ std::string MapToName(GameplaySystems::MapType type)
         case GameplaySystems::MapType::Test: return "test";
         case GameplaySystems::MapType::Main: return "main";
         case GameplaySystems::MapType::CollisionTest: return "collision_test";
+        case GameplaySystems::MapType::Benchmark: return "benchmark";
         default: return "unknown";
     }
 }
@@ -113,6 +115,232 @@ std::string MapToName(GameplaySystems::MapType type)
 void ItemPowerLog(const std::string& text)
 {
     std::cout << "[ITEM/POWER] " << text << "\n";
+}
+
+// High-poly mesh generation helpers for GPU stress testing
+engine::render::MeshGeometry GenerateIcoSphere(int subdivisions)
+{
+    // Base icosahedron vertices
+    const float t = (1.0F + std::sqrt(5.0F)) / 2.0F;
+    std::vector<glm::vec3> vertices = {
+        {-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0},
+        {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t},
+        {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}
+    };
+    for (auto& v : vertices) v = glm::normalize(v);
+    
+    // Base faces (indices)
+    std::vector<std::uint32_t> indices = {
+        0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
+        1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+        3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
+        4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1
+    };
+    
+    // Subdivide
+    for (int sub = 0; sub < subdivisions; ++sub)
+    {
+        std::vector<std::uint32_t> newIndices;
+        std::unordered_map<std::uint64_t, std::uint32_t> midpointCache;
+        
+        auto getMidpoint = [&](std::uint32_t a, std::uint32_t b) -> std::uint32_t {
+            const std::uint64_t key = (static_cast<std::uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+            auto it = midpointCache.find(key);
+            if (it != midpointCache.end()) return it->second;
+            
+            glm::vec3 mid = glm::normalize((vertices[a] + vertices[b]) * 0.5F);
+            const std::uint32_t idx = static_cast<std::uint32_t>(vertices.size());
+            vertices.push_back(mid);
+            midpointCache[key] = idx;
+            return idx;
+        };
+        
+        for (size_t i = 0; i < indices.size(); i += 3)
+        {
+            const std::uint32_t a = indices[i], b = indices[i+1], c = indices[i+2];
+            const std::uint32_t ab = getMidpoint(a, b);
+            const std::uint32_t bc = getMidpoint(b, c);
+            const std::uint32_t ca = getMidpoint(c, a);
+            
+            newIndices.insert(newIndices.end(), {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca});
+        }
+        indices = std::move(newIndices);
+    }
+    
+    engine::render::MeshGeometry mesh;
+    mesh.positions = std::move(vertices);
+    mesh.indices = std::move(indices);
+    
+    // Compute normals (same as positions for unit sphere)
+    mesh.normals = mesh.positions;
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateTorus(float majorRadius, float minorRadius, int majorSegments, int minorSegments)
+{
+    engine::render::MeshGeometry mesh;
+    
+    for (int i = 0; i <= majorSegments; ++i)
+    {
+        const float theta = static_cast<float>(i) / static_cast<float>(majorSegments) * 2.0F * kPi;
+        const float cosTheta = std::cos(theta);
+        const float sinTheta = std::sin(theta);
+        
+        for (int j = 0; j <= minorSegments; ++j)
+        {
+            const float phi = static_cast<float>(j) / static_cast<float>(minorSegments) * 2.0F * kPi;
+            const float cosPhi = std::cos(phi);
+            const float sinPhi = std::sin(phi);
+            
+            const float x = (majorRadius + minorRadius * cosPhi) * cosTheta;
+            const float y = minorRadius * sinPhi;
+            const float z = (majorRadius + minorRadius * cosPhi) * sinTheta;
+            
+            mesh.positions.push_back({x, y, z});
+            
+            // Normal
+            const float nx = cosPhi * cosTheta;
+            const float ny = sinPhi;
+            const float nz = cosPhi * sinTheta;
+            mesh.normals.push_back(glm::normalize(glm::vec3{nx, ny, nz}));
+        }
+    }
+    
+    // Generate indices
+    for (int i = 0; i < majorSegments; ++i)
+    {
+        for (int j = 0; j < minorSegments; ++j)
+        {
+            const std::uint32_t a = static_cast<std::uint32_t>(i * (minorSegments + 1) + j);
+            const std::uint32_t b = static_cast<std::uint32_t>(a + minorSegments + 1);
+            const std::uint32_t c = static_cast<std::uint32_t>(a + 1);
+            const std::uint32_t d = static_cast<std::uint32_t>(b + 1);
+            
+            mesh.indices.insert(mesh.indices.end(), {a, b, c, b, d, c});
+        }
+    }
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateGridPlane(int xDivisions, int zDivisions)
+{
+    engine::render::MeshGeometry mesh;
+    
+    const float halfX = static_cast<float>(xDivisions) * 0.5F;
+    const float halfZ = static_cast<float>(zDivisions) * 0.5F;
+    const float stepX = 1.0F;
+    const float stepZ = 1.0F;
+    
+    for (int z = 0; z <= zDivisions; ++z)
+    {
+        for (int x = 0; x <= xDivisions; ++x)
+        {
+            mesh.positions.push_back({
+                static_cast<float>(x) * stepX - halfX,
+                0.0F,
+                static_cast<float>(z) * stepZ - halfZ
+            });
+            mesh.normals.push_back({0.0F, 1.0F, 0.0F});
+        }
+    }
+    
+    for (int z = 0; z < zDivisions; ++z)
+    {
+        for (int x = 0; x < xDivisions; ++x)
+        {
+            const std::uint32_t a = static_cast<std::uint32_t>(z * (xDivisions + 1) + x);
+            const std::uint32_t b = static_cast<std::uint32_t>(a + xDivisions + 1);
+            const std::uint32_t c = static_cast<std::uint32_t>(a + 1);
+            const std::uint32_t d = static_cast<std::uint32_t>(b + 1);
+            
+            mesh.indices.insert(mesh.indices.end(), {a, c, b, c, d, b});
+        }
+    }
+    
+    return mesh;
+}
+
+engine::render::MeshGeometry GenerateSpiralStair(int stepCount, int segmentsPerStep)
+{
+    engine::render::MeshGeometry mesh;
+    
+    const float heightPerStep = 0.2F;
+    const float radius = 1.0F;
+    const float innerRadius = 0.3F;
+    const float anglePerStep = 2.0F * kPi / 32.0F;
+    
+    for (int step = 0; step < stepCount; ++step)
+    {
+        const float baseAngle = static_cast<float>(step) * anglePerStep;
+        const float y = static_cast<float>(step) * heightPerStep;
+        
+        for (int seg = 0; seg <= segmentsPerStep; ++seg)
+        {
+            const float t = static_cast<float>(seg) / static_cast<float>(segmentsPerStep);
+            const float angle = baseAngle + t * anglePerStep;
+            
+            // Outer vertex
+            mesh.positions.push_back({
+                std::cos(angle) * radius,
+                y,
+                std::sin(angle) * radius
+            });
+            mesh.normals.push_back({std::cos(angle), 0.0F, std::sin(angle)});
+            
+            // Inner vertex
+            mesh.positions.push_back({
+                std::cos(angle) * innerRadius,
+                y,
+                std::sin(angle) * innerRadius
+            });
+            mesh.normals.push_back({-std::cos(angle), 0.0F, -std::sin(angle)});
+            
+            // Top edge
+            mesh.positions.push_back({
+                std::cos(angle) * radius,
+                y + 0.05F,
+                std::sin(angle) * radius
+            });
+            mesh.normals.push_back({0.0F, 1.0F, 0.0F});
+        }
+        
+        // Generate indices for this step
+        const std::uint32_t baseIdx = static_cast<std::uint32_t>(step * (segmentsPerStep + 1) * 3);
+        for (int seg = 0; seg < segmentsPerStep; ++seg)
+        {
+            const std::uint32_t o0 = baseIdx + static_cast<std::uint32_t>(seg * 3);
+            const std::uint32_t o1 = o0 + 3;
+            const std::uint32_t i0 = o0 + 1;
+            const std::uint32_t i1 = i0 + 3;
+            const std::uint32_t t0 = o0 + 2;
+            const std::uint32_t t1 = t0 + 3;
+            
+            // Tread top
+            mesh.indices.insert(mesh.indices.end(), {o0, i0, o1, i0, i1, o1});
+            // Riser
+            mesh.indices.insert(mesh.indices.end(), {o0, o1, t1, o0, t1, t0});
+        }
+    }
+    
+    return mesh;
+}
+
+glm::vec3 ComputeMeshBounds(const engine::render::MeshGeometry& mesh)
+{
+    if (mesh.positions.empty()) return glm::vec3{1.0F};
+    
+    glm::vec3 minPos = mesh.positions[0];
+    glm::vec3 maxPos = mesh.positions[0];
+    
+    for (const auto& p : mesh.positions)
+    {
+        minPos = glm::min(minPos, p);
+        maxPos = glm::max(maxPos, p);
+    }
+    
+    return (maxPos - minPos) * 0.5F;
 }
 
 } // namespace
@@ -763,9 +991,31 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     std::uint32_t dynamicDrawn = 0;
     std::uint32_t dynamicCulled = 0;
 
+    enum class VisibilityLod
+    {
+        Culled,
+        Full,
+        EdgeLow
+    };
+
     // Helper: test if an AABB at (center ± halfExtents) is inside frustum.
     const auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
         return m_frustum.IntersectsAABB(center - halfExtents, center + halfExtents);
+    };
+
+    const auto classifyVisibility = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> VisibilityLod {
+        if (m_frustum.IntersectsAABB(center - halfExtents, center + halfExtents))
+        {
+            return VisibilityLod::Full;
+        }
+
+        const glm::vec3 expandedHalfExtents = halfExtents * kPovLodBufferScale;
+        if (m_frustum.IntersectsAABB(center - expandedHalfExtents, center + expandedHalfExtents))
+        {
+            return VisibilityLod::EdgeLow;
+        }
+
+        return VisibilityLod::Culled;
     };
 
     if (m_staticBatcher.IsBuilt())
@@ -1013,7 +1263,8 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
 
         // Frustum cull actors using capsule bounding box.
         const glm::vec3 actorHalf{actor.capsuleRadius, actor.capsuleHeight * 0.5F, actor.capsuleRadius};
-        if (!isVisible(transformIt->second.position, actorHalf))
+        const VisibilityLod actorVisibility = classifyVisibility(transformIt->second.position, actorHalf);
+        if (actorVisibility == VisibilityLod::Culled)
         {
             ++dynamicCulled;
             continue;
@@ -1055,12 +1306,24 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         const float visualHeightScale =
             actor.crawling ? 0.5F :
             (actor.crouching ? 0.72F : 1.0F);
-        renderer.DrawCapsule(
-            transformIt->second.position,
-            actor.capsuleHeight * visualHeightScale,
-            actor.capsuleRadius,
-            color
-        );
+        if (actorVisibility == VisibilityLod::EdgeLow)
+        {
+            const glm::vec3 lowLodHalfExtents{
+                actor.capsuleRadius,
+                actor.capsuleHeight * visualHeightScale * 0.5F,
+                actor.capsuleRadius
+            };
+            renderer.DrawBox(transformIt->second.position, lowLodHalfExtents, color * 0.9F);
+        }
+        else
+        {
+            renderer.DrawCapsule(
+                transformIt->second.position,
+                actor.capsuleHeight * visualHeightScale,
+                actor.capsuleRadius,
+                color
+            );
+        }
 
         if (m_debugDrawEnabled)
         {
@@ -1310,6 +1573,9 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     const bool localIsKiller = (m_controlledRole == ControlledRole::Killer);
     RenderScratchMarks(renderer, localIsKiller);
     RenderBloodPools(renderer, localIsKiller);
+    
+    // High-poly meshes for GPU stress testing (benchmark map)
+    RenderHighPolyMeshes(renderer);
 
     // Report dynamic object culling stats to profiler.
     auto& profStats = engine::core::Profiler::Instance().StatsMut();
@@ -1839,6 +2105,10 @@ void GameplaySystems::LoadMap(const std::string& mapName)
     else if (mapName == "collision_test")
     {
         BuildSceneFromMap(MapType::CollisionTest, m_generationSeed);
+    }
+    else if (mapName == "benchmark")
+    {
+        BuildSceneFromMap(MapType::Benchmark, m_generationSeed);
     }
     else
     {
@@ -3037,6 +3307,10 @@ void GameplaySystems::BuildSceneFromMap(MapType mapType, unsigned int seed)
             generator.CalculateDbdSpawns(generated, seed);
         }
     }
+    else if (mapType == MapType::Benchmark)
+    {
+        generated = generator.GenerateBenchmarkMap();
+    }
     else
     {
         generated = generator.GenerateCollisionTestMap();
@@ -3246,6 +3520,49 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
         };
         m_world.Generators()[generatorEntity] = engine::scene::GeneratorComponent{};
         m_world.Names()[generatorEntity] = engine::scene::NameComponent{"generator"};
+    }
+
+    // Generate high-poly meshes for benchmark map GPU stress test
+    if (!generated.highPolyMeshes.empty() && !m_highPolyMeshesGenerated)
+    {
+        m_highPolyMeshes.clear();
+        m_highPolyMeshes.reserve(generated.highPolyMeshes.size());
+        
+        for (const auto& meshSpawn : generated.highPolyMeshes)
+        {
+            HighPolyMesh mesh;
+            mesh.position = meshSpawn.position;
+            mesh.rotation = meshSpawn.rotation;
+            mesh.scale = meshSpawn.scale;
+            mesh.color = meshSpawn.color;
+            
+            // Generate geometry based on type
+            switch (meshSpawn.type)
+            {
+                case maps::HighPolyMeshSpawn::Type::IcoSphere:
+                    mesh.geometry = GenerateIcoSphere(meshSpawn.detailLevel);
+                    break;
+                case maps::HighPolyMeshSpawn::Type::Torus:
+                    mesh.geometry = GenerateTorus(
+                        1.0F, 0.4F, 
+                        16 + meshSpawn.detailLevel * 8, 
+                        8 + meshSpawn.detailLevel * 4
+                    );
+                    break;
+                case maps::HighPolyMeshSpawn::Type::GridPlane:
+                    mesh.geometry = GenerateGridPlane(2 << meshSpawn.detailLevel, 2 << meshSpawn.detailLevel);
+                    break;
+                case maps::HighPolyMeshSpawn::Type::SpiralStair:
+                    mesh.geometry = GenerateSpiralStair(32 + meshSpawn.detailLevel * 8, 16);
+                    break;
+            }
+            
+            // Compute bounding box for frustum culling
+            mesh.halfExtents = ComputeMeshBounds(mesh.geometry) * mesh.scale;
+            
+            m_highPolyMeshes.push_back(std::move(mesh));
+        }
+        m_highPolyMeshesGenerated = true;
     }
 
     // Use DBD-inspired spawn system if enabled, otherwise use legacy spawns
@@ -6892,6 +7209,59 @@ void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool 
             glm::vec3{pool.size * 0.5F, 0.01F, pool.size * 0.5F},
             color * alpha
         );
+    }
+}
+
+void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
+{
+    if (m_highPolyMeshes.empty())
+    {
+        return;
+    }
+
+    // Frustum culling helper
+    auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        const glm::vec3 mins = center - halfExtents;
+        const glm::vec3 maxs = center + halfExtents;
+        return m_frustum.IntersectsAABB(mins, maxs);
+    };
+
+    auto isVisibleWithPovBuffer = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        const glm::vec3 expandedHalf = halfExtents * kPovLodBufferScale;
+        const glm::vec3 mins = center - expandedHalf;
+        const glm::vec3 maxs = center + expandedHalf;
+        return m_frustum.IntersectsAABB(mins, maxs);
+    };
+
+    for (const auto& mesh : m_highPolyMeshes)
+    {
+        const bool visibleFull = isVisible(mesh.position, mesh.halfExtents);
+        if (!visibleFull && !isVisibleWithPovBuffer(mesh.position, mesh.halfExtents))
+        {
+            continue;
+        }
+
+        if (visibleFull)
+        {
+            renderer.DrawMesh(
+                mesh.geometry,
+                mesh.position,
+                mesh.rotation,
+                mesh.scale,
+                mesh.color,
+                engine::render::MaterialParams{0.55F, 0.0F, 0.0F, false}
+            );
+        }
+        else
+        {
+            renderer.DrawOrientedBox(
+                mesh.position,
+                mesh.halfExtents,
+                mesh.rotation,
+                mesh.color * 0.85F,
+                engine::render::MaterialParams{0.9F, 0.0F, 0.0F, false}
+            );
+        }
     }
 }
 

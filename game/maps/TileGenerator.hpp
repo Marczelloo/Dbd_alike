@@ -32,6 +32,26 @@ struct PalletSpawn
     glm::vec3 halfExtents{0.9F, 0.6F, 0.18F};
 };
 
+// High-poly mesh placement for GPU stress testing
+struct HighPolyMeshSpawn
+{
+    enum class Type
+    {
+        IcoSphere,      // Geodesic sphere with subdivision
+        Torus,          // Torus with many rings/segments
+        GridPlane,      // High-res terrain-like grid
+        SpiralStair     // Spiral staircase with many steps
+    };
+    
+    glm::vec3 position{0.0F};
+    glm::vec3 rotation{0.0F};   // Euler degrees
+    glm::vec3 scale{1.0F};
+    glm::vec3 color{0.6F, 0.5F, 0.4F};
+    Type type = Type::IcoSphere;
+    int detailLevel = 4;        // Subdivision level (higher = more polys)
+    bool castShadows = true;
+};
+
 struct GeneratedMap
 {
     struct TileDebug
@@ -47,6 +67,7 @@ struct GeneratedMap
     std::vector<PalletSpawn> pallets;
     std::vector<glm::vec3> generatorSpawns; // Positions for generators (always 5)
     std::vector<TileDebug> tiles;
+    std::vector<HighPolyMeshSpawn> highPolyMeshes; // GPU stress test meshes
     
     // Legacy single spawn points (kept for backward compatibility)
     glm::vec3 survivorSpawn{0.0F};
@@ -93,6 +114,7 @@ public:
     GeneratedMap GenerateMainMap(unsigned int seed) const;
     GeneratedMap GenerateMainMap(unsigned int seed, const GenerationSettings& settings) const;
     GeneratedMap GenerateCollisionTestMap() const;
+    GeneratedMap GenerateBenchmarkMap() const; // Comprehensive benchmark + collision stress test
 
     // DBD-inspired spawn calculation
     void CalculateDbdSpawns(GeneratedMap& map, unsigned int seed) const;

@@ -78,7 +78,7 @@ Pod polem input sa dynamiczne podpowiedzi; `TAB` autouzupelnia komendy.
 - `set_role survivor|killer`
 - `control_role survivor|killer`
 - `cam_mode survivor|killer|role`
-- `load map test|main|main_map|collision_test`
+- `load map test|main|main_map|collision_test|benchmark`
 - `regen_loops [seed]`
 - `skillcheck start`
 - `set_speed survivor|killer <percent>`
@@ -94,6 +94,18 @@ Pod polem input sa dynamiczne podpowiedzi; `TAB` autouzupelnia komendy.
 - `set_resolution <w> <h>`
 - `toggle_fullscreen`
 - `quit`
+- `perf` — toggle performance profiler overlay
+- `perf_pin on|off` — pin profiler to game window
+- `perf_compact on|off` — compact FPS bar at corner
+
+### Profiler Tabs
+
+- **Overview**: Frame time graph + FPS histogram with auto-scaling
+- **Systems**: Per-system timings (Update, Physics, Render, UI, FX, Audio, Swap) with frame budget indicator
+- **Sections**: Named profile scopes with current/avg/peak times
+- **Render**: Draw calls, vertices, triangles, culling stats, GPU memory
+- **Distribution**: Frame time percentiles (P50, P90, P95, P99, 1% Low) + histogram
+- **Benchmark**: Automated FPS benchmark with statistics
 
 ## Multiplayer (Host/Join)
 
@@ -137,6 +149,12 @@ Model sieci:
 - `load map collision_test`
 - sprawdź wall sliding w korytarzu i corner snag test
 - `F2` włącz collidery/triggery/tile overlay
+
+6. `Benchmark map`:
+- `load map benchmark`
+- 100m x 100m arena z wieloma strefami testowymi
+- Testuje: edge case kolizje, rendering pod obciążeniem, LOS, chase scenarios
+- Strefy: tight corridors, spiral maze, pillar forest, slalom, dense grid, complex intersections, acute angles, multi-tier platforms, chaos scatter, concentric rings, bridge crossing, pallet gallery
 
 6. `Wiggle`:
 - ustaw survivor state na `carried`
@@ -947,3 +965,19 @@ Console commands:
 2. Get injured, move around → verify blood pools spawn
 3. Use `killer_light on|off` to verify spotlight appears/disappears
 4. Use debug overlays to confirm counts and values
+
+---
+
+## Update: POV Edge Low-LOD Optimization
+
+Render path now uses a 3-zone visibility policy for dynamic actors and benchmark high-poly meshes:
+
+- **Inside camera frustum** → full quality render
+- **Outside frustum but inside +10% edge buffer** → lower LOD fallback
+- **Outside buffer** → culled
+
+Current low-LOD fallback:
+- actors: capsule → simplified box proxy
+- benchmark high-poly meshes: full mesh → oriented box proxy
+
+This reduces geometry cost near frustum edges (camera turns / edge-of-screen cases) without aggressive popping.

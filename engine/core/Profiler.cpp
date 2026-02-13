@@ -3,8 +3,46 @@
 #include <algorithm>
 #include <numeric>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
+#elif defined(__linux__)
+#include <fstream>
+#include <sstream>
+#endif
+
 namespace engine::core
 {
+
+namespace
+{
+std::size_t GetProcessRamBytes()
+{
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc)))
+    {
+        return pmc.WorkingSetSize;
+    }
+#elif defined(__linux__)
+    std::ifstream file("/proc/self/status");
+    std::string line;
+    while (std::getline(file, line))
+    {
+        if (line.rfind("VmRSS:", 0) == 0)
+        {
+            std::istringstream iss(line.substr(6));
+            std::size_t kb;
+            iss >> kb;
+            return kb * 1024;
+        }
+    }
+#endif
+    return 0;
+}
+}
 
 void Profiler::BeginFrame()
 {
@@ -35,10 +73,9 @@ void Profiler::EndFrame()
     m_frameTimeHistory.Push(frameMs);
     m_fpsHistory.Push(m_stats.fps);
 
-    // Compute average FPS from history.
     m_stats.avgFps = m_fpsHistory.Average();
 
-    // Compute 1% low FPS.
+    // Compute frame time percentiles from recent history.
     m_recentFrameTimes.clear();
     constexpr std::size_t kRecentCount = 128;
     float recentBuf[kRecentCount];
@@ -47,6 +84,19 @@ void Profiler::EndFrame()
     if (count >= 10)
     {
         m_recentFrameTimes.assign(recentBuf, recentBuf + count);
+        std::sort(m_recentFrameTimes.begin(), m_recentFrameTimes.end());
+
+        const auto percentile = [count, this](float p) -> float {
+            const std::size_t idx = static_cast<std::size_t>(static_cast<float>(count - 1) * p);
+            return m_recentFrameTimes[std::min(idx, count - 1)];
+        };
+
+        m_stats.frameTimeP50 = percentile(0.50F);
+        m_stats.frameTimeP90 = percentile(0.90F);
+        m_stats.frameTimeP95 = percentile(0.95F);
+        m_stats.frameTimeP99 = percentile(0.99F);
+
+        // Compute 1% low FPS (worst 1% of frames).
         std::sort(m_recentFrameTimes.begin(), m_recentFrameTimes.end(), std::greater<float>());
         const std::size_t onePercent = std::max<std::size_t>(1, count / 100);
         float worstSum = 0.0F;
@@ -58,13 +108,63 @@ void Profiler::EndFrame()
         m_stats.onePercentLowFps = (worstAvgMs > 0.001F) ? (1000.0F / worstAvgMs) : 0.0F;
     }
 
-    // Push section history.
+    // Push section history + map to system stats.
     for (auto& section : m_sections)
     {
         if (section.callCount > 0)
         {
             section.history.Push(section.currentMs);
         }
+
+        // Map named sections to system timings.
+        if (section.name == "Update")
+        {
+            m_stats.updateMs = section.currentMs;
+        }
+        else if (section.name == "Physics")
+        {
+            m_stats.physicsMs = section.currentMs;
+        }
+        else if (section.name == "Render")
+        {
+            m_stats.renderSubmitMs = section.currentMs;
+        }
+        else if (section.name == "RenderGPU" || section.name == "Render GPU")
+        {
+            m_stats.renderGpuMs = section.currentMs;
+        }
+        else if (section.name == "UI")
+        {
+            m_stats.uiMs = section.currentMs;
+        }
+        else if (section.name == "FX" || section.name == "VFX")
+        {
+            m_stats.fxMs = section.currentMs;
+        }
+        else if (section.name == "Audio")
+        {
+            m_stats.audioMs = section.currentMs;
+        }
+        else if (section.name == "Swap")
+        {
+            m_stats.swapMs = section.currentMs;
+        }
+        else if (section.name == "Input")
+        {
+            m_stats.inputMs = section.currentMs;
+        }
+        else if (section.name == "Network")
+        {
+            m_stats.networkMs = section.currentMs;
+        }
+    }
+
+    // Update RAM usage (sampling every few frames to reduce overhead).
+    ++m_ramUpdateCounter;
+    if (m_ramUpdateCounter >= 30)
+    {
+        m_ramUpdateCounter = 0;
+        m_stats.systemRamBytes = GetProcessRamBytes();
     }
 
     // Benchmark tracking.

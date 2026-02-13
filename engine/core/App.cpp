@@ -575,8 +575,11 @@ bool App::Run()
 
         const double frameStart = glfwGetTime();
 
-        m_window.PollEvents();
-        m_input.Update(m_window.NativeHandle());
+        {
+            PROFILE_SCOPE("Input");
+            m_window.PollEvents();
+            m_input.Update(m_window.NativeHandle());
+        }
         if (!m_pendingDroppedFiles.empty())
         {
             m_levelEditor.QueueExternalDroppedFiles(m_pendingDroppedFiles);
@@ -668,7 +671,10 @@ bool App::Run()
             SendClientInput(m_input, controlsEnabled);
         }
 
-        PollNetwork();
+        {
+            PROFILE_SCOPE("Network");
+            PollNetwork();
+        }
         if ((m_networkState == NetworkState::ClientConnecting || m_networkState == NetworkState::ClientHandshaking) &&
             !m_network.IsConnected())
         {
@@ -726,7 +732,10 @@ bool App::Run()
                 m_window.FramebufferHeight()
             );
         }
-        m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
+        {
+            PROFILE_SCOPE("Audio");
+            m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
+        }
 
         {
             PROFILE_SCOPE("Render");
@@ -1243,7 +1252,10 @@ bool App::Run()
 
         m_console.Render(context, currentFps, hudState);
 
-        m_window.SwapBuffers();
+        {
+            PROFILE_SCOPE("Swap");
+            m_window.SwapBuffers();
+        }
 
         profiler.EndFrame();
 

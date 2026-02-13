@@ -130,6 +130,18 @@ struct FrameStats
     std::size_t solidVboBytes = 0;
     std::size_t texturedVboBytes = 0;
     std::size_t lineVboBytes = 0;
+    std::size_t systemRamBytes = 0;    // Process working set (RAM)
+
+    // Frame time percentiles (computed from recent history).
+    float frameTimeP50 = 0.0F;
+    float frameTimeP90 = 0.0F;
+    float frameTimeP95 = 0.0F;
+    float frameTimeP99 = 0.0F;
+
+    // System timings breakdown (ms).
+    float appTotalMs = 0.0F;
+    float inputMs = 0.0F;
+    float networkMs = 0.0F;
 };
 
 /// Lightweight CPU profiler with optional GPU timer queries.
@@ -218,6 +230,9 @@ private:
     // 1% low FPS tracking.
     TimingRing<256> m_frameTimes1PercentLow;
     std::vector<float> m_recentFrameTimes;
+
+    // RAM update counter (sample every N frames).
+    int m_ramUpdateCounter = 0;
 
     // Benchmark.
     bool m_benchmarkRunning = false;
