@@ -359,9 +359,9 @@ glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
 bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 {
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
+    // NOTE: GL_CULL_FACE intentionally NOT enabled — the geometry pipeline
+    // (boxes, capsules, UI quads) has mixed CW/CCW winding order.
+    // A full winding audit would be needed before culling can safely be enabled.
 
     // Reserve transient CPU-side buffers once to reduce per-frame growth churn.
     m_lineVertices.reserve(8192);
