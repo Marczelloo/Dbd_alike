@@ -243,6 +243,8 @@ private:
     [[nodiscard]] bool HasMousePressed(int button) const;
     [[nodiscard]] bool HasMouseDown(int button) const;
     [[nodiscard]] bool HasMouseReleased(int button) const;
+    void ConsumeMousePress();
+    void ConsumeMouseRelease();
 
     const platform::Input* m_input = nullptr;
     int m_screenWidth = 0;
@@ -269,6 +271,8 @@ private:
     std::string m_keyboardFocusId;
     bool m_mouseCaptured = false;
     bool m_keyboardCaptured = false;
+    bool m_mousePressConsumed = false;
+    bool m_mouseReleaseConsumed = false;
 
     std::vector<DrawBatch> m_batches;
 

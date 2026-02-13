@@ -52,6 +52,11 @@ struct LobbySceneState
     int localPlayerIndex = 0;
     bool isHost = false;
     std::string selectedMap = "main";
+    std::string selectedCharacter;
+    std::string selectedItem;
+    std::string selectedPower;
+    std::string selectedAddonA;
+    std::string selectedAddonB;
     std::array<std::string, 4> selectedPerks = {"", "", "", ""};
     float countdownTimer = -1.0F;
     bool countdownActive = false;
@@ -66,6 +71,8 @@ public:
     using RoleChangedCallback = std::function<void(const std::string& role)>;
     using CharacterChangedCallback = std::function<void(const std::string& characterId)>;
     using PerksChangedCallback = std::function<void(const std::array<std::string, 4>& perks)>;
+    using ItemChangedCallback = std::function<void(const std::string& itemId, const std::string& addonA, const std::string& addonB)>;
+    using PowerChangedCallback = std::function<void(const std::string& powerId, const std::string& addonA, const std::string& addonB)>;
 
     LobbyScene();
     ~LobbyScene();
@@ -93,11 +100,40 @@ public:
     void SetRoleChangedCallback(RoleChangedCallback callback) { m_onRoleChanged = std::move(callback); }
     void SetCharacterChangedCallback(CharacterChangedCallback callback) { m_onCharacterChanged = std::move(callback); }
     void SetPerksChangedCallback(PerksChangedCallback callback) { m_onPerksChanged = std::move(callback); }
+    void SetItemChangedCallback(ItemChangedCallback callback) { m_onItemChanged = std::move(callback); }
+    void SetPowerChangedCallback(PowerChangedCallback callback) { m_onPowerChanged = std::move(callback); }
     
     void SetAvailablePerks(const std::vector<std::string>& perkIds, const std::vector<std::string>& perkNames) {
         m_availablePerkIds = perkIds;
         m_availablePerkNames = perkNames;
     }
+    
+    void SetAvailableCharacters(const std::vector<std::string>& survivorIds, const std::vector<std::string>& survivorNames,
+                                 const std::vector<std::string>& killerIds, const std::vector<std::string>& killerNames) {
+        m_survivorIds = survivorIds;
+        m_survivorNames = survivorNames;
+        m_killerIds = killerIds;
+        m_killerNames = killerNames;
+    }
+    
+    void SetAvailableItems(const std::vector<std::string>& itemIds, const std::vector<std::string>& itemNames) {
+        m_itemIds = itemIds;
+        m_itemNames = itemNames;
+    }
+    
+    void SetAvailablePowers(const std::vector<std::string>& powerIds, const std::vector<std::string>& powerNames) {
+        m_powerIds = powerIds;
+        m_powerNames = powerNames;
+    }
+    
+    void SetAvailableAddons(const std::vector<std::string>& addonIds, const std::vector<std::string>& addonNames) {
+        m_addonIds = addonIds;
+        m_addonNames = addonNames;
+    }
+    
+    void SetLocalPlayerCharacter(const std::string& characterId);
+    void SetLocalPlayerItem(const std::string& itemId, const std::string& addonA = "", const std::string& addonB = "");
+    void SetLocalPlayerPower(const std::string& powerId, const std::string& addonA = "", const std::string& addonB = "");
 
     [[nodiscard]] const LobbySceneState& GetState() const { return m_state; }
     [[nodiscard]] bool IsInLobby() const { return m_isInLobby; }
@@ -130,8 +166,16 @@ private:
     
     void DrawUIPanel(float x, float y, float width, float height);
     void DrawPlayerSlot(float x, float y, float width, float height, int playerIndex);
-    void DrawRoleSelector(float x, float y);
-    void DrawPerkSlots(float x, float y);
+    void DrawRoleSelector(float x, float y, bool dropdownOnly);
+    void DrawPerkSlots(float x, float y, bool dropdownOnly);
+    void DrawCharacterSelector(float x, float y, bool dropdownOnly);
+    void DrawItemSelector(float x, float y, bool dropdownOnly);
+    void DrawPowerSelector(float x, float y, bool dropdownOnly);
+    void DrawAddonSelector(float x, float y, bool isAddonA, bool dropdownOnly);
+    
+    void CloseAllDropdownsExcept(const std::string& keepOpen);
+    void HandleAddonDropdownClick(float x, float y, bool isAddonA);
+    bool isMouseOver(float x, float y, float w, float h) const;
 
     engine::ui::UiSystem* m_ui = nullptr;
     engine::render::Renderer* m_renderer = nullptr;
@@ -163,10 +207,40 @@ private:
     RoleChangedCallback m_onRoleChanged;
     CharacterChangedCallback m_onCharacterChanged;
     PerksChangedCallback m_onPerksChanged;
+    ItemChangedCallback m_onItemChanged;
+    PowerChangedCallback m_onPowerChanged;
     
     std::vector<std::string> m_availablePerkIds;
     std::vector<std::string> m_availablePerkNames;
     int m_selectedPerkSlot = -1;
+    
+    // Character selection
+    std::vector<std::string> m_survivorIds;
+    std::vector<std::string> m_survivorNames;
+    std::vector<std::string> m_killerIds;
+    std::vector<std::string> m_killerNames;
+    int m_selectedCharacterIndex = 0;
+    bool m_characterDropdownOpen = false;
+    
+    // Item selection
+    std::vector<std::string> m_itemIds;
+    std::vector<std::string> m_itemNames;
+    int m_selectedItemIndex = 0;
+    bool m_itemDropdownOpen = false;
+    
+    // Power selection
+    std::vector<std::string> m_powerIds;
+    std::vector<std::string> m_powerNames;
+    int m_selectedPowerIndex = 0;
+    bool m_powerDropdownOpen = false;
+    
+    // Addon selection
+    std::vector<std::string> m_addonIds;
+    std::vector<std::string> m_addonNames;
+    int m_selectedAddonAIndex = 0;
+    int m_selectedAddonBIndex = 0;
+    bool m_addonADropdownOpen = false;
+    bool m_addonBDropdownOpen = false;
     
     static constexpr int kMaxPlayers = 4;
     static constexpr float kFireRadius = 3.0F;

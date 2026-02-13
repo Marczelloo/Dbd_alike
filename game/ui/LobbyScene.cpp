@@ -75,8 +75,14 @@ void LobbyScene::Update(float deltaSeconds)
             
             if (m_onStartMatch)
             {
-                auto& localPlayer = m_state.players[m_state.localPlayerIndex];
-                m_onStartMatch(m_state.selectedMap, localPlayer.selectedRole, m_state.selectedPerks);
+                const bool hasValidLocalPlayer =
+                    m_state.localPlayerIndex >= 0 &&
+                    m_state.localPlayerIndex < static_cast<int>(m_state.players.size());
+                if (hasValidLocalPlayer)
+                {
+                    auto& localPlayer = m_state.players[m_state.localPlayerIndex];
+                    m_onStartMatch(m_state.selectedMap, localPlayer.selectedRole, m_state.selectedPerks);
+                }
             }
         }
     }
@@ -90,10 +96,6 @@ void LobbyScene::HandleInput()
     const int screenWidth = m_ui->ScreenWidth();
     const int screenHeight = m_ui->ScreenHeight();
     const auto mousePos = m_input->MousePosition();
-    
-    auto isMouseOver = [&](float x, float y, float w, float h) -> bool {
-        return mousePos.x >= x && mousePos.x <= x + w && mousePos.y >= y && mousePos.y <= y + h;
-    };
     
     const float buttonWidth = 200.0F * scale;
     const float buttonHeight = 50.0F * scale;
@@ -125,35 +127,180 @@ void LobbyScene::HandleInput()
             // Force start match immediately
             if (m_onStartMatch)
             {
-                auto& localPlayer = m_state.players[m_state.localPlayerIndex];
-                m_onStartMatch(m_state.selectedMap, localPlayer.selectedRole, m_state.selectedPerks);
+                const bool hasValidLocalPlayer =
+                    m_state.localPlayerIndex >= 0 &&
+                    m_state.localPlayerIndex < static_cast<int>(m_state.players.size());
+                if (hasValidLocalPlayer)
+                {
+                    auto& localPlayer = m_state.players[m_state.localPlayerIndex];
+                    m_onStartMatch(m_state.selectedMap, localPlayer.selectedRole, m_state.selectedPerks);
+                }
             }
         }
     }
     
     if (m_state.localPlayerIndex >= 0 && m_state.localPlayerIndex < static_cast<int>(m_state.players.size()))
     {
-        const float panelWidth = 350.0F * scale;
-        const float panelHeight = 300.0F * scale;
+        const float panelWidth = 420.0F * scale;
+        const float panelHeight = 480.0F * scale;
         const float panelX = screenWidth - panelWidth - 20.0F * scale;
-        const float panelY = screenHeight - panelHeight - 100.0F * scale;
+        const float panelY = screenHeight - panelHeight - 60.0F * scale;
         const float roleY = panelY + 60.0F * scale;
         
         const float roleButtonWidth = 150.0F * scale;
         const float roleButtonHeight = 35.0F * scale;
         
+        // Role selector buttons
         if (isMouseOver(panelX + 20.0F * scale, roleY, roleButtonWidth, roleButtonHeight) && m_input->IsMousePressed(0))
         {
             SetLocalPlayerRole("survivor");
+            m_selectedCharacterIndex = 0; // Reset character selection
         }
         
         if (isMouseOver(panelX + 20.0F * scale + roleButtonWidth + 10.0F * scale, roleY, roleButtonWidth, roleButtonHeight) && m_input->IsMousePressed(0))
         {
             SetLocalPlayerRole("killer");
+            m_selectedCharacterIndex = 0; // Reset character selection
         }
         
-        // Perk slot positions (same as DrawPerkSlots)
-        const float perkY = panelY + 150.0F * scale;
+        const bool isSurvivor = m_state.players[m_state.localPlayerIndex].selectedRole == "survivor";
+        
+        // Character selector dropdown
+        const float charY = panelY + 115.0F * scale;
+        const float btnWidth = 180.0F * scale;
+        const float btnHeight = 35.0F * scale;
+        
+        if (m_input->IsMousePressed(0))
+        {
+            if (isMouseOver(panelX + 20.0F * scale, charY, btnWidth, btnHeight))
+            {
+                m_characterDropdownOpen = !m_characterDropdownOpen;
+                CloseAllDropdownsExcept("character");
+            }
+            else if (m_characterDropdownOpen)
+            {
+                const auto& ids = isSurvivor ? m_survivorIds : m_killerIds;
+                const float dropdownY = charY + btnHeight + 2.0F * scale;
+                const float optionHeight = 28.0F * scale;
+                
+                for (std::size_t i = 0; i < ids.size() && i < 6; ++i)
+                {
+                    const float optY = dropdownY + 5.0F * scale + static_cast<float>(i) * optionHeight;
+                    if (isMouseOver(panelX + 20.0F * scale + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale))
+                    {
+                        m_selectedCharacterIndex = static_cast<int>(i);
+                        SetLocalPlayerCharacter(ids[i]);
+                        m_characterDropdownOpen = false;
+                        break;
+                    }
+                }
+                // Click outside closes dropdown
+                m_characterDropdownOpen = false;
+            }
+        }
+        
+        // Item/Power selector (row below character)
+        const float itemY = panelY + 175.0F * scale;
+        if (m_input->IsMousePressed(0))
+        {
+            if (isSurvivor)
+            {
+                // Item dropdown
+                if (isMouseOver(panelX + 20.0F * scale, itemY, btnWidth, btnHeight))
+                {
+                    m_itemDropdownOpen = !m_itemDropdownOpen;
+                    CloseAllDropdownsExcept("item");
+                }
+                else if (m_itemDropdownOpen)
+                {
+                    const float dropdownY = itemY + btnHeight + 2.0F * scale;
+                    const float optionHeight = 28.0F * scale;
+                    
+                    // Check "None" option
+                    if (isMouseOver(panelX + 20.0F * scale + 3.0F * scale, dropdownY + 5.0F * scale, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale))
+                    {
+                        m_selectedItemIndex = 0;
+                        SetLocalPlayerItem("", "", "");
+                        m_itemDropdownOpen = false;
+                    }
+                    else
+                    {
+                        for (std::size_t i = 0; i < m_itemIds.size() && i < 6; ++i)
+                        {
+                            const float optY = dropdownY + 5.0F * scale + static_cast<float>(i + 1) * optionHeight;
+                            if (isMouseOver(panelX + 20.0F * scale + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale))
+                            {
+                                m_selectedItemIndex = static_cast<int>(i + 1);
+                                SetLocalPlayerItem(m_itemIds[i], m_state.selectedAddonA, m_state.selectedAddonB);
+                                m_itemDropdownOpen = false;
+                                break;
+                            }
+                        }
+                    }
+                    m_itemDropdownOpen = false;
+                }
+            }
+            else
+            {
+                // Power dropdown
+                if (isMouseOver(panelX + 20.0F * scale, itemY, btnWidth, btnHeight))
+                {
+                    m_powerDropdownOpen = !m_powerDropdownOpen;
+                    CloseAllDropdownsExcept("power");
+                }
+                else if (m_powerDropdownOpen)
+                {
+                    const float dropdownY = itemY + btnHeight + 2.0F * scale;
+                    const float optionHeight = 28.0F * scale;
+                    
+                    for (std::size_t i = 0; i < m_powerIds.size() && i < 5; ++i)
+                    {
+                        const float optY = dropdownY + 5.0F * scale + static_cast<float>(i) * optionHeight;
+                        if (isMouseOver(panelX + 20.0F * scale + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale))
+                        {
+                            m_selectedPowerIndex = static_cast<int>(i);
+                            SetLocalPlayerPower(m_powerIds[i], m_state.selectedAddonA, m_state.selectedAddonB);
+                            m_powerDropdownOpen = false;
+                            break;
+                        }
+                    }
+                    m_powerDropdownOpen = false;
+                }
+            }
+        }
+        
+        // Addon selectors
+        const float addonY = panelY + 235.0F * scale;
+        const float addonBtnWidth = 130.0F * scale;
+        const float addonBtnHeight = 30.0F * scale;
+        
+        if (m_input->IsMousePressed(0))
+        {
+            // Addon A
+            if (isMouseOver(panelX + 20.0F * scale, addonY, addonBtnWidth, addonBtnHeight))
+            {
+                m_addonADropdownOpen = !m_addonADropdownOpen;
+                CloseAllDropdownsExcept("addonA");
+            }
+            else if (m_addonADropdownOpen)
+            {
+                HandleAddonDropdownClick(panelX + 20.0F * scale, addonY, true);
+            }
+            
+            // Addon B - position updated to match wider layout
+            if (isMouseOver(panelX + 170.0F * scale, addonY, addonBtnWidth, addonBtnHeight))
+            {
+                m_addonBDropdownOpen = !m_addonBDropdownOpen;
+                CloseAllDropdownsExcept("addonB");
+            }
+            else if (m_addonBDropdownOpen)
+            {
+                HandleAddonDropdownClick(panelX + 170.0F * scale, addonY, false);
+            }
+        }
+        
+        // Perk slot positions (updated position)
+        const float perkY = panelY + 305.0F * scale;
         const float perkStartX = panelX + 20.0F * scale;
         const float slotSize = 60.0F * scale;
         const float spacing = 8.0F * scale;
@@ -303,6 +450,44 @@ void LobbyScene::SetLocalPlayerRole(const std::string& role)
 void LobbyScene::SetLocalPlayerPerks(const std::array<std::string, 4>& perks)
 {
     m_state.selectedPerks = perks;
+}
+
+void LobbyScene::SetLocalPlayerCharacter(const std::string& characterId)
+{
+    m_state.selectedCharacter = characterId;
+    if (m_state.localPlayerIndex >= 0 && m_state.localPlayerIndex < static_cast<int>(m_state.players.size()))
+    {
+        m_state.players[m_state.localPlayerIndex].characterId = characterId;
+    }
+    
+    if (m_onCharacterChanged)
+    {
+        m_onCharacterChanged(characterId);
+    }
+}
+
+void LobbyScene::SetLocalPlayerItem(const std::string& itemId, const std::string& addonA, const std::string& addonB)
+{
+    m_state.selectedItem = itemId;
+    m_state.selectedAddonA = addonA;
+    m_state.selectedAddonB = addonB;
+    
+    if (m_onItemChanged)
+    {
+        m_onItemChanged(itemId, addonA, addonB);
+    }
+}
+
+void LobbyScene::SetLocalPlayerPower(const std::string& powerId, const std::string& addonA, const std::string& addonB)
+{
+    m_state.selectedPower = powerId;
+    m_state.selectedAddonA = addonA;
+    m_state.selectedAddonB = addonB;
+    
+    if (m_onPowerChanged)
+    {
+        m_onPowerChanged(powerId, addonA, addonB);
+    }
 }
 
 void LobbyScene::SetCountdown(float seconds)
@@ -491,15 +676,61 @@ void LobbyScene::RenderPlayerDetails(int playerIndex)
     const int screenWidth = m_ui->ScreenWidth();
     const int screenHeight = m_ui->ScreenHeight();
     
-    const float panelWidth = 350.0F * scale;
-    const float panelHeight = 300.0F * scale;
+    const float panelWidth = 420.0F * scale;
+    const float panelHeight = 480.0F * scale;
     const float panelX = screenWidth - panelWidth - 20.0F * scale;
-    const float panelY = screenHeight - panelHeight - 100.0F * scale;
+    const float panelY = screenHeight - panelHeight - 60.0F * scale;
     
     DrawUIPanel(panelX, panelY, panelWidth, panelHeight);
     
-    DrawRoleSelector(panelX + 20.0F * scale, panelY + 60.0F * scale);
-    DrawPerkSlots(panelX + 20.0F * scale, panelY + 150.0F * scale);
+    const bool isSurvivor = (m_state.localPlayerIndex >= 0 && 
+                             m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
+                             m_state.players[m_state.localPlayerIndex].selectedRole == "survivor");
+    
+    // Layout with proper spacing:
+    // Role selector: 60px from top, buttons are 35px tall, ends at ~95px
+    // Character selector: 115px from top, dropdown is 35px, ends at ~150px
+    // Item/Power selector: 175px from top, dropdown is 35px, ends at ~210px
+    // Addon selectors: 235px from top, dropdowns are 30px, ends at ~265px
+    // Perk slots: 305px from top, slots are 60px, ends at ~365px
+    
+    // First pass: draw all static elements (buttons, slots)
+    DrawRoleSelector(panelX + 20.0F * scale, panelY + 60.0F * scale, false);
+    DrawCharacterSelector(panelX + 20.0F * scale, panelY + 115.0F * scale, false);
+    
+    if (isSurvivor)
+    {
+        DrawItemSelector(panelX + 20.0F * scale, panelY + 175.0F * scale, false);
+        DrawAddonSelector(panelX + 20.0F * scale, panelY + 235.0F * scale, true, false);
+        DrawAddonSelector(panelX + 170.0F * scale, panelY + 235.0F * scale, false, false);
+    }
+    else
+    {
+        DrawPowerSelector(panelX + 20.0F * scale, panelY + 175.0F * scale, false);
+        DrawAddonSelector(panelX + 20.0F * scale, panelY + 235.0F * scale, true, false);
+        DrawAddonSelector(panelX + 170.0F * scale, panelY + 235.0F * scale, false, false);
+    }
+    
+    DrawPerkSlots(panelX + 20.0F * scale, panelY + 305.0F * scale, false);
+    
+    // Second pass: draw all dropdowns on top (higher z-index)
+    DrawRoleSelector(panelX + 20.0F * scale, panelY + 60.0F * scale, true);
+    DrawCharacterSelector(panelX + 20.0F * scale, panelY + 115.0F * scale, true);
+    
+    if (isSurvivor)
+    {
+        DrawItemSelector(panelX + 20.0F * scale, panelY + 175.0F * scale, true);
+        DrawAddonSelector(panelX + 20.0F * scale, panelY + 235.0F * scale, true, true);
+        DrawAddonSelector(panelX + 170.0F * scale, panelY + 235.0F * scale, false, true);
+    }
+    else
+    {
+        DrawPowerSelector(panelX + 20.0F * scale, panelY + 175.0F * scale, true);
+        DrawAddonSelector(panelX + 20.0F * scale, panelY + 235.0F * scale, true, true);
+        DrawAddonSelector(panelX + 170.0F * scale, panelY + 235.0F * scale, false, true);
+    }
+    
+    DrawPerkSlots(panelX + 20.0F * scale, panelY + 305.0F * scale, true);
 }
 
 void LobbyScene::RenderReadyButton()
@@ -1001,14 +1232,17 @@ void LobbyScene::DrawPlayerSlot(float x, float y, float width, float height, int
     }
 }
 
-void LobbyScene::DrawRoleSelector(float x, float y)
+void LobbyScene::DrawRoleSelector(float x, float y, bool dropdownOnly)
 {
     if (!m_ui) return;
     
     const auto& theme = m_ui->Theme();
     const float scale = m_ui->Scale();
     
-    m_ui->DrawTextLabel(x, y - 20.0F * scale, "Select Role:", theme.colorText, 0.9F * scale);
+    if (!dropdownOnly)
+    {
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, "Select Role:", theme.colorText, 0.9F * scale);
+    }
     
     const float buttonWidth = 150.0F * scale;
     const float buttonHeight = 35.0F * scale;
@@ -1019,6 +1253,7 @@ void LobbyScene::DrawRoleSelector(float x, float y)
         currentRole = m_state.players[m_state.localPlayerIndex].selectedRole;
     }
     
+    if (!dropdownOnly)
     {
         engine::ui::UiRect survivorRect{x, y, buttonWidth, buttonHeight};
         glm::vec4 color = (currentRole == "survivor") ? theme.colorAccent : theme.colorButton;
@@ -1028,6 +1263,7 @@ void LobbyScene::DrawRoleSelector(float x, float y)
         m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, "Survivor", theme.colorText, 0.9F * scale);
     }
     
+    if (!dropdownOnly)
     {
         engine::ui::UiRect killerRect{x + buttonWidth + 10.0F * scale, y, buttonWidth, buttonHeight};
         glm::vec4 color = (currentRole == "killer") ? theme.colorDanger : theme.colorButton;
@@ -1038,62 +1274,67 @@ void LobbyScene::DrawRoleSelector(float x, float y)
     }
 }
 
-void LobbyScene::DrawPerkSlots(float x, float y)
+void LobbyScene::DrawPerkSlots(float x, float y, bool dropdownOnly)
 {
     if (!m_ui) return;
     
     const auto& theme = m_ui->Theme();
     const float scale = m_ui->Scale();
     
-    m_ui->DrawTextLabel(x, y - 20.0F * scale, "Perk Loadout:", theme.colorText, 0.9F * scale);
-    
-    const float slotSize = 60.0F * scale;
-    const float spacing = 8.0F * scale;
-    
-    for (int i = 0; i < 4; ++i)
+    if (!dropdownOnly)
     {
-        const float slotX = x + i * (slotSize + spacing);
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, "Perk Loadout:", theme.colorText, 0.9F * scale);
+    
+        const float slotSize = 60.0F * scale;
+        const float spacing = 8.0F * scale;
         
-        const bool isSelected = m_selectedPerkSlot == i;
-        const bool hasPerk = !m_state.selectedPerks[i].empty();
-        
-        engine::ui::UiRect slotRect{slotX, y, slotSize, slotSize};
-        glm::vec4 slotColor = hasPerk ? theme.colorButton : theme.colorBackground;
-        slotColor.a = isSelected ? 1.0F : 0.8F;
-        m_ui->DrawRect(slotRect, slotColor);
-        
-        // Highlight selected slot
-        glm::vec4 borderColor = isSelected ? theme.colorAccent : theme.colorPanelBorder;
-        m_ui->DrawRectOutline(slotRect, isSelected ? 3.0F : 2.0F, borderColor);
-        
-        if (hasPerk)
+        for (int i = 0; i < 4; ++i)
         {
-            // Find perk name
-            std::string perkName = m_state.selectedPerks[i];
-            for (std::size_t j = 0; j < m_availablePerkIds.size(); ++j)
+            const float slotX = x + i * (slotSize + spacing);
+            
+            const bool isSelected = m_selectedPerkSlot == i;
+            const bool hasPerk = !m_state.selectedPerks[i].empty();
+            
+            engine::ui::UiRect slotRect{slotX, y, slotSize, slotSize};
+            glm::vec4 slotColor = hasPerk ? theme.colorButton : theme.colorBackground;
+            slotColor.a = isSelected ? 1.0F : 0.8F;
+            m_ui->DrawRect(slotRect, slotColor);
+            
+            // Highlight selected slot
+            glm::vec4 borderColor = isSelected ? theme.colorAccent : theme.colorPanelBorder;
+            m_ui->DrawRectOutline(slotRect, isSelected ? 3.0F : 2.0F, borderColor);
+            
+            if (hasPerk)
             {
-                if (m_availablePerkIds[j] == m_state.selectedPerks[i] && j < m_availablePerkNames.size())
+                // Find perk name
+                std::string perkName = m_state.selectedPerks[i];
+                for (std::size_t j = 0; j < m_availablePerkIds.size(); ++j)
                 {
-                    perkName = m_availablePerkNames[j];
-                    break;
+                    if (m_availablePerkIds[j] == m_state.selectedPerks[i] && j < m_availablePerkNames.size())
+                    {
+                        perkName = m_availablePerkNames[j];
+                        break;
+                    }
                 }
+                // Truncate name if too long
+                if (perkName.length() > 8)
+                {
+                    perkName = perkName.substr(0, 7) + ".";
+                }
+                m_ui->DrawTextLabel(slotX + 5.0F * scale, y + slotSize / 2.0F - 5.0F * scale, perkName, theme.colorText, 0.6F * scale);
             }
-            // Truncate name if too long
-            if (perkName.length() > 8)
+            else
             {
-                perkName = perkName.substr(0, 7) + ".";
+                m_ui->DrawTextLabel(slotX + slotSize / 2.0F - 8.0F * scale, y + slotSize / 2.0F - 5.0F * scale, "+", theme.colorTextMuted, 1.4F * scale);
             }
-            m_ui->DrawTextLabel(slotX + 5.0F * scale, y + slotSize / 2.0F - 5.0F * scale, perkName, theme.colorText, 0.6F * scale);
-        }
-        else
-        {
-            m_ui->DrawTextLabel(slotX + slotSize / 2.0F - 8.0F * scale, y + slotSize / 2.0F - 5.0F * scale, "+", theme.colorTextMuted, 1.4F * scale);
         }
     }
     
-    // If a slot is selected, show dropdown below
+    // If a slot is selected, show dropdown below (always render dropdown in dropdownOnly mode)
     if (m_selectedPerkSlot >= 0 && m_selectedPerkSlot < 4 && !m_availablePerkIds.empty())
     {
+        const float slotSize = 60.0F * scale;
+        const float spacing = 8.0F * scale;
         const float dropdownY = y + slotSize + 5.0F * scale;
         const float dropdownWidth = 160.0F * scale;
         const float slotXSelected = x + m_selectedPerkSlot * (slotSize + spacing);
@@ -1111,7 +1352,6 @@ void LobbyScene::DrawPerkSlots(float x, float y)
         m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorAccent);
         
         // Scrollable content area
-        const float contentHeight = numOptions * optionHeight;
         const std::size_t startIndex = 0;
         const std::size_t endIndex = std::min(m_availablePerkIds.size() + 1, static_cast<std::size_t>(10));
         
@@ -1140,6 +1380,460 @@ void LobbyScene::DrawPerkSlots(float x, float y)
                 perkName = perkName.substr(0, 15) + ".";
             }
             m_ui->DrawTextLabel(dropdownX + 10.0F * scale, optY + 4.0F * scale, perkName, theme.colorText, 0.8F * scale);
+        }
+    }
+}
+
+void LobbyScene::CloseAllDropdownsExcept(const std::string& keepOpen)
+{
+    if (keepOpen != "character") m_characterDropdownOpen = false;
+    if (keepOpen != "item") m_itemDropdownOpen = false;
+    if (keepOpen != "power") m_powerDropdownOpen = false;
+    if (keepOpen != "addonA") m_addonADropdownOpen = false;
+    if (keepOpen != "addonB") m_addonBDropdownOpen = false;
+    if (keepOpen != "perk") m_selectedPerkSlot = -1;
+}
+
+void LobbyScene::HandleAddonDropdownClick(float x, float y, bool isAddonA)
+{
+    const float scale = m_ui->Scale();
+    const float btnWidth = 130.0F * scale;
+    const float btnHeight = 30.0F * scale;
+    int& selectedIndex = isAddonA ? m_selectedAddonAIndex : m_selectedAddonBIndex;
+    bool& dropdownOpen = isAddonA ? m_addonADropdownOpen : m_addonBDropdownOpen;
+    
+    const float dropdownY = y + btnHeight + 2.0F * scale;
+    const float optionHeight = 24.0F * scale;
+    
+    // Check "None" option
+    if (isMouseOver(x + 2.0F * scale, dropdownY + 4.0F * scale, btnWidth - 4.0F * scale, optionHeight - 2.0F * scale))
+    {
+        selectedIndex = 0;
+        if (isAddonA)
+        {
+            m_state.selectedAddonA = "";
+        }
+        else
+        {
+            m_state.selectedAddonB = "";
+        }
+
+        const bool isSurvivor =
+            m_state.localPlayerIndex >= 0 &&
+            m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
+            m_state.players[m_state.localPlayerIndex].selectedRole == "survivor";
+        if (isSurvivor)
+        {
+            if (m_onItemChanged)
+            {
+                m_onItemChanged(m_state.selectedItem, m_state.selectedAddonA, m_state.selectedAddonB);
+            }
+        }
+        else
+        {
+            if (m_onPowerChanged)
+            {
+                m_onPowerChanged(m_state.selectedPower, m_state.selectedAddonA, m_state.selectedAddonB);
+            }
+        }
+
+        dropdownOpen = false;
+        return;
+    }
+    
+    // Check addon options
+    for (std::size_t i = 0; i < m_addonIds.size() && i < 5; ++i)
+    {
+        const float optY = dropdownY + 4.0F * scale + static_cast<float>(i + 1) * optionHeight;
+        if (isMouseOver(x + 2.0F * scale, optY, btnWidth - 4.0F * scale, optionHeight - 2.0F * scale))
+        {
+            selectedIndex = static_cast<int>(i + 1);
+            if (isAddonA)
+            {
+                m_state.selectedAddonA = m_addonIds[i];
+            }
+            else
+            {
+                m_state.selectedAddonB = m_addonIds[i];
+            }
+
+            const bool isSurvivor =
+                m_state.localPlayerIndex >= 0 &&
+                m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
+                m_state.players[m_state.localPlayerIndex].selectedRole == "survivor";
+            if (isSurvivor)
+            {
+                if (m_onItemChanged)
+                {
+                    m_onItemChanged(m_state.selectedItem, m_state.selectedAddonA, m_state.selectedAddonB);
+                }
+            }
+            else
+            {
+                if (m_onPowerChanged)
+                {
+                    m_onPowerChanged(m_state.selectedPower, m_state.selectedAddonA, m_state.selectedAddonB);
+                }
+            }
+
+            dropdownOpen = false;
+            return;
+        }
+    }
+    
+    dropdownOpen = false;
+}
+
+bool LobbyScene::isMouseOver(float x, float y, float w, float h) const
+{
+    const auto mousePos = m_input->MousePosition();
+    return mousePos.x >= x && mousePos.x <= x + w && mousePos.y >= y && mousePos.y <= y + h;
+}
+
+void LobbyScene::DrawCharacterSelector(float x, float y, bool dropdownOnly)
+{
+    if (!m_ui) return;
+    
+    const auto& theme = m_ui->Theme();
+    const float scale = m_ui->Scale();
+    
+    if (!dropdownOnly)
+    {
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, "Character:", theme.colorText, 0.9F * scale);
+    }
+    
+    // Determine which list to use based on role
+    const bool isSurvivor = (m_state.localPlayerIndex >= 0 && 
+                             m_state.localPlayerIndex < static_cast<int>(m_state.players.size()) &&
+                             m_state.players[m_state.localPlayerIndex].selectedRole == "survivor");
+    
+    const auto& ids = isSurvivor ? m_survivorIds : m_killerIds;
+    const auto& names = isSurvivor ? m_survivorNames : m_killerNames;
+    
+    if (ids.empty())
+    {
+        if (!dropdownOnly)
+        {
+            engine::ui::UiRect btnRect{x, y, 180.0F * scale, 35.0F * scale};
+            m_ui->DrawRect(btnRect, theme.colorBackground);
+            m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+            m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, "No characters", theme.colorTextMuted, 0.85F * scale);
+        }
+        return;
+    }
+    
+    // Clamp index
+    if (m_selectedCharacterIndex < 0 || m_selectedCharacterIndex >= static_cast<int>(ids.size()))
+    {
+        m_selectedCharacterIndex = 0;
+    }
+    
+    const float btnWidth = 180.0F * scale;
+    const float btnHeight = 35.0F * scale;
+    
+    if (!dropdownOnly)
+    {
+        // Dropdown button
+        engine::ui::UiRect btnRect{x, y, btnWidth, btnHeight};
+        glm::vec4 btnColor = m_characterDropdownOpen ? theme.colorAccent : theme.colorButton;
+        btnColor.a = 0.9F;
+        m_ui->DrawRect(btnRect, btnColor);
+        m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+        
+        std::string displayName = static_cast<std::size_t>(m_selectedCharacterIndex) < names.size()
+            ? names[static_cast<std::size_t>(m_selectedCharacterIndex)]
+            : ids[static_cast<std::size_t>(m_selectedCharacterIndex)];
+        if (displayName.length() > 18) displayName = displayName.substr(0, 17) + ".";
+        m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, displayName, theme.colorText, 0.85F * scale);
+        m_ui->DrawTextLabel(x + btnWidth - 20.0F * scale, y + 8.0F * scale, "▼", theme.colorTextMuted, 0.7F * scale);
+    }
+    
+    // Dropdown content (always render in dropdownOnly mode if open)
+    if (m_characterDropdownOpen)
+    {
+        const float dropdownY = y + btnHeight + 2.0F * scale;
+        const float optionHeight = 28.0F * scale;
+        const float dropdownHeight = static_cast<float>(std::min(ids.size(), static_cast<std::size_t>(6))) * optionHeight + 10.0F * scale;
+        
+        engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
+        glm::vec4 bgColor = theme.colorPanel;
+        bgColor.a = 0.98F;
+        m_ui->DrawRect(dropdownRect, bgColor);
+        m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorAccent);
+        
+        for (std::size_t i = 0; i < ids.size() && i < 6; ++i)
+        {
+            const float optY = dropdownY + 5.0F * scale + static_cast<float>(i) * optionHeight;
+            engine::ui::UiRect optRect{x + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = static_cast<int>(i) == m_selectedCharacterIndex ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            
+            std::string charName = i < names.size() ? names[i] : ids[i];
+            if (charName.length() > 16) charName = charName.substr(0, 15) + ".";
+            m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, charName, theme.colorText, 0.8F * scale);
+        }
+    }
+}
+
+void LobbyScene::DrawItemSelector(float x, float y, bool dropdownOnly)
+{
+    if (!m_ui) return;
+    
+    const auto& theme = m_ui->Theme();
+    const float scale = m_ui->Scale();
+    
+    if (!dropdownOnly)
+    {
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, "Bring Item:", theme.colorText, 0.9F * scale);
+    }
+    
+    if (m_itemIds.empty())
+    {
+        if (!dropdownOnly)
+        {
+            engine::ui::UiRect btnRect{x, y, 180.0F * scale, 35.0F * scale};
+            m_ui->DrawRect(btnRect, theme.colorBackground);
+            m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+            m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, "No items", theme.colorTextMuted, 0.85F * scale);
+        }
+        return;
+    }
+    
+    const float btnWidth = 180.0F * scale;
+    const float btnHeight = 35.0F * scale;
+    
+    // Clamp index
+    if (m_selectedItemIndex < 0 || m_selectedItemIndex > static_cast<int>(m_itemIds.size()))
+    {
+        m_selectedItemIndex = 0; // 0 = "None"
+    }
+    
+    if (!dropdownOnly)
+    {
+        // Dropdown button
+        engine::ui::UiRect btnRect{x, y, btnWidth, btnHeight};
+        glm::vec4 btnColor = m_itemDropdownOpen ? theme.colorAccent : theme.colorButton;
+        btnColor.a = 0.9F;
+        m_ui->DrawRect(btnRect, btnColor);
+        m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+        
+        std::string displayName = "None";
+        if (m_selectedItemIndex > 0 && static_cast<std::size_t>(m_selectedItemIndex - 1) < m_itemNames.size())
+        {
+            displayName = m_itemNames[static_cast<std::size_t>(m_selectedItemIndex - 1)];
+        }
+        if (displayName.length() > 18) displayName = displayName.substr(0, 17) + ".";
+        m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, displayName, theme.colorText, 0.85F * scale);
+        m_ui->DrawTextLabel(x + btnWidth - 20.0F * scale, y + 8.0F * scale, "▼", theme.colorTextMuted, 0.7F * scale);
+    }
+    
+    if (m_itemDropdownOpen)
+    {
+        const float dropdownY = y + btnHeight + 2.0F * scale;
+        const float optionHeight = 28.0F * scale;
+        const std::size_t numOptions = std::min(m_itemIds.size() + 1, static_cast<std::size_t>(7));
+        const float dropdownHeight = static_cast<float>(numOptions) * optionHeight + 10.0F * scale;
+        
+        engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
+        glm::vec4 bgColor = theme.colorPanel;
+        bgColor.a = 0.98F;
+        m_ui->DrawRect(dropdownRect, bgColor);
+        m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorAccent);
+        
+        // "None" option
+        if (dropdownOnly)
+        {
+            const float optY = dropdownY + 5.0F * scale;
+            engine::ui::UiRect optRect{x + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = m_selectedItemIndex == 0 ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, "- None -", theme.colorText, 0.8F * scale);
+        }
+        
+        for (std::size_t i = 0; i < m_itemIds.size() && i < 6; ++i)
+        {
+            const float optY = dropdownY + 5.0F * scale + static_cast<float>(i + 1) * optionHeight;
+            engine::ui::UiRect optRect{x + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = static_cast<int>(i + 1) == m_selectedItemIndex ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            
+            std::string itemName = i < m_itemNames.size() ? m_itemNames[i] : m_itemIds[i];
+            if (itemName.length() > 16) itemName = itemName.substr(0, 15) + ".";
+            m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, itemName, theme.colorText, 0.8F * scale);
+        }
+    }
+}
+
+void LobbyScene::DrawPowerSelector(float x, float y, bool dropdownOnly)
+{
+    if (!m_ui) return;
+    
+    const auto& theme = m_ui->Theme();
+    const float scale = m_ui->Scale();
+    
+    if (!dropdownOnly)
+    {
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, "Killer Power:", theme.colorText, 0.9F * scale);
+    }
+    
+    if (m_powerIds.empty())
+    {
+        if (!dropdownOnly)
+        {
+            engine::ui::UiRect btnRect{x, y, 180.0F * scale, 35.0F * scale};
+            m_ui->DrawRect(btnRect, theme.colorBackground);
+            m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+            m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, "No powers", theme.colorTextMuted, 0.85F * scale);
+        }
+        return;
+    }
+    
+    const float btnWidth = 180.0F * scale;
+    const float btnHeight = 35.0F * scale;
+    
+    // Clamp index
+    if (m_selectedPowerIndex < 0 || m_selectedPowerIndex >= static_cast<int>(m_powerIds.size()))
+    {
+        m_selectedPowerIndex = 0;
+    }
+    
+    if (!dropdownOnly)
+    {
+        // Dropdown button
+        engine::ui::UiRect btnRect{x, y, btnWidth, btnHeight};
+        glm::vec4 btnColor = m_powerDropdownOpen ? theme.colorDanger : theme.colorButton;
+        btnColor.a = 0.9F;
+        m_ui->DrawRect(btnRect, btnColor);
+        m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+        
+        std::string displayName = static_cast<std::size_t>(m_selectedPowerIndex) < m_powerNames.size()
+            ? m_powerNames[static_cast<std::size_t>(m_selectedPowerIndex)]
+            : m_powerIds[static_cast<std::size_t>(m_selectedPowerIndex)];
+        if (displayName.length() > 18) displayName = displayName.substr(0, 17) + ".";
+        m_ui->DrawTextLabel(x + 10.0F * scale, y + 8.0F * scale, displayName, theme.colorText, 0.85F * scale);
+        m_ui->DrawTextLabel(x + btnWidth - 20.0F * scale, y + 8.0F * scale, "▼", theme.colorTextMuted, 0.7F * scale);
+    }
+    
+    if (m_powerDropdownOpen)
+    {
+        const float dropdownY = y + btnHeight + 2.0F * scale;
+        const float optionHeight = 28.0F * scale;
+        const float dropdownHeight = static_cast<float>(std::min(m_powerIds.size(), static_cast<std::size_t>(5))) * optionHeight + 10.0F * scale;
+        
+        engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
+        glm::vec4 bgColor = theme.colorPanel;
+        bgColor.a = 0.98F;
+        m_ui->DrawRect(dropdownRect, bgColor);
+        m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorDanger);
+        
+        for (std::size_t i = 0; i < m_powerIds.size() && i < 5; ++i)
+        {
+            const float optY = dropdownY + 5.0F * scale + static_cast<float>(i) * optionHeight;
+            engine::ui::UiRect optRect{x + 3.0F * scale, optY, btnWidth - 6.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = static_cast<int>(i) == m_selectedPowerIndex ? theme.colorDanger : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            
+            std::string powerName = i < m_powerNames.size() ? m_powerNames[i] : m_powerIds[i];
+            if (powerName.length() > 16) powerName = powerName.substr(0, 15) + ".";
+            m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, powerName, theme.colorText, 0.8F * scale);
+        }
+    }
+}
+
+void LobbyScene::DrawAddonSelector(float x, float y, bool isAddonA, bool dropdownOnly)
+{
+    if (!m_ui) return;
+    
+    const auto& theme = m_ui->Theme();
+    const float scale = m_ui->Scale();
+    
+    if (!dropdownOnly)
+    {
+        std::string label = isAddonA ? "Addon A:" : "Addon B:";
+        m_ui->DrawTextLabel(x, y - 20.0F * scale, label, theme.colorText, 0.9F * scale);
+    }
+    
+    if (m_addonIds.empty())
+    {
+        if (!dropdownOnly)
+        {
+            engine::ui::UiRect btnRect{x, y, 130.0F * scale, 30.0F * scale};
+            m_ui->DrawRect(btnRect, theme.colorBackground);
+            m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+            m_ui->DrawTextLabel(x + 10.0F * scale, y + 6.0F * scale, "No addons", theme.colorTextMuted, 0.8F * scale);
+        }
+        return;
+    }
+    
+    const float btnWidth = 130.0F * scale;
+    const float btnHeight = 30.0F * scale;
+    
+    int& selectedIndex = isAddonA ? m_selectedAddonAIndex : m_selectedAddonBIndex;
+    bool& dropdownOpen = isAddonA ? m_addonADropdownOpen : m_addonBDropdownOpen;
+    
+    // Clamp index
+    if (selectedIndex < 0 || selectedIndex > static_cast<int>(m_addonIds.size()))
+    {
+        selectedIndex = 0;
+    }
+    
+    if (!dropdownOnly)
+    {
+        // Dropdown button
+        engine::ui::UiRect btnRect{x, y, btnWidth, btnHeight};
+        glm::vec4 btnColor = dropdownOpen ? theme.colorAccent : theme.colorButton;
+        btnColor.a = 0.9F;
+        m_ui->DrawRect(btnRect, btnColor);
+        m_ui->DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+        
+        std::string displayName = "None";
+        if (selectedIndex > 0 && static_cast<std::size_t>(selectedIndex - 1) < m_addonNames.size())
+        {
+            displayName = m_addonNames[static_cast<std::size_t>(selectedIndex - 1)];
+        }
+        if (displayName.length() > 14) displayName = displayName.substr(0, 13) + ".";
+        m_ui->DrawTextLabel(x + 8.0F * scale, y + 6.0F * scale, displayName, theme.colorText, 0.8F * scale);
+        m_ui->DrawTextLabel(x + btnWidth - 16.0F * scale, y + 6.0F * scale, "▼", theme.colorTextMuted, 0.6F * scale);
+    }
+    
+    if (dropdownOpen)
+    {
+        const float dropdownY = y + btnHeight + 2.0F * scale;
+        const float optionHeight = 24.0F * scale;
+        const std::size_t numOptions = std::min(m_addonIds.size() + 1, static_cast<std::size_t>(6));
+        const float dropdownHeight = static_cast<float>(numOptions) * optionHeight + 8.0F * scale;
+        
+        engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
+        glm::vec4 bgColor = theme.colorPanel;
+        bgColor.a = 0.98F;
+        m_ui->DrawRect(dropdownRect, bgColor);
+        m_ui->DrawRectOutline(dropdownRect, 2.0F, theme.colorAccent);
+        
+        // "None" option
+        {
+            const float optY = dropdownY + 4.0F * scale;
+            engine::ui::UiRect optRect{x + 2.0F * scale, optY, btnWidth - 4.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = selectedIndex == 0 ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            m_ui->DrawTextLabel(x + 8.0F * scale, optY + 4.0F * scale, "- None -", theme.colorText, 0.75F * scale);
+        }
+        
+        for (std::size_t i = 0; i < m_addonIds.size() && i < 5; ++i)
+        {
+            const float optY = dropdownY + 4.0F * scale + static_cast<float>(i + 1) * optionHeight;
+            engine::ui::UiRect optRect{x + 2.0F * scale, optY, btnWidth - 4.0F * scale, optionHeight - 2.0F * scale};
+            glm::vec4 optColor = static_cast<int>(i + 1) == selectedIndex ? theme.colorAccent : theme.colorBackground;
+            optColor.a = 0.7F;
+            m_ui->DrawRect(optRect, optColor);
+            
+            std::string addonName = i < m_addonNames.size() ? m_addonNames[i] : m_addonIds[i];
+            if (addonName.length() > 14) addonName = addonName.substr(0, 13) + ".";
+            m_ui->DrawTextLabel(x + 8.0F * scale, optY + 4.0F * scale, addonName, theme.colorText, 0.75F * scale);
         }
     }
 }
