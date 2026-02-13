@@ -18,6 +18,7 @@
 #include "engine/platform/ActionBindings.hpp"
 #include "engine/physics/PhysicsWorld.hpp"
 #include "engine/render/Frustum.hpp"
+#include "engine/render/Renderer.hpp"
 #include "engine/render/StaticBatcher.hpp"
 #include "engine/scene/World.hpp"
 #include "game/gameplay/LoadoutSystem.hpp"
@@ -1156,6 +1157,9 @@ private:
     KillerLookLight m_killerLookLight{};
     bool m_killerLookLightDebug = false;
     std::size_t m_mapSpotLightCount = 0;
+
+    // Cached vector to avoid per-frame heap allocation in Render().
+    std::vector<engine::render::SpotLight> m_runtimeSpotLights;
 };
 
 } // namespace game::gameplay

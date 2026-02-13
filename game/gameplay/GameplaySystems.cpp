@@ -563,11 +563,12 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     renderer.SetPostFxPulse(postFxColor, postFxIntensity);
 
     // Dynamic spot lights (keep map lights, then append runtime lights).
-    std::vector<engine::render::SpotLight> spotLights = renderer.GetSpotLights();
-    if (spotLights.size() > m_mapSpotLightCount)
-    {
-        spotLights.resize(m_mapSpotLightCount);
-    }
+    // Re-use m_runtimeSpotLights to avoid per-frame heap allocation.
+    m_runtimeSpotLights.clear();
+    const auto& baseSpotLights = renderer.GetSpotLights();
+    const std::size_t mapCount = std::min(m_mapSpotLightCount, baseSpotLights.size());
+    m_runtimeSpotLights.assign(baseSpotLights.begin(), baseSpotLights.begin() + static_cast<std::ptrdiff_t>(mapCount));
+    auto& spotLights = m_runtimeSpotLights;
 
     // Phase B4: Killer Look Light (spot cone).
     const auto killerTransIt = m_world.Transforms().find(m_killer);
