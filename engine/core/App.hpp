@@ -61,7 +61,7 @@ public:
         int height = 900;
         bool vsync = true;
         int fpsLimit = 144;
-        render::RenderMode renderMode = render::RenderMode::Wireframe;
+        render::RenderMode renderMode = render::RenderMode::Filled;
         int shadowQuality = 0;
         float shadowDistance = 40.0F;
         int antiAliasing = 0;

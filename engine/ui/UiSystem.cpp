@@ -382,7 +382,7 @@ bool UiSystem::HasKeyPressed(int key) const
 
 bool UiSystem::HasMousePressed(int button) const
 {
-    return m_input != nullptr && m_input->IsMousePressed(button);
+    return m_input != nullptr && !m_mousePressConsumed && m_input->IsMousePressed(button);
 }
 
 bool UiSystem::HasMouseDown(int button) const
@@ -392,7 +392,17 @@ bool UiSystem::HasMouseDown(int button) const
 
 bool UiSystem::HasMouseReleased(int button) const
 {
-    return m_input != nullptr && m_input->IsMouseReleased(button);
+    return m_input != nullptr && !m_mouseReleaseConsumed && m_input->IsMouseReleased(button);
+}
+
+void UiSystem::ConsumeMousePress()
+{
+    m_mousePressConsumed = true;
+}
+
+void UiSystem::ConsumeMouseRelease()
+{
+    m_mouseReleaseConsumed = true;
 }
 
 bool UiSystem::IsShiftDown() const
@@ -476,6 +486,8 @@ void UiSystem::BeginFrame(const BeginFrameArgs& args)
     m_hoveredId.clear();
     m_mouseCaptured = false;
     m_keyboardCaptured = false;
+    m_mousePressConsumed = false;
+    m_mouseReleaseConsumed = false;
 
     if (!HasMouseDown(GLFW_MOUSE_BUTTON_LEFT) && !HasMouseReleased(GLFW_MOUSE_BUTTON_LEFT))
     {
@@ -1090,6 +1102,7 @@ bool UiSystem::Dropdown(const std::string& id, const std::string& label, int* se
                 if (HasMousePressed(GLFW_MOUSE_BUTTON_LEFT))
                 {
                     m_activeId = fullId + "/item";
+                    ConsumeMousePress();
                 }
                 if ((m_activeId == fullId + "/item") && HasMouseReleased(GLFW_MOUSE_BUTTON_LEFT))
                 {
@@ -1099,6 +1112,7 @@ bool UiSystem::Dropdown(const std::string& id, const std::string& label, int* se
                     }
                     state.open = false;
                     changed = true;
+                    ConsumeMouseRelease();
                 }
             }
             DrawText(itemRect.x + 8.0F * m_scale, itemRect.y + 6.0F * m_scale, items[static_cast<std::size_t>(i)], m_theme.colorText);
