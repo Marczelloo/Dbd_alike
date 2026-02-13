@@ -249,6 +249,18 @@ std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(
 ) const
 {
     std::vector<TriggerCastHit> hits;
+    SphereCastTriggers(hits, from, to, radius);
+    return hits;
+}
+
+void PhysicsWorld::SphereCastTriggers(
+    std::vector<TriggerCastHit>& out,
+    const glm::vec3& from,
+    const glm::vec3& to,
+    float radius
+) const
+{
+    out.clear();
 
     for (const TriggerVolume& trigger : m_triggers)
     {
@@ -267,14 +279,12 @@ std::vector<TriggerCastHit> PhysicsWorld::SphereCastTriggers(
         hit.kind = trigger.kind;
         hit.t = hitT;
         hit.position = from + (to - from) * hitT;
-        hits.push_back(hit);
+        out.push_back(hit);
     }
 
-    std::sort(hits.begin(), hits.end(), [](const TriggerCastHit& lhs, const TriggerCastHit& rhs) {
+    std::sort(out.begin(), out.end(), [](const TriggerCastHit& lhs, const TriggerCastHit& rhs) {
         return lhs.t < rhs.t;
     });
-
-    return hits;
 }
 
 bool PhysicsWorld::SphereIntersectsExpandedAabb(
@@ -601,15 +611,6 @@ void PhysicsWorld::AppendSolidCandidates(
                     outIndices.push_back(solidIndex);
                 }
             }
-        }
-    }
-
-    if (outIndices.empty())
-    {
-        outIndices.reserve(m_solids.size());
-        for (std::size_t index = 0; index < m_solids.size(); ++index)
-        {
-            outIndices.push_back(index);
         }
     }
 }

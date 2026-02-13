@@ -93,6 +93,58 @@ As of 2026-02-12, the following refactoring has been completed:
 - Expand baking outputs (albedo/normal/roughness export in modular pipeline).
 - Add cache manifest (`.cache/manifest.json`) with per-asset hash keys.
 
+## Update (2026-02-14): Deep Rendering Optimization Pass (34+ items)
+
+Branch: `performance-optimisations`
+
+### Profiler & Testing Infrastructure
+- Complete ImGui profiler overlay (`engine/core/Profiler.hpp/cpp`, `engine/core/ProfilerOverlay.hpp/cpp`)
+- Console: `perf`, `perf_pin`, `perf_compact`, `benchmark`, `benchmark_stop`
+- Automated perf test commands: `perf_test`, `perf_report`
+- VBO byte stats, draw call tracking, frustum culling stats
+
+### GPU Optimizations
+1. **Back-face culling** — `glEnable(GL_CULL_FACE)`, halves fragment rasterization
+2. **Fragment shader distSq early-out** — `dot(toLight,toLight) < range*range` avoids sqrt for out-of-range lights
+3. **Fragment shader fused inversesqrt** — single `inversesqrt(distSq)` replaces separate `length()+normalize()`
+4. **Removed redundant normalize** — `-l` instead of `normalize(-toLight)` for spot lights; removed `normalize(spotDir)` (CPU pre-normalizes)
+5. **VBO GL_STREAM_DRAW** — correct usage hint for per-frame data
+6. **VBO buffer orphaning** — `glBufferData(nullptr)` every frame prevents GPU sync stalls
+7. **Removed redundant glPolygonMode(GL_FILL)** — was called after line pass but fill was already active
+8. **Removed GL state cleanup** — `glBindVAO(0)/glUseProgram(0)/glBindBuffer(0)` at end of frame not needed
+
+### CPU Vertex Generation
+9. **Capsule LOD by distance** — far capsules use fewer segments (huge vertex reduction)
+10. **Inlined box normals** — eliminates 12 cross product + normalize per box
+11. **Inlined oriented box normals** — same optimization with rotation matrix
+12. **Inlined capsule normals** — analytical normals for cylinder body (radial) and hemispheres (sphere surface), pre-computed sin/cos tables, proper winding reversal for bottom hemisphere
+13. **Blood pools: DrawBox** — replaced `DrawOrientedBox()` with zero rotation (eliminates rotation matrix computation)
+14. **Cached scratch mark yaw** — `atan2()` computed once at spawn, not every frame
+
+### CPU Data Handling
+15. **Frustum culling** — all dynamic objects culled against view frustum
+16. **Light uniform deduplication** — computed once, lambda uploads to both shader programs
+17. **Spot lights vector caching** — avoid per-frame heap allocation
+18. **Dirty-flag physics rebuild** — skip redundant `RebuildPhysicsWorld` when nothing changed
+19. **Eliminated double BuildHudState** — was called twice per frame
+20. **HudState move semantics** — `std::move` instead of copy for toolbar state
+21. **QueryCapsuleTriggers buffer reuse** — output param avoids per-call allocations
+22. **BuildId: string concat** — replaced `std::ostringstream` (30-60 heap allocs/frame) with `std::string::clear()+append()`
+23. **SetSpotLights/SetPointLights move overloads** — avoid vector copy at call site
+24. **FX curve 2-key fast path** — direct interpolation for the most common case (fade-out curves)
+
+### Rendering Pipeline
+25. **UI single VBO upload** — merged batch uploads into one
+26. **Line pass merged** — shared shader/VAO binding for regular + overlay lines
+27. **Line+overlay single VBO upload** — concatenated at different offsets, single orphan call
+28. **Billboard dead code removed** — cleaned up unused billboard rendering paths
+29. **FX system skip emitter copy** — no param copy when no overrides
+
+### Deferred (diminishing returns)
+- UBO for light uniforms: ~36 glUniform calls per frame → ~1% frame budget, high std140 complexity
+- Grid static VBO caching: 484 line verts/frame, negligible impact
+- `glMapBufferRange`: driver-dependent vs current cross-platform approach
+
 ## Audit: Items/Add-ons/Killer Powers (2026-02-12)
 
 ### Findings

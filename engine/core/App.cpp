@@ -732,14 +732,15 @@ bool App::Run()
             PROFILE_SCOPE("Render");
             m_renderer.BeginFrame(glm::vec3{0.06F, 0.07F, 0.08F});
         glm::mat4 viewProjection{1.0F};
+        const float aspect = m_window.FramebufferHeight() > 0
+                                 ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
+                                 : (16.0F / 9.0F);
+
         if (inGame)
         {
             m_renderer.SetLightingEnabled(true);
             m_renderer.SetPointLights(m_runtimeMapPointLights);
             m_renderer.SetSpotLights(m_runtimeMapSpotLights);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             m_gameplay.Render(m_renderer, aspect);
             viewProjection = m_gameplay.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_gameplay.CameraPosition());
@@ -749,18 +750,12 @@ bool App::Run()
             m_renderer.SetLightingEnabled(m_levelEditor.EditorLightingEnabled());
             m_renderer.SetEnvironmentSettings(m_levelEditor.CurrentEnvironmentSettings());
             m_levelEditor.Render(m_renderer);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
         }
         else if (inLobby)
         {
             m_renderer.SetLightingEnabled(true);
-            const float aspect = m_window.FramebufferHeight() > 0
-                                     ? static_cast<float>(m_window.FramebufferWidth()) / static_cast<float>(m_window.FramebufferHeight())
-                                     : (16.0F / 9.0F);
             viewProjection = m_lobbyScene.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_lobbyScene.CameraPosition());
             m_lobbyScene.Render3D();

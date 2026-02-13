@@ -901,6 +901,7 @@ private:
 
     InteractionCandidate m_interactionCandidate{};
     float m_interactionPromptHoldSeconds = 0.0F;
+    mutable std::vector<engine::physics::TriggerCastHit> m_sphereCastScratch;
 
     bool m_collisionEnabled = true;
     bool m_debugDrawEnabled = true;

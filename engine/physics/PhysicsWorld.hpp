@@ -124,6 +124,14 @@ public:
         float radius
     ) const;
 
+    /// Output-parameter version that reuses caller's buffer (avoids heap allocation).
+    void SphereCastTriggers(
+        std::vector<TriggerCastHit>& out,
+        const glm::vec3& from,
+        const glm::vec3& to,
+        float radius
+    ) const;
+
 private:
     struct CellKey
     {

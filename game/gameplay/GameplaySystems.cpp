@@ -427,10 +427,47 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     {
         RebuildPhysicsWorld();
         m_physicsDirty = false;
+        // Physics changed — re-resolve interaction candidate for prompt display.
+        UpdateInteractionCandidate();
+    }
+    else
+    {
+        // Physics unchanged — reuse already-resolved candidate for prompt display.
+        const engine::scene::Entity controlled = ControlledEntity();
+        const auto actorIt = m_world.Actors().find(controlled);
+        const bool inputLocked = (controlled == 0 || actorIt == m_world.Actors().end() || IsActorInputLocked(actorIt->second));
+        const bool downed = (controlled == m_survivor &&
+            (m_survivorState == SurvivorHealthState::Downed ||
+             m_survivorState == SurvivorHealthState::Trapped ||
+             m_survivorState == SurvivorHealthState::Hooked ||
+             m_survivorState == SurvivorHealthState::Dead));
+
+        if (inputLocked || downed)
+        {
+            m_interactionCandidate = InteractionCandidate{};
+            m_interactionPromptHoldSeconds = 0.0F;
+        }
+        else
+        {
+            const InteractionCandidate& resolved = (controlled == m_survivor) ? survivorCandidate : killerCandidate;
+            if (resolved.type != InteractionType::None)
+            {
+                m_interactionCandidate = resolved;
+                m_interactionPromptHoldSeconds = 0.2F;
+            }
+            else if (m_interactionPromptHoldSeconds > 0.0F && !m_interactionCandidate.prompt.empty())
+            {
+                m_interactionPromptHoldSeconds = std::max(0.0F, m_interactionPromptHoldSeconds - (1.0F / 60.0F));
+            }
+            else
+            {
+                m_interactionCandidate = InteractionCandidate{};
+                m_interactionPromptHoldSeconds = 0.0F;
+            }
+        }
     }
     UpdateChaseState(fixedDt);
     UpdateBloodlust(fixedDt);
-    UpdateInteractionCandidate();
 
     const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
     if (survivorTransformIt != m_world.Transforms().end())
@@ -4252,7 +4289,17 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
 
     // Calculate distance and LOS
     m_chase.distance = DistanceXZ(killerTransformIt->second.position, survivorTransformIt->second.position);
-    m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+
+    // Skip expensive LOS raycast when far outside any relevant range (chase end = 18m, buffer = 2m).
+    constexpr float kLosMaxRange = 20.0F;
+    if (m_chase.distance > kLosMaxRange)
+    {
+        m_chase.hasLineOfSight = false;
+    }
+    else
+    {
+        m_chase.hasLineOfSight = m_physics.HasLineOfSight(killerTransformIt->second.position, survivorTransformIt->second.position);
+    }
 
     // Check if survivor is in killer's center FOV (±35°)
     m_chase.inCenterFOV = IsSurvivorInKillerCenterFOV(
@@ -4537,7 +4584,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
     constexpr float kInteractionCastRadius = 0.85F;
     const glm::vec3 castEnd = castStart + castDirection * kInteractionCastRange;
 
-    const std::vector<engine::physics::TriggerCastHit> triggerHits = m_physics.SphereCastTriggers(castStart, castEnd, kInteractionCastRadius);
+    m_physics.SphereCastTriggers(m_sphereCastScratch, castStart, castEnd, kInteractionCastRadius);
     std::unordered_set<engine::scene::Entity> visited;
 
     auto considerCandidate = [&](const InteractionCandidate& candidate) {
@@ -4588,7 +4635,7 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
         }
     };
 
-    for (const engine::physics::TriggerCastHit& hit : triggerHits)
+    for (const engine::physics::TriggerCastHit& hit : m_sphereCastScratch)
     {
         if (!visited.insert(hit.entity).second)
         {
