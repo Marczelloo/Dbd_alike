@@ -359,6 +359,9 @@ glm::mat3 RotationMatrixFromEulerDegrees(const glm::vec3& eulerDegrees)
 bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 {
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
 
     // Reserve transient CPU-side buffers once to reduce per-frame growth churn.
     m_lineVertices.reserve(8192);
