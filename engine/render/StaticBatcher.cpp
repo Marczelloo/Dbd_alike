@@ -21,6 +21,8 @@ void StaticBatcher::BeginBuild()
 {
     m_buildVertices.clear();
     m_chunks.clear();
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
     m_built = false;
     m_vertexCount = 0;
     m_visibleCount = 0;
@@ -144,23 +146,22 @@ void StaticBatcher::Render(
     }
 
     m_visibleCount = 0;
-
-    std::vector<GLint> firsts;
-    std::vector<GLsizei> counts;
-    firsts.reserve(m_chunks.size());
-    counts.reserve(m_chunks.size());
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
+    m_cachedFirsts.reserve(m_chunks.size());
+    m_cachedCounts.reserve(m_chunks.size());
 
     for (const auto& chunk : m_chunks)
     {
         if (frustum.IntersectsAABB(chunk.boundsMin, chunk.boundsMax))
         {
-            firsts.push_back(static_cast<GLint>(chunk.firstVertex));
-            counts.push_back(static_cast<GLsizei>(chunk.vertexCount));
+            m_cachedFirsts.push_back(static_cast<GLint>(chunk.firstVertex));
+            m_cachedCounts.push_back(static_cast<GLsizei>(chunk.vertexCount));
             m_visibleCount += chunk.vertexCount;
         }
     }
 
-    if (firsts.empty())
+    if (m_cachedFirsts.empty())
     {
         return;
     }
@@ -169,7 +170,12 @@ void StaticBatcher::Render(
     glUniformMatrix4fv(viewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
 
     glBindVertexArray(m_vao);
-    glMultiDrawArrays(GL_TRIANGLES, firsts.data(), counts.data(), static_cast<GLsizei>(firsts.size()));
+    glMultiDrawArrays(
+        GL_TRIANGLES,
+        m_cachedFirsts.data(),
+        m_cachedCounts.data(),
+        static_cast<GLsizei>(m_cachedFirsts.size())
+    );
     glBindVertexArray(0);
 }
 
@@ -187,6 +193,8 @@ void StaticBatcher::Clear()
     }
     m_buildVertices.clear();
     m_chunks.clear();
+    m_cachedFirsts.clear();
+    m_cachedCounts.clear();
     m_vertexCount = 0;
     m_visibleCount = 0;
     m_built = false;

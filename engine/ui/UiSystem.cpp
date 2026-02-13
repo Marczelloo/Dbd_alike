@@ -54,6 +54,12 @@ void main() {
     if (vTextured > 0.5) {
         float alpha = texture(uFontTexture, vUv).r;
         FragColor = vec4(vColor.rgb, vColor.a * alpha);
+    } else if (vTextured < -0.5) {
+        vec2 center = vec2(0.5, 0.5);
+        float dist = length(vUv - center);
+        float vignette = smoothstep(0.35, 1.0, dist);
+        vignette = pow(clamp(vignette, 0.0, 1.0), 1.2);
+        FragColor = vec4(vColor.rgb, vColor.a * vignette);
     } else {
         FragColor = vColor;
     }
@@ -1237,7 +1243,18 @@ void UiSystem::PopIdScope()
 
 void UiSystem::DrawRect(const UiRect& rect, const glm::vec4& color)
 {
-    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, false);
+    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
+}
+
+void UiSystem::DrawFullscreenVignette(const glm::vec4& color)
+{
+    if (m_screenWidth <= 0 || m_screenHeight <= 0)
+    {
+        return;
+    }
+
+    const UiRect fullScreen{0.0F, 0.0F, static_cast<float>(m_screenWidth), static_cast<float>(m_screenHeight)};
+    EmitQuad(fullScreen, color, 0.0F, 0.0F, 1.0F, 1.0F, -1.0F);
 }
 
 void UiSystem::DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color)
@@ -1375,11 +1392,11 @@ UiSystem::DrawBatch& UiSystem::ActiveBatch()
     return last;
 }
 
-void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, bool textured)
+void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, float mode)
 {
     DrawBatch& batch = ActiveBatch();
     auto push = [&](float x, float y, float u, float v) {
-        batch.vertices.push_back(QuadVertex{x, y, u, v, color.r, color.g, color.b, color.a, textured ? 1.0F : 0.0F});
+        batch.vertices.push_back(QuadVertex{x, y, u, v, color.r, color.g, color.b, color.a, mode});
     };
     const float x0 = rect.x;
     const float y0 = rect.y;
@@ -1395,7 +1412,7 @@ void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, fl
 
 void UiSystem::EmitTexturedQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const glm::vec4& color)
 {
-    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, true);
+    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, 1.0F);
 }
 
 std::uint32_t UiSystem::HashString(const std::string& value) const

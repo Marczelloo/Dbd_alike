@@ -667,21 +667,20 @@ void FxSystem::UpdateTrail(FxInstance& instance, EmitterRuntime& emitterRuntime,
         });
     }
 
-    for (std::size_t i = 0; i < emitterRuntime.trailPoints.size();)
+    std::size_t writeIndex = 0;
+    for (std::size_t readIndex = 0; readIndex < emitterRuntime.trailPoints.size(); ++readIndex)
     {
-        TrailPoint& point = emitterRuntime.trailPoints[i];
+        TrailPoint point = emitterRuntime.trailPoints[readIndex];
         point.age += dt;
         if (point.age >= point.lifetime)
         {
-            emitterRuntime.trailPoints[i] = emitterRuntime.trailPoints.back();
-            emitterRuntime.trailPoints.pop_back();
             continue;
         }
-        ++i;
+
+        emitterRuntime.trailPoints[writeIndex] = point;
+        ++writeIndex;
     }
-    std::sort(emitterRuntime.trailPoints.begin(), emitterRuntime.trailPoints.end(), [](const TrailPoint& a, const TrailPoint& b) {
-        return a.age < b.age;
-    });
+    emitterRuntime.trailPoints.resize(writeIndex);
 }
 
 void FxSystem::UpdateEmitter(FxInstance& instance, EmitterRuntime& emitterRuntime, float dt, const glm::vec3& cameraPosition)
@@ -870,8 +869,12 @@ void FxSystem::Update(float deltaSeconds, const glm::vec3& cameraPosition)
 
 void FxSystem::Render(engine::render::Renderer& renderer, const glm::vec3& cameraPosition) const
 {
-    std::vector<engine::render::Renderer::BillboardData> billboards;
-    billboards.reserve(256);
+    thread_local std::vector<engine::render::Renderer::BillboardData> billboards;
+    billboards.clear();
+    if (billboards.capacity() < 512)
+    {
+        billboards.reserve(512);
+    }
 
     for (const FxInstance& instance : m_instances)
     {
