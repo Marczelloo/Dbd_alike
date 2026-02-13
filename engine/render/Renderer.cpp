@@ -788,7 +788,7 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         profiler.StatsMut().texturedVboBytes = texturedBytes;
     }
 
-    // ─── Line pass (combined: lines + overlay lines) ───
+    // ─── Line pass (combined: lines + overlay lines in single buffer) ───
     const bool hasLines = !m_lineVertices.empty();
     const bool hasOverlay = !m_overlayLineVertices.empty();
     if (hasLines || hasOverlay)
@@ -798,31 +798,38 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glBindVertexArray(m_lineVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
 
+        const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
+        const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
+        const std::size_t totalBytes = lineBytes + overlayBytes;
+
+        // Single orphan + upload for both line arrays.
+        ensureBufferCapacity(&m_lineVboCapacityBytes, totalBytes);
         if (hasLines)
         {
-            const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
-            ensureBufferCapacity(&m_lineVboCapacityBytes, lineBytes);
             glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
+        }
+        if (hasOverlay)
+        {
+            glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(lineBytes), static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
+        }
+
+        if (hasLines)
+        {
             glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
             profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
             profiler.StatsMut().lineVboBytes = lineBytes;
         }
-
         if (hasOverlay)
         {
             glDisable(GL_DEPTH_TEST);
-            const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
-            ensureBufferCapacity(&m_lineVboCapacityBytes, overlayBytes);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
-            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
+            glDrawArrays(GL_LINES, static_cast<GLint>(m_lineVertices.size()), static_cast<GLsizei>(m_overlayLineVertices.size()));
             profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
             glEnable(GL_DEPTH_TEST);
         }
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-    glUseProgram(0);
+    // No glBindBuffer(0)/glBindVertexArray(0)/glUseProgram(0) cleanup needed —
+    // next frame's BeginFrame/EndFrame will set fresh state.
 }
 
 void Renderer::DrawLine(const glm::vec3& from, const glm::vec3& to, const glm::vec3& color)

@@ -178,7 +178,6 @@ void StaticBatcher::Render(
         m_cachedCounts.data(),
         static_cast<GLsizei>(m_cachedFirsts.size())
     );
-    glBindVertexArray(0);
 
     // Record stats in profiler.
     auto& profiler = engine::core::Profiler::Instance();
