@@ -4228,6 +4228,18 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.EndPanel();
     }
 
+    const engine::ui::UiRect topRight{
+        static_cast<float>(m_ui.ScreenWidth()) - (360.0F * scale) - m_hudLayout.topRightOffset.x * scale,
+        m_hudLayout.topRightOffset.y * scale,
+        360.0F * scale,
+        250.0F * scale,
+    };
+    m_ui.BeginPanel("hud_controls_custom", topRight, true);
+    m_ui.Label("Controls", 1.03F);
+    m_ui.Label("WASD: Move | Mouse: Look", m_ui.Theme().colorTextMuted);
+    m_ui.Label("Shift: Sprint | Ctrl: Crouch", m_ui.Theme().colorTextMuted);
+    m_ui.Label("E: Interact", m_ui.Theme().colorTextMuted);
+
     // Draggable/resizable HUD panels (from Ui-overhaul branch)
     const float screenW = static_cast<float>(m_ui.ScreenWidth());
     const float screenH = static_cast<float>(m_ui.ScreenHeight());
