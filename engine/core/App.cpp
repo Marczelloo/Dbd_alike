@@ -34,8 +34,6 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
 #else
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -304,24 +302,6 @@ bool App::Run()
 {
     OpenNetworkLogFile();
     BuildLocalIpv4List();
-
-#ifdef _WIN32
-    struct ScopedHighResolutionTimer
-    {
-        bool enabled = false;
-        ScopedHighResolutionTimer()
-        {
-            enabled = (timeBeginPeriod(1) == TIMERR_NOERROR);
-        }
-        ~ScopedHighResolutionTimer()
-        {
-            if (enabled)
-            {
-                (void)timeEndPeriod(1);
-            }
-        }
-    } highResolutionTimer;
-#endif
 
     (void)LoadControlsConfig();
     (void)LoadGraphicsConfig();
@@ -604,7 +584,6 @@ bool App::Run()
     float currentFps = 0.0F;
     double fpsAccumulator = 0.0;
     int fpsFrames = 0;
-    auto nextFrameDeadline = std::chrono::steady_clock::now();
 
     while (!m_window.ShouldClose() && !m_gameplay.QuitRequested())
     {
@@ -915,7 +894,7 @@ bool App::Run()
         {
             const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
-
+            
             m_screenEffects.Update(static_cast<float>(m_time.DeltaSeconds()));
             game::ui::ScreenEffectsState screenState;
             screenState.terrorRadiusActive = hudState.terrorRadiusVisible;
@@ -924,7 +903,7 @@ bool App::Run()
             screenState.lowHealthActive = (hudState.survivorStateName == "Injured" || hudState.survivorStateName == "Downed");
             screenState.lowHealthIntensity = hudState.survivorStateName == "Downed" ? 0.6F : 0.3F;
             m_screenEffects.Render(screenState);
-
+            
             if (hudState.skillCheckActive)
             {
                 if (!m_skillCheckWheel.IsActive())
@@ -948,7 +927,7 @@ bool App::Run()
             }
             m_skillCheckWheel.Update(static_cast<float>(m_time.DeltaSeconds()));
             m_skillCheckWheel.Render();
-
+            
             game::ui::GeneratorProgressState genState;
             genState.isActive = hudState.repairingGenerator || hudState.generatorsCompleted > 0;
             genState.isRepairing = hudState.repairingGenerator;
@@ -977,11 +956,11 @@ bool App::Run()
         if (m_connectingLoadingActive)
         {
             const double elapsed = std::max(0.0, glfwGetTime() - m_connectingLoadingStart);
-
+            
             // Solo mode dismisses faster (2s), multiplayer has 15s timeout
             const bool isSoloMode = m_joinTargetIp.empty();
             const double timeout = isSoloMode ? 2.0 : 15.0;
-
+            
             if (elapsed > timeout)
             {
                 std::cout << "[Loading] Timeout after " << timeout << "s, dismissing loading screen\n";
@@ -991,7 +970,7 @@ bool App::Run()
             {
                 // Fake progress: asymptotically approach 0.95 over ~8 seconds
                 const float fakeProgress = std::min(0.95F, static_cast<float>(1.0 - std::exp(-elapsed * 0.35)));
-
+                
                 std::string step;
                 std::string tip;
                 if (isSoloMode)
@@ -1351,38 +1330,7 @@ bool App::Run()
             m_window.SwapBuffers();
         }
 
-        int effectiveFpsLimit = m_fpsLimit;
-        if (m_appMode == AppMode::Lobby && !m_vsyncEnabled)
-        {
-            effectiveFpsLimit = 60;
-        }
-
-        // Avoid dual-throttling (VSync + manual cap), which causes frame pacing jitter.
-        // Use manual FPS limiter only when VSync is disabled.
-        if (!m_vsyncEnabled && effectiveFpsLimit > 0)
-        {
-            const auto targetDuration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / static_cast<double>(effectiveFpsLimit)));
-
-            const auto now = std::chrono::steady_clock::now();
-            if (nextFrameDeadline < now)
-            {
-                nextFrameDeadline = now;
-            }
-            nextFrameDeadline += targetDuration;
-
-            // With high-resolution timer enabled on Windows, direct sleep_until gives
-            // smoother pacing and lower CPU usage than spin/yield busy waiting.
-            if (nextFrameDeadline > std::chrono::steady_clock::now())
-            {
-                std::this_thread::sleep_until(nextFrameDeadline);
-            }
-        }
-        else
-        {
-            // Reset timeline when limiter is inactive to avoid drift after runtime toggles.
-            nextFrameDeadline = std::chrono::steady_clock::now();
-        }
+        profiler.EndFrame();
 
         const double frameEnd = glfwGetTime();
         const double frameDelta = frameEnd - frameStart;
@@ -1395,7 +1343,40 @@ bool App::Run()
             fpsFrames = 0;
         }
 
-        profiler.EndFrame();
+        int effectiveFpsLimit = m_fpsLimit;
+        if (m_appMode == AppMode::Lobby && !m_vsyncEnabled)
+        {
+            effectiveFpsLimit = 60;
+        }
+
+        static bool dbgPrinted = false;
+        if (!dbgPrinted)
+        {
+            std::cout << "[FPS DEBUG] m_vsyncEnabled=" << m_vsyncEnabled 
+                      << " m_fpsLimit=" << m_fpsLimit 
+                      << " effectiveFpsLimit=" << effectiveFpsLimit << std::endl;
+            dbgPrinted = true;
+        }
+
+        if (!m_vsyncEnabled && effectiveFpsLimit > 0)
+        {
+            const double targetSeconds = 1.0 / static_cast<double>(effectiveFpsLimit);
+            double elapsed = glfwGetTime() - frameStart;
+            
+            if (elapsed < targetSeconds)
+            {
+                const double sleepThreshold = 0.002;
+                const double remaining = targetSeconds - elapsed;
+                if (remaining > sleepThreshold)
+                {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(remaining - sleepThreshold));
+                }
+                
+                while ((elapsed = glfwGetTime() - frameStart) < targetSeconds)
+                {
+                }
+            }
+        }
     }
 
     TransitionNetworkState(NetworkState::Disconnecting, "Application shutdown");
@@ -4834,6 +4815,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_gameplay.SetKillerPowerLoadout("", "", "");
     };
 
+    // Configure lobby UI selections based on role (perks, characters, items, powers, addons)
     auto configureLobbyUiSelections = [&](const std::string& currentRoleName) {
         const bool isSurvivor = (currentRoleName == "survivor");
 
@@ -4858,48 +4840,50 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         const auto lobbyAddonIds = collectLobbyAddons();
         m_lobbyScene.SetAvailableAddons(lobbyAddonIds, lobbyAddonIds);
 
-        if (m_menuSurvivorCharacterIndex >= 0 && m_menuSurvivorCharacterIndex < static_cast<int>(survivorCharacters.size()))
+        if (isSurvivor)
         {
-            m_lobbyScene.SetLocalPlayerCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            if (m_menuSurvivorCharacterIndex >= 0 && m_menuSurvivorCharacterIndex < static_cast<int>(survivorCharacters.size()))
+            {
+                m_lobbyScene.SetLocalPlayerCharacter(survivorCharacters[static_cast<std::size_t>(m_menuSurvivorCharacterIndex)]);
+            }
+
+            const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
+                ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
+                : std::string{};
+            const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
+                ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
+                : std::string{"none"};
+            const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
+                ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
+                : std::string{"none"};
+            m_lobbyScene.SetLocalPlayerItem(
+                itemId,
+                itemAddonA == "none" ? "" : itemAddonA,
+                itemAddonB == "none" ? "" : itemAddonB
+            );
         }
-        else if (m_menuKillerCharacterIndex >= 0 && m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+        else
         {
-            m_lobbyScene.SetLocalPlayerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            if (m_menuKillerCharacterIndex >= 0 && m_menuKillerCharacterIndex < static_cast<int>(killerCharacters.size()))
+            {
+                m_lobbyScene.SetLocalPlayerCharacter(killerCharacters[static_cast<std::size_t>(m_menuKillerCharacterIndex)]);
+            }
+
+            const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
+                ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
+                : std::string{};
+            const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
+                ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
+                : std::string{"none"};
+            const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
+                ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
+                : std::string{"none"};
+            m_lobbyScene.SetLocalPlayerPower(
+                powerId,
+                powerAddonA == "none" ? "" : powerAddonA,
+                powerAddonB == "none" ? "" : powerAddonB
+            );
         }
-
-        const std::string itemId = (!survivorItems.empty() && m_menuSurvivorItemIndex >= 0)
-            ? survivorItems[static_cast<std::size_t>(m_menuSurvivorItemIndex)]
-            : std::string{};
-        const std::string itemAddonA = (!survivorAddonOptions.empty() && m_menuSurvivorAddonAIndex >= 0)
-            ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonAIndex)]
-            : std::string{"none"};
-        const std::string itemAddonB = (!survivorAddonOptions.empty() && m_menuSurvivorAddonBIndex >= 0)
-            ? survivorAddonOptions[static_cast<std::size_t>(m_menuSurvivorAddonBIndex)]
-            : std::string{"none"};
-        m_lobbyScene.SetLocalPlayerItem(
-            itemId,
-            itemAddonA == "none" ? "" : itemAddonA,
-            itemAddonB == "none" ? "" : itemAddonB
-        );
-
-        const std::string powerId = (!killerPowers.empty() && m_menuKillerPowerIndex >= 0)
-            ? killerPowers[static_cast<std::size_t>(m_menuKillerPowerIndex)]
-            : std::string{};
-        const std::string powerAddonA = (!killerAddonOptions.empty() && m_menuKillerAddonAIndex >= 0)
-            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonAIndex)]
-            : std::string{"none"};
-        const std::string powerAddonB = (!killerAddonOptions.empty() && m_menuKillerAddonBIndex >= 0)
-            ? killerAddonOptions[static_cast<std::size_t>(m_menuKillerAddonBIndex)]
-            : std::string{"none"};
-        m_lobbyScene.SetLocalPlayerPower(
-            powerId,
-            powerAddonA == "none" ? "" : powerAddonA,
-            powerAddonB == "none" ? "" : powerAddonB
-        );
-
-        m_lobbyScene.SetLocalPlayerPerks(isSurvivor
-            ? std::array<std::string, 4>{m_menuSurvivorPerks[0], m_menuSurvivorPerks[1], m_menuSurvivorPerks[2], m_menuSurvivorPerks[3]}
-            : std::array<std::string, 4>{m_menuKillerPerks[0], m_menuKillerPerks[1], m_menuKillerPerks[2], m_menuKillerPerks[3]});
     };
 
     m_ui.Spacer(12.0F * scale);

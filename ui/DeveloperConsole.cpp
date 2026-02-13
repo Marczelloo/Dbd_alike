@@ -1019,7 +1019,20 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             int iterations = 10000;
             if (tokens.size() > 1)
             {
-                iterations = std::stoi(tokens[1]);
+                try
+                {
+                    iterations = std::stoi(tokens[1]);
+                    if (iterations <= 0)
+                    {
+                        LogError("iterations must be a positive number");
+                        return;
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    LogError("Invalid number: " + tokens[1]);
+                    return;
+                }
             }
             LogInfo("Running parallel test with " + std::to_string(iterations) + " iterations...");
             context.testParallel(iterations);

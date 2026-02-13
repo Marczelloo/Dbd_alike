@@ -108,15 +108,17 @@ private:
 
     void LoadAssetInternal(
         const std::string& assetPath,
-        AssetType expectedType,
-        AssetLoadCallback callback
+        AssetType expectedType
     );
+
+    void InvokePendingCallbacks(const std::string& assetPath, const AssetLoadResult& result);
 
     std::string m_assetsRoot;
     std::atomic<bool> m_initialized{false};
 
     mutable std::mutex m_assetsMutex;
     std::unordered_map<std::string, AssetLoadResult> m_assets;
+    std::unordered_map<std::string, std::vector<AssetLoadCallback>> m_pendingCallbacks;
 
     core::JobCounter m_loadCounter;
     std::atomic<std::size_t> m_totalLoaded{0};

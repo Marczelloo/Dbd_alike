@@ -79,15 +79,8 @@ void AsyncAssetLoader::LoadAsync(
             }
             if (it->second.state == AssetState::Loading)
             {
-                core::JobSystem::Instance().Schedule([this, assetPath, callback]() {
-                    WaitForAsset(assetPath);
-                    std::lock_guard<std::mutex> lock(m_assetsMutex);
-                    auto it = m_assets.find(assetPath);
-                    if (it != m_assets.end() && callback)
-                    {
-                        callback(it->second);
-                    }
-                }, core::JobPriority::Low, "wait_for_asset");
+                // Asset is being loaded - add callback to pending list instead of busy-wait
+                m_pendingCallbacks[assetPath].push_back(callback);
                 return;
             }
         }
@@ -96,18 +89,30 @@ void AsyncAssetLoader::LoadAsync(
         entry.assetId = assetPath;
         entry.type = expectedType;
         entry.state = AssetState::Loading;
+        // Store initial callback
+        m_pendingCallbacks[assetPath].push_back(callback);
     }
 
     ++m_currentlyLoading;
     m_loadCounter.Increment();
 
-    core::JobSystem::Instance().Schedule(
-        [this, assetPath, expectedType, callback]() {
-            LoadAssetInternal(assetPath, expectedType, callback);
+    auto jobHandle = core::JobSystem::Instance().Schedule(
+        [this, assetPath, expectedType]() {
+            LoadAssetInternal(assetPath, expectedType);
         },
         priority,
         "load_asset"
     );
+
+    if (!jobHandle)
+    {
+        // JobSystem scheduling failed - restore counters and run synchronously
+        --m_currentlyLoading;
+        m_loadCounter.Decrement();
+
+        // Run load synchronously instead
+        LoadAssetInternal(assetPath, expectedType);
+    }
 }
 
 void AsyncAssetLoader::LoadBatchAsync(
@@ -178,6 +183,7 @@ void AsyncAssetLoader::UnloadAll()
 {
     std::lock_guard<std::mutex> lock(m_assetsMutex);
     m_assets.clear();
+    m_pendingCallbacks.clear();
 }
 
 AsyncAssetLoader::Stats AsyncAssetLoader::GetStats() const
@@ -195,8 +201,7 @@ AsyncAssetLoader::Stats AsyncAssetLoader::GetStats() const
 
 void AsyncAssetLoader::LoadAssetInternal(
     const std::string& assetPath,
-    AssetType expectedType,
-    AssetLoadCallback callback
+    AssetType expectedType
 )
 {
     AssetLoadResult result;
@@ -220,10 +225,7 @@ void AsyncAssetLoader::LoadAssetInternal(
         --m_currentlyLoading;
         m_loadCounter.Decrement();
         
-        if (callback)
-        {
-            callback(result);
-        }
+        InvokePendingCallbacks(assetPath, result);
         return;
     }
 
@@ -242,19 +244,73 @@ void AsyncAssetLoader::LoadAssetInternal(
         --m_currentlyLoading;
         m_loadCounter.Decrement();
         
-        if (callback)
-        {
-            callback(result);
-        }
+        InvokePendingCallbacks(assetPath, result);
         return;
     }
 
     file.seekg(0, std::ios::end);
-    const auto fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
+    const auto fileSizePos = file.tellg();
+    if (!file || fileSizePos < 0)
+    {
+        result.state = AssetState::Failed;
+        result.error = "Failed to determine file size: " + fullPath.string();
 
-    result.data.resize(static_cast<std::size_t>(fileSize));
-    file.read(reinterpret_cast<char*>(result.data.data()), fileSize);
+        {
+            std::lock_guard<std::mutex> lock(m_assetsMutex);
+            m_assets[assetPath] = result;
+        }
+
+        ++m_totalFailed;
+        --m_currentlyLoading;
+        m_loadCounter.Decrement();
+
+        InvokePendingCallbacks(assetPath, result);
+        return;
+    }
+
+    const auto fileSize = static_cast<std::size_t>(fileSizePos);
+    file.seekg(0, std::ios::beg);
+    if (!file)
+    {
+        result.state = AssetState::Failed;
+        result.error = "Failed to seek in file: " + fullPath.string();
+
+        {
+            std::lock_guard<std::mutex> lock(m_assetsMutex);
+            m_assets[assetPath] = result;
+        }
+
+        ++m_totalFailed;
+        --m_currentlyLoading;
+        m_loadCounter.Decrement();
+
+        InvokePendingCallbacks(assetPath, result);
+        return;
+    }
+
+    result.data.resize(fileSize);
+
+    if (fileSize > 0)
+    {
+        file.read(reinterpret_cast<char*>(result.data.data()), static_cast<std::streamsize>(fileSize));
+        if (!file || file.gcount() != static_cast<std::streamsize>(fileSize))
+        {
+            result.state = AssetState::Failed;
+            result.error = "Failed to read entire file: " + fullPath.string();
+
+            {
+                std::lock_guard<std::mutex> lock(m_assetsMutex);
+                m_assets[assetPath] = result;
+            }
+
+            ++m_totalFailed;
+            --m_currentlyLoading;
+            m_loadCounter.Decrement();
+
+            InvokePendingCallbacks(assetPath, result);
+            return;
+        }
+    }
 
     result.state = AssetState::Loaded;
 
@@ -267,9 +323,28 @@ void AsyncAssetLoader::LoadAssetInternal(
     --m_currentlyLoading;
     m_loadCounter.Decrement();
 
-    if (callback)
+    InvokePendingCallbacks(assetPath, result);
+}
+
+void AsyncAssetLoader::InvokePendingCallbacks(const std::string& assetPath, const AssetLoadResult& result)
+{
+    std::vector<AssetLoadCallback> callbacks;
     {
-        callback(result);
+        std::lock_guard<std::mutex> lock(m_assetsMutex);
+        auto it = m_pendingCallbacks.find(assetPath);
+        if (it != m_pendingCallbacks.end())
+        {
+            callbacks = std::move(it->second);
+            m_pendingCallbacks.erase(it);
+        }
+    }
+
+    for (const auto& callback : callbacks)
+    {
+        if (callback)
+        {
+            callback(result);
+        }
     }
 }
 
