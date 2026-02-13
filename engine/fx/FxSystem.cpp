@@ -272,6 +272,17 @@ float FloatCurve::Evaluate(float t, float fallback) const
     }
 
     t = glm::clamp(t, 0.0F, 1.0F);
+
+    // Fast path for 2-key curves (most common: e.g., fade 1→0).
+    if (keys.size() == 2)
+    {
+        const FloatCurveKey& a = keys[0];
+        const FloatCurveKey& b = keys[1];
+        const float span = std::max(1.0e-5F, b.t - a.t);
+        const float alpha = glm::clamp((t - a.t) / span, 0.0F, 1.0F);
+        return glm::mix(a.value, b.value, alpha);
+    }
+
     if (t <= keys.front().t)
     {
         return keys.front().value;
@@ -307,6 +318,17 @@ glm::vec4 ColorGradient::Evaluate(float t, const glm::vec4& fallback) const
     }
 
     t = glm::clamp(t, 0.0F, 1.0F);
+
+    // Fast path for 2-key gradients (most common).
+    if (keys.size() == 2)
+    {
+        const ColorGradientKey& a = keys[0];
+        const ColorGradientKey& b = keys[1];
+        const float span = std::max(1.0e-5F, b.t - a.t);
+        const float alpha = glm::clamp((t - a.t) / span, 0.0F, 1.0F);
+        return glm::mix(a.color, b.color, alpha);
+    }
+
     if (t <= keys.front().t)
     {
         return keys.front().color;

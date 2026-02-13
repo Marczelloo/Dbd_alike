@@ -262,6 +262,7 @@ private:
     std::vector<LayoutState> m_layoutStack;
     std::vector<ScrollState> m_scrollStack;
     std::vector<std::string> m_idScopeStack;
+    mutable std::string m_idScratch; // reusable buffer for BuildId (avoids ostringstream allocs)
     std::vector<ClipRect> m_clipStack;
 
     std::unordered_map<std::string, WidgetState> m_widgetState;

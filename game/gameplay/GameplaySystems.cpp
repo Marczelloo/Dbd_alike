@@ -698,7 +698,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         renderer.DrawLine(origin, origin + direction * std::min(beamRange, 4.0F), glm::vec3{1.0F, 0.95F, 0.45F});
     }
 
-    renderer.SetSpotLights(spotLights);
+    renderer.SetSpotLights(std::move(m_runtimeSpotLights));
 
     renderer.DrawGrid(60, 1.0F, glm::vec3{0.24F, 0.24F, 0.24F}, glm::vec3{0.11F, 0.11F, 0.11F}, glm::vec4{0.09F, 0.11F, 0.13F, 1.0F});
 
@@ -6662,6 +6662,7 @@ void GameplaySystems::UpdateScratchMarks(float fixedDt, const glm::vec3& survivo
     mark.age = 0.0F;
     mark.lifetime = m_scratchProfile.lifetime;
     mark.direction = survivorForward;
+    mark.yawDeg = glm::degrees(std::atan2(survivorForward.x, survivorForward.z));
     mark.perpOffset = ComputePerpendicular(survivorForward);
 
     const float jitterRand1 = DeterministicRandom(survivorPos, 1) * 2.0F - 1.0F;
@@ -6798,7 +6799,7 @@ void GameplaySystems::RenderScratchMarks(engine::render::Renderer& renderer, boo
         renderer.DrawOrientedBox(
             mark.position,
             glm::vec3{halfWidth * 0.5F, 0.01F, halfWidth * 0.5F},
-            glm::vec3{0.0F, glm::degrees(std::atan2(mark.direction.x, mark.direction.z)), 0.0F},
+            glm::vec3{0.0F, mark.yawDeg, 0.0F},
             baseColor * alpha
         );
     }
@@ -6825,10 +6826,9 @@ void GameplaySystems::RenderBloodPools(engine::render::Renderer& renderer, bool 
 
         const glm::vec3 color{0.55F, 0.08F, 0.08F};
 
-        renderer.DrawOrientedBox(
+        renderer.DrawBox(
             pool.position,
             glm::vec3{pool.size * 0.5F, 0.01F, pool.size * 0.5F},
-            glm::vec3{0.0F, 0.0F, 0.0F},
             color * alpha
         );
     }

@@ -90,7 +90,9 @@ public:
     void SetEnvironmentSettings(const EnvironmentSettings& settings);
     [[nodiscard]] const EnvironmentSettings& GetEnvironmentSettings() const { return m_environment; }
     void SetPointLights(const std::vector<PointLight>& lights);
+    void SetPointLights(std::vector<PointLight>&& lights);
     void SetSpotLights(const std::vector<SpotLight>& lights);
+    void SetSpotLights(std::vector<SpotLight>&& lights);
     [[nodiscard]] const std::vector<SpotLight>& GetSpotLights() const { return m_spotLights; }
     void SetPostFxPulse(const glm::vec3& color, float intensity);
     void SetLightingEnabled(bool enabled);

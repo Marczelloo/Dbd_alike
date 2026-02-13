@@ -980,7 +980,7 @@ bool App::Run()
         m_ui.EndFrame();
 
         // Build HUD state before rendering toolbar (needed for game stats display)
-        game::gameplay::HudState hudState = frameHudState.has_value() ? *frameHudState : m_gameplay.BuildHudState();
+        game::gameplay::HudState hudState = frameHudState.has_value() ? std::move(*frameHudState) : m_gameplay.BuildHudState();
         hudState.isInGame = (m_appMode == AppMode::InGame);
 
         // Render developer toolbar LAST to be on top of everything

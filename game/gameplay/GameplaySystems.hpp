@@ -1097,6 +1097,7 @@ private:
         float age = 0.0F;
         float lifetime = 30.0F;
         float size = 0.35F;
+        float yawDeg = 0.0F; // cached atan2(direction.x, direction.z) in degrees
         bool active = false;
     };
 

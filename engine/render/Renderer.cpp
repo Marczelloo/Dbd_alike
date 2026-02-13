@@ -558,9 +558,27 @@ void Renderer::SetPointLights(const std::vector<PointLight>& lights)
     }
 }
 
+void Renderer::SetPointLights(std::vector<PointLight>&& lights)
+{
+    m_pointLights = std::move(lights);
+    if (m_pointLights.size() > static_cast<std::size_t>(kMaxPointLights))
+    {
+        m_pointLights.resize(static_cast<std::size_t>(kMaxPointLights));
+    }
+}
+
 void Renderer::SetSpotLights(const std::vector<SpotLight>& lights)
 {
     m_spotLights = lights;
+    if (m_spotLights.size() > static_cast<std::size_t>(kMaxSpotLights))
+    {
+        m_spotLights.resize(static_cast<std::size_t>(kMaxSpotLights));
+    }
+}
+
+void Renderer::SetSpotLights(std::vector<SpotLight>&& lights)
+{
+    m_spotLights = std::move(lights);
     if (m_spotLights.size() > static_cast<std::size_t>(kMaxSpotLights))
     {
         m_spotLights.resize(static_cast<std::size_t>(kMaxSpotLights));

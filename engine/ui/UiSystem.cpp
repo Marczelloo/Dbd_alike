@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -1257,13 +1256,14 @@ std::string UiSystem::BuildId(const std::string& localId) const
     {
         return localId;
     }
-    std::ostringstream oss;
+    m_idScratch.clear();
     for (const std::string& scope : m_idScopeStack)
     {
-        oss << scope << "/";
+        m_idScratch += scope;
+        m_idScratch += '/';
     }
-    oss << localId;
-    return oss.str();
+    m_idScratch += localId;
+    return m_idScratch;
 }
 
 void UiSystem::PushIdScope(const std::string& scopeId)
