@@ -863,7 +863,7 @@ bool App::Run()
             m_window.SetShouldClose(true);
         }
 
-        if (m_appMode == AppMode::InGame)
+        if (m_appMode == AppMode::InGame && frameHudState.has_value())
         {
             const game::gameplay::HudState& hudState = *frameHudState;
             DrawInGameHudCustom(hudState, currentFps, glfwGetTime());
