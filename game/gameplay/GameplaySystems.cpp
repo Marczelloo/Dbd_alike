@@ -21,6 +21,7 @@
 
 #include "engine/platform/Input.hpp"
 #include "engine/render/Renderer.hpp"
+#include "engine/core/Profiler.hpp"
 #include "game/editor/LevelAssets.hpp"
 #include "game/maps/TileGenerator.hpp"
 
@@ -700,6 +701,15 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
 
     const auto& transforms = m_world.Transforms();
 
+    // Dynamic object frustum culling counters.
+    std::uint32_t dynamicDrawn = 0;
+    std::uint32_t dynamicCulled = 0;
+
+    // Helper: test if an AABB at (center ± halfExtents) is inside frustum.
+    const auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        return m_frustum.IntersectsAABB(center - halfExtents, center + halfExtents);
+    };
+
     if (m_staticBatcher.IsBuilt())
     {
         m_staticBatcher.Render(
@@ -717,6 +727,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, window.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         renderer.DrawBox(transformIt->second.position, window.halfExtents, glm::vec3{0.1F, 0.75F, 0.84F});
         if (m_debugDrawEnabled)
@@ -736,6 +753,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, pallet.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.8F, 0.5F, 0.2F};
         if (pallet.state == engine::scene::PalletState::Dropped)
@@ -758,6 +782,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             continue;
         }
 
+        if (!isVisible(transformIt->second.position, hook.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
+
         const glm::vec3 hookColor = hook.occupied ? glm::vec3{0.78F, 0.1F, 0.1F} : glm::vec3{0.9F, 0.9F, 0.12F};
         renderer.DrawBox(transformIt->second.position, hook.halfExtents, hookColor);
     }
@@ -769,6 +800,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        if (!isVisible(transformIt->second.position, trap.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.72F, 0.72F, 0.75F};
         if (trap.state == engine::scene::TrapState::Triggered)
@@ -797,6 +835,15 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        // Small default AABB for ground items.
+        const glm::vec3 itemHalf{0.3F, 0.15F, 0.3F};
+        if (!isVisible(transformIt->second.position, itemHalf))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         glm::vec3 color{0.8F, 0.8F, 0.8F};
         glm::vec3 halfExtents{0.2F, 0.06F, 0.2F};
@@ -869,6 +916,13 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             continue;
         }
 
+        if (!isVisible(transformIt->second.position, generator.halfExtents))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
+
         // Green color scheme for generators
         glm::vec3 generatorColor{0.2F, 0.8F, 0.2F};  // Standard green
         if (generator.completed)
@@ -898,6 +952,15 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         {
             continue;
         }
+
+        // Frustum cull actors using capsule bounding box.
+        const glm::vec3 actorHalf{actor.capsuleRadius, actor.capsuleHeight * 0.5F, actor.capsuleRadius};
+        if (!isVisible(transformIt->second.position, actorHalf))
+        {
+            ++dynamicCulled;
+            continue;
+        }
+        ++dynamicDrawn;
 
         const bool hideKillerBodyInFp =
             entity == m_killer &&
@@ -1189,6 +1252,11 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     const bool localIsKiller = (m_controlledRole == ControlledRole::Killer);
     RenderScratchMarks(renderer, localIsKiller);
     RenderBloodPools(renderer, localIsKiller);
+
+    // Report dynamic object culling stats to profiler.
+    auto& profStats = engine::core::Profiler::Instance().StatsMut();
+    profStats.dynamicObjectsDrawn = dynamicDrawn;
+    profStats.dynamicObjectsCulled = dynamicCulled;
 }
 
 glm::mat4 GameplaySystems::BuildViewProjection(float aspectRatio) const

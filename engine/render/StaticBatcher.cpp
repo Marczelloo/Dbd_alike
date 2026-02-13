@@ -8,6 +8,8 @@
 #include <glm/common.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "engine/core/Profiler.hpp"
+
 namespace engine::render
 {
 StaticBatcher::StaticBatcher() = default;
@@ -177,6 +179,12 @@ void StaticBatcher::Render(
         static_cast<GLsizei>(m_cachedFirsts.size())
     );
     glBindVertexArray(0);
+
+    // Record stats in profiler.
+    auto& profiler = engine::core::Profiler::Instance();
+    profiler.RecordDrawCall(static_cast<std::uint32_t>(m_visibleCount), static_cast<std::uint32_t>(m_visibleCount / 3));
+    profiler.StatsMut().staticBatchChunksVisible = static_cast<std::uint32_t>(m_cachedFirsts.size());
+    profiler.StatsMut().staticBatchChunksTotal = static_cast<std::uint32_t>(m_chunks.size());
 }
 
 void StaticBatcher::Clear()

@@ -12,6 +12,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "engine/core/Profiler.hpp"
+
 namespace engine::render
 {
 namespace
@@ -611,7 +613,10 @@ void Renderer::BeginFrame(const glm::vec3& clearColor)
 
 void Renderer::EndFrame(const glm::mat4& viewProjection)
 {
+    PROFILE_SCOPE("Renderer::EndFrame");
     m_frustum.Extract(viewProjection);
+
+    auto& profiler = engine::core::Profiler::Instance();
 
     const auto ensureBufferCapacity = [](unsigned int vbo, std::size_t* ioCapacityBytes, std::size_t requiredBytes) {
         if (ioCapacityBytes == nullptr || requiredBytes == 0U)
@@ -633,132 +638,108 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         *ioCapacityBytes = newCapacity;
     };
 
+    // ─── Build light uniform arrays ONCE (shared by solid + textured) ───
+    const glm::vec3 normalizedLightDir = glm::normalize(m_environment.directionalLightDirection);
+
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
+    const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
+    for (int i = 0; i < pointCount; ++i)
+    {
+        const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
+        pointPosRange[static_cast<std::size_t>(i)] =
+            glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
+        pointColorIntensity[static_cast<std::size_t>(i)] =
+            glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
+    }
+
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
+    std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
+    std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
+    const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
+    for (int i = 0; i < spotCount; ++i)
+    {
+        const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
+        const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
+        spotPosRange[static_cast<std::size_t>(i)] =
+            glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
+        spotDirInnerCos[static_cast<std::size_t>(i)] =
+            glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
+        spotColorIntensity[static_cast<std::size_t>(i)] =
+            glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
+        spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
+    }
+
+    // Lambda to upload shared light uniforms to any program.
+    const auto uploadLightUniforms = [&](
+        int lightDirLoc, int lightColorLoc, int lightIntensityLoc,
+        int cameraPosLoc, int lightingEnabledLoc,
+        int fogEnabledLoc, int fogColorLoc, int fogDensityLoc, int fogStartLoc, int fogEndLoc,
+        int pointCountLoc, int pointPosRangeLoc, int pointColorIntensityLoc,
+        int spotCountLoc, int spotPosRangeLoc, int spotDirInnerCosLoc, int spotColorIntensityLoc, int spotOuterCosLoc)
+    {
+        glUniform3fv(cameraPosLoc, 1, glm::value_ptr(m_cameraWorldPosition));
+        glUniform1i(lightingEnabledLoc, m_lightingEnabled ? 1 : 0);
+        glUniform3fv(lightDirLoc, 1, glm::value_ptr(normalizedLightDir));
+        glUniform3fv(lightColorLoc, 1, glm::value_ptr(m_environment.directionalLightColor));
+        glUniform1f(lightIntensityLoc, m_environment.directionalLightIntensity);
+        glUniform1i(fogEnabledLoc, m_environment.fogEnabled ? 1 : 0);
+        glUniform3fv(fogColorLoc, 1, glm::value_ptr(m_environment.fogColor));
+        glUniform1f(fogDensityLoc, m_environment.fogDensity);
+        glUniform1f(fogStartLoc, m_environment.fogStart);
+        glUniform1f(fogEndLoc, m_environment.fogEnd);
+        glUniform1i(pointCountLoc, pointCount);
+        glUniform4fv(pointPosRangeLoc, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
+        glUniform4fv(pointColorIntensityLoc, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
+        glUniform1i(spotCountLoc, spotCount);
+        glUniform4fv(spotPosRangeLoc, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
+        glUniform4fv(spotDirInnerCosLoc, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
+        glUniform4fv(spotColorIntensityLoc, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
+        glUniform1fv(spotOuterCosLoc, kMaxSpotLights, spotOuterCos.data());
+    };
+
+    // ─── Solid pass ───
     if (!m_solidVertices.empty())
     {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
         glUseProgram(m_solidProgram);
         glUniformMatrix4fv(m_solidViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-        glUniform3fv(m_solidCameraPosLocation, 1, glm::value_ptr(m_cameraWorldPosition));
-        glUniform1i(m_solidLightingEnabledLocation, m_lightingEnabled ? 1 : 0);
-        glUniform3fv(m_solidLightDirLocation, 1, glm::value_ptr(glm::normalize(m_environment.directionalLightDirection)));
-        glUniform3fv(m_solidLightColorLocation, 1, glm::value_ptr(m_environment.directionalLightColor));
-        glUniform1f(m_solidLightIntensityLocation, m_environment.directionalLightIntensity);
-        glUniform1i(m_solidFogEnabledLocation, m_environment.fogEnabled ? 1 : 0);
-        glUniform3fv(m_solidFogColorLocation, 1, glm::value_ptr(m_environment.fogColor));
-        glUniform1f(m_solidFogDensityLocation, m_environment.fogDensity);
-        glUniform1f(m_solidFogStartLocation, m_environment.fogStart);
-        glUniform1f(m_solidFogEndLocation, m_environment.fogEnd);
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
-        const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
-        for (int i = 0; i < pointCount; ++i)
-        {
-            const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
-            pointPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            pointColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
-        }
-        glUniform1i(m_solidPointLightCountLocation, pointCount);
-        glUniform4fv(m_solidPointLightPosRangeLocation, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
-        glUniform4fv(m_solidPointLightColorIntensityLocation, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
-        std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
-        const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
-        for (int i = 0; i < spotCount; ++i)
-        {
-            const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
-            const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
-            spotPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            spotDirInnerCos[static_cast<std::size_t>(i)] =
-                glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
-            spotColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{
-                    light.color.x,
-                    light.color.y,
-                    light.color.z,
-                    glm::max(0.0F, light.intensity),
-                };
-            spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
-        }
-        glUniform1i(m_solidSpotLightCountLocation, spotCount);
-        glUniform4fv(m_solidSpotLightPosRangeLocation, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
-        glUniform4fv(m_solidSpotLightDirInnerCosLocation, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
-        glUniform4fv(m_solidSpotLightColorIntensityLocation, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
-        glUniform1fv(m_solidSpotLightOuterCosLocation, kMaxSpotLights, spotOuterCos.data());
+        uploadLightUniforms(
+            m_solidLightDirLocation, m_solidLightColorLocation, m_solidLightIntensityLocation,
+            m_solidCameraPosLocation, m_solidLightingEnabledLocation,
+            m_solidFogEnabledLocation, m_solidFogColorLocation, m_solidFogDensityLocation,
+            m_solidFogStartLocation, m_solidFogEndLocation,
+            m_solidPointLightCountLocation, m_solidPointLightPosRangeLocation, m_solidPointLightColorIntensityLocation,
+            m_solidSpotLightCountLocation, m_solidSpotLightPosRangeLocation, m_solidSpotLightDirInnerCosLocation,
+            m_solidSpotLightColorIntensityLocation, m_solidSpotLightOuterCosLocation
+        );
 
         glBindVertexArray(m_solidVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
         const std::size_t solidBytes = m_solidVertices.size() * sizeof(SolidVertex);
         ensureBufferCapacity(m_solidVbo, &m_solidVboCapacityBytes, solidBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_solidVertices.size() * sizeof(SolidVertex)), m_solidVertices.data());
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(solidBytes), m_solidVertices.data());
 
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_solidVertices.size()));
+        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_solidVertices.size()), static_cast<std::uint32_t>(m_solidVertices.size() / 3));
+        profiler.StatsMut().solidVboBytes = solidBytes;
     }
 
+    // ─── Textured pass ───
     if (!m_texturedVertices.empty() && !m_texturedBatches.empty())
     {
         glUseProgram(m_texturedProgram);
         glUniformMatrix4fv(m_texturedViewProjLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-        glUniform3fv(m_texturedCameraPosLocation, 1, glm::value_ptr(m_cameraWorldPosition));
-        glUniform1i(m_texturedLightingEnabledLocation, m_lightingEnabled ? 1 : 0);
-        glUniform3fv(m_texturedLightDirLocation, 1, glm::value_ptr(glm::normalize(m_environment.directionalLightDirection)));
-        glUniform3fv(m_texturedLightColorLocation, 1, glm::value_ptr(m_environment.directionalLightColor));
-        glUniform1f(m_texturedLightIntensityLocation, m_environment.directionalLightIntensity);
-        glUniform1i(m_texturedFogEnabledLocation, m_environment.fogEnabled ? 1 : 0);
-        glUniform3fv(m_texturedFogColorLocation, 1, glm::value_ptr(m_environment.fogColor));
-        glUniform1f(m_texturedFogDensityLocation, m_environment.fogDensity);
-        glUniform1f(m_texturedFogStartLocation, m_environment.fogStart);
-        glUniform1f(m_texturedFogEndLocation, m_environment.fogEnd);
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxPointLights)> pointColorIntensity{};
-        const int pointCount = std::min(static_cast<int>(m_pointLights.size()), kMaxPointLights);
-        for (int i = 0; i < pointCount; ++i)
-        {
-            const PointLight& light = m_pointLights[static_cast<std::size_t>(i)];
-            pointPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            pointColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{light.color.x, light.color.y, light.color.z, glm::max(0.0F, light.intensity)};
-        }
-        glUniform1i(m_texturedPointLightCountLocation, pointCount);
-        glUniform4fv(m_texturedPointLightPosRangeLocation, kMaxPointLights, glm::value_ptr(pointPosRange[0]));
-        glUniform4fv(m_texturedPointLightColorIntensityLocation, kMaxPointLights, glm::value_ptr(pointColorIntensity[0]));
-
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotPosRange{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotDirInnerCos{};
-        std::array<glm::vec4, static_cast<std::size_t>(kMaxSpotLights)> spotColorIntensity{};
-        std::array<float, static_cast<std::size_t>(kMaxSpotLights)> spotOuterCos{};
-        const int spotCount = std::min(static_cast<int>(m_spotLights.size()), kMaxSpotLights);
-        for (int i = 0; i < spotCount; ++i)
-        {
-            const SpotLight& light = m_spotLights[static_cast<std::size_t>(i)];
-            const glm::vec3 dir = glm::length(light.direction) > 1.0e-6F ? glm::normalize(light.direction) : glm::vec3{0.0F, -1.0F, 0.0F};
-            spotPosRange[static_cast<std::size_t>(i)] =
-                glm::vec4{light.position.x, light.position.y, light.position.z, glm::max(0.001F, light.range)};
-            spotDirInnerCos[static_cast<std::size_t>(i)] =
-                glm::vec4{dir.x, dir.y, dir.z, glm::clamp(light.innerCos, -1.0F, 1.0F)};
-            spotColorIntensity[static_cast<std::size_t>(i)] =
-                glm::vec4{
-                    light.color.x,
-                    light.color.y,
-                    light.color.z,
-                    glm::max(0.0F, light.intensity),
-                };
-            spotOuterCos[static_cast<std::size_t>(i)] = glm::clamp(light.outerCos, -1.0F, 1.0F);
-        }
-        glUniform1i(m_texturedSpotLightCountLocation, spotCount);
-        glUniform4fv(m_texturedSpotLightPosRangeLocation, kMaxSpotLights, glm::value_ptr(spotPosRange[0]));
-        glUniform4fv(m_texturedSpotLightDirInnerCosLocation, kMaxSpotLights, glm::value_ptr(spotDirInnerCos[0]));
-        glUniform4fv(m_texturedSpotLightColorIntensityLocation, kMaxSpotLights, glm::value_ptr(spotColorIntensity[0]));
-        glUniform1fv(m_texturedSpotLightOuterCosLocation, kMaxSpotLights, spotOuterCos.data());
+        uploadLightUniforms(
+            m_texturedLightDirLocation, m_texturedLightColorLocation, m_texturedLightIntensityLocation,
+            m_texturedCameraPosLocation, m_texturedLightingEnabledLocation,
+            m_texturedFogEnabledLocation, m_texturedFogColorLocation, m_texturedFogDensityLocation,
+            m_texturedFogStartLocation, m_texturedFogEndLocation,
+            m_texturedPointLightCountLocation, m_texturedPointLightPosRangeLocation, m_texturedPointLightColorIntensityLocation,
+            m_texturedSpotLightCountLocation, m_texturedSpotLightPosRangeLocation, m_texturedSpotLightDirInnerCosLocation,
+            m_texturedSpotLightColorIntensityLocation, m_texturedSpotLightOuterCosLocation
+        );
 
         glBindVertexArray(m_texturedVao);
         glBindBuffer(GL_ARRAY_BUFFER, m_texturedVbo);
@@ -776,10 +757,13 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
             }
             glBindTexture(GL_TEXTURE_2D, batch.textureId);
             glDrawArrays(GL_TRIANGLES, static_cast<GLint>(batch.firstVertex), static_cast<GLsizei>(batch.vertexCount));
+            profiler.RecordDrawCall(static_cast<std::uint32_t>(batch.vertexCount), static_cast<std::uint32_t>(batch.vertexCount / 3));
         }
         glBindTexture(GL_TEXTURE_2D, 0);
+        profiler.StatsMut().texturedVboBytes = texturedBytes;
     }
 
+    // ─── Line pass ───
     if (!m_lineVertices.empty())
     {
         glUseProgram(m_lineProgram);
@@ -789,11 +773,14 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
         const std::size_t lineBytes = m_lineVertices.size() * sizeof(LineVertex);
         ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, lineBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_lineVertices.size() * sizeof(LineVertex)), m_lineVertices.data());
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(lineBytes), m_lineVertices.data());
 
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_lineVertices.size()));
+        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_lineVertices.size()), 0);
+        profiler.StatsMut().lineVboBytes = lineBytes;
     }
 
+    // ─── Overlay line pass ───
     if (!m_overlayLineVertices.empty())
     {
         glDisable(GL_DEPTH_TEST);
@@ -804,9 +791,10 @@ void Renderer::EndFrame(const glm::mat4& viewProjection)
         glBindBuffer(GL_ARRAY_BUFFER, m_lineVbo);
         const std::size_t overlayBytes = m_overlayLineVertices.size() * sizeof(LineVertex);
         ensureBufferCapacity(m_lineVbo, &m_lineVboCapacityBytes, overlayBytes);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(m_overlayLineVertices.size() * sizeof(LineVertex)), m_overlayLineVertices.data());
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(overlayBytes), m_overlayLineVertices.data());
 
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_overlayLineVertices.size()));
+        profiler.RecordDrawCall(static_cast<std::uint32_t>(m_overlayLineVertices.size()), 0);
         glEnable(GL_DEPTH_TEST);
     }
 
