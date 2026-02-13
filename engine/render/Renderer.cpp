@@ -354,6 +354,13 @@ bool Renderer::Initialize(int framebufferWidth, int framebufferHeight)
 {
     glEnable(GL_DEPTH_TEST);
 
+    // Reserve transient CPU-side buffers once to reduce per-frame growth churn.
+    m_lineVertices.reserve(8192);
+    m_overlayLineVertices.reserve(4096);
+    m_solidVertices.reserve(32768);
+    m_texturedVertices.reserve(16384);
+    m_texturedBatches.reserve(512);
+
     m_lineProgram = CreateProgram(kLineVertexShader, kLineFragmentShader);
     m_solidProgram = CreateProgram(kSolidVertexShader, kSolidFragmentShader);
     m_texturedProgram = CreateProgram(kTexturedVertexShader, kTexturedFragmentShader);
