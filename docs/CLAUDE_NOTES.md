@@ -103,8 +103,12 @@ Branch: `performance-optimisations`
 - Automated perf test commands: `perf_test`, `perf_report`
 - VBO byte stats, draw call tracking, frustum culling stats
 
+### Bug Fixes During Optimization Pass
+- **Crash on map enter** — `operator*()` on empty `std::optional<HudState>`. `FinishLoading()` changed `m_appMode` to `InGame` mid-frame but `frameHudState` was never populated. Fixed with `has_value()` guard. (commit `9c263f9`)
+- **Back-face culling broke all rendering** — `glEnable(GL_CULL_FACE)` with `GL_CCW` front face culled everything: UI quads (Y-flip in shader reverses winding), box geometry (cross products yield inward normals). Reverted entirely. A full winding order audit required before culling can be re-enabled. (commit `aa7f389`)
+
 ### GPU Optimizations
-1. **Back-face culling** — `glEnable(GL_CULL_FACE)`, halves fragment rasterization
+1. ~~**Back-face culling**~~ — REVERTED: geometry pipeline has mixed CW/CCW winding, culled all UI + most 3D faces
 2. **Fragment shader distSq early-out** — `dot(toLight,toLight) < range*range` avoids sqrt for out-of-range lights
 3. **Fragment shader fused inversesqrt** — single `inversesqrt(distSq)` replaces separate `length()+normalize()`
 4. **Removed redundant normalize** — `-l` instead of `normalize(-toLight)` for spot lights; removed `normalize(spotDir)` (CPU pre-normalizes)
