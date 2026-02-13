@@ -4507,7 +4507,7 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.EndPanel();
     }
 
-    const bool showBottomPanel = hudState.repairingGenerator || hudState.selfHealing || hudState.skillCheckActive ||
+    const bool showBottomPanel = hudState.selfHealing || hudState.skillCheckActive ||
                                  hudState.carryEscapeProgress > 0.0F || hudState.hookStage > 0;
     if (!showBottomPanel)
     {
@@ -4522,11 +4522,6 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
     };
     m_ui.BeginPanel("hud_bottom_custom", bottom, true);
 
-    if (hudState.repairingGenerator)
-    {
-        m_ui.Label("Generator Repair", m_ui.Theme().colorAccent);
-        m_ui.ProgressBar("hud_gen_progress", hudState.activeGeneratorProgress, std::to_string(static_cast<int>(hudState.activeGeneratorProgress * 100.0F)) + "%");
-    }
     if (hudState.selfHealing)
     {
         m_ui.Label("Self Heal", m_ui.Theme().colorAccent);

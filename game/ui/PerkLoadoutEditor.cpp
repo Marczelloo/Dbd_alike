@@ -1,6 +1,7 @@
 #include "PerkLoadoutEditor.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "engine/ui/UiSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"

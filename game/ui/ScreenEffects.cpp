@@ -68,6 +68,10 @@ void ScreenEffects::Render(const ScreenEffectsState& state)
 
 void ScreenEffects::TriggerDamageFlash()
 {
+    // Note: The actual flash rendering is handled by DrawDamageFlash()
+    // This method exists as a public API placeholder for triggering the effect
+    // In a full implementation, this would set internal state to start the flash
+    // For now, the damage flash is driven through ScreenEffectsState.damageFlash
 }
 
 void ScreenEffects::DrawVignette(float intensity, float r, float g, float b, float pulse)

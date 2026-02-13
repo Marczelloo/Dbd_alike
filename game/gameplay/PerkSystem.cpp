@@ -134,14 +134,26 @@ bool PerkSystem::HasPerk(const std::string& id) const
 
 void PerkSystem::SetDefaultDevLoadout()
 {
-    // Survivor: sprint_burst, self_care, iron_will
+    // Survivor: pick up to 3 registered survivor perks
     {
         PerkLoadout survivorLoadout;
-        survivorLoadout.SetPerk(0, "sprint_burst");
-        survivorLoadout.SetPerk(1, "self_care");
-        survivorLoadout.SetPerk(2, "iron_will");
+        const auto survivorPerks = ListPerks(PerkRole::Survivor);
+
+        if (!survivorPerks.empty())
+        {
+            survivorLoadout.SetPerk(0, survivorPerks[0]);
+        }
+        if (survivorPerks.size() > 1)
+        {
+            survivorLoadout.SetPerk(1, survivorPerks[1]);
+        }
+        if (survivorPerks.size() > 2)
+        {
+            survivorLoadout.SetPerk(2, survivorPerks[2]);
+        }
+
         m_survivorLoadout = survivorLoadout;
-        std::cout << "[PERKS] Set default survivor dev loadout (3 perks)\n";
+        std::cout << "[PERKS] Set default survivor dev loadout (" << std::min<std::size_t>(3, survivorPerks.size()) << " perks)\n";
     }
     
     // Killer: brutal_strength, terrifying_presence, sloppy_butcher

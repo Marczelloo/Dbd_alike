@@ -1,10 +1,10 @@
 #include "SkillCheckWheel.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "engine/ui/UiSystem.hpp"
 #include "engine/render/Renderer.hpp"
-#include <GLFW/glfw3.h>
 
 namespace game::ui
 {

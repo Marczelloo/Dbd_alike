@@ -22,6 +22,7 @@ struct DeveloperToolbar::Impl
 bool DeveloperToolbar::Initialize(engine::platform::Window& window)
 {
 #if BUILD_WITH_IMGUI
+    (void)window; // Window not currently used but kept for API consistency
     m_impl = new Impl();
 #else
     (void)window;

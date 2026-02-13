@@ -332,7 +332,7 @@ bool LoadingScreen::TryLoadLoreTipsFromConfig()
     // TODO: Implement loading from config file
     // For now, we generate default tips
     GenerateRandomLoreTips();
-    return false;
+    return true;
 }
 
 void LoadingScreen::DrawProgressBar()

@@ -157,9 +157,6 @@ void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
 
     ApplyGameplayTuning(m_tuning);
 
-    // Initialize perk system with default perks
-    m_perkSystem.InitializeDefaultPerks();
-    
     // Set default dev loadout for testing
     m_perkSystem.SetDefaultDevLoadout();
 
@@ -3374,8 +3371,8 @@ void GameplaySystems::UpdateChaseState(float fixedDt)
             for (const auto& state : activePerks)
             {
                 const auto* perk = m_perkSystem.GetPerk(state.perkId);
-                if (perk && (perk->type == game::gameplay::perks::PerkType::Triggered) && 
-                    (perk->id == "sprint_burst" || perk->id == "adrenaline"))
+                if (perk && (perk->type == game::gameplay::perks::PerkType::Triggered) &&
+                    (perk->id == "sprint_burst"))
                 {
                     m_perkSystem.ActivatePerk(state.perkId, engine::scene::Role::Survivor);
                 }
