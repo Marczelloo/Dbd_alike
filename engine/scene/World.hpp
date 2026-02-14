@@ -26,6 +26,8 @@ public:
     std::unordered_map<Entity, GroundItemComponent>& GroundItems() { return m_groundItems; }
     std::unordered_map<Entity, DebugColorComponent>& DebugColors() { return m_debugColors; }
     std::unordered_map<Entity, NameComponent>& Names() { return m_names; }
+    std::unordered_map<Entity, ProjectileState>& Projectiles() { return m_projectiles; }
+    std::unordered_map<Entity, LockerComponent>& Lockers() { return m_lockers; }
 
     [[nodiscard]] const std::unordered_map<Entity, Transform>& Transforms() const { return m_transforms; }
     [[nodiscard]] const std::unordered_map<Entity, ActorComponent>& Actors() const { return m_actors; }
@@ -38,6 +40,8 @@ public:
     [[nodiscard]] const std::unordered_map<Entity, GroundItemComponent>& GroundItems() const { return m_groundItems; }
     [[nodiscard]] const std::unordered_map<Entity, DebugColorComponent>& DebugColors() const { return m_debugColors; }
     [[nodiscard]] const std::unordered_map<Entity, NameComponent>& Names() const { return m_names; }
+    [[nodiscard]] const std::unordered_map<Entity, ProjectileState>& Projectiles() const { return m_projectiles; }
+    [[nodiscard]] const std::unordered_map<Entity, LockerComponent>& Lockers() const { return m_lockers; }
 
     [[nodiscard]] std::vector<Entity> Entities() const;
 
@@ -54,5 +58,7 @@ private:
     std::unordered_map<Entity, GroundItemComponent> m_groundItems;
     std::unordered_map<Entity, DebugColorComponent> m_debugColors;
     std::unordered_map<Entity, NameComponent> m_names;
+    std::unordered_map<Entity, ProjectileState> m_projectiles;
+    std::unordered_map<Entity, LockerComponent> m_lockers;
 };
 } // namespace engine::scene

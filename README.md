@@ -430,11 +430,17 @@ Settings are now available directly from:
   - loop generation weights and limits
   - networking tuning fields (tick/interpolation)
   - in multiplayer client mode values are read-only (`Server Values`)
+- `Powers`
+  - killer power tuning: Trapper (bear trap) and Wraith (cloak)
+  - trap carry limits, set/disarm times, escape chances
+  - cloak speed multiplier, transition times, post-uncloak haste
+  - in multiplayer client mode values are read-only (`Server Values`)
 
 ### Config Files
 - `config/controls.json`
 - `config/graphics.json`
 - `config/gameplay_tuning.json`
+- `config/powers_tuning.json`
 - `ui/theme.json` (UI colors/sizing)
 - `ui/layouts/hud.json` (HUD placement + scale)
 
@@ -446,6 +452,43 @@ Settings are now available directly from:
 - Host/server is authoritative for gameplay tuning.
 - On connect, host sends current gameplay tuning to client.
 - Clients cannot override gameplay tuning while connected.
+
+### Powers Tuning Config Schema (`config/powers_tuning.json`)
+```json
+{
+  "asset_version": 1,
+  "bear_trap": {
+    "start_carry_traps": 5,
+    "max_carry_traps": 5,
+    "ground_spawn_traps": 8,
+    "set_trap_seconds": 1.5,
+    "disarm_seconds": 2.0,
+    "escape_base_chance": 0.2,
+    "escape_chance_step": 0.2,
+    "escape_chance_max": 0.85,
+    "killer_stun_seconds": 2.0
+  },
+  "wraith_cloak": {
+    "cloak_speed_multiplier": 1.3,
+    "cloak_transition_seconds": 1.0,
+    "uncloak_transition_seconds": 1.0,
+    "post_uncloak_haste_seconds": 2.0,
+    "cloak_vault_speed_mult": 1.25,
+    "cloak_pallet_break_speed_mult": 1.35,
+    "cloak_alpha": 0.15
+  }
+}
+```
+
+### Wraith Cloak Features
+- **Progress bar**: Shows "Cloaking..." or "Uncloaking..." with progress percentage during transitions
+- **Cloaked benefits**: Vault windows 25% faster, break pallets 35% faster when cloaked
+- **Shader-based visuals**: Watery refraction effect with dithered alpha transparency
+  - Scene refraction samples background behind Wraith
+  - Fresnel rim lighting for edge visibility
+  - Noise-based transition breakup during cloak/uncloak
+  - Configurable via `engine/render/WraithCloakRenderer.hpp` params
+- **Debug controls**: F8 toggles debug mode, F9 toggles cloak state in debug mode
 
 ### Default Action Bindings
 - `MoveForward/MoveBackward/MoveLeft/MoveRight`: `W/S/A/D`
@@ -702,6 +745,64 @@ Default assets are auto-generated on startup if missing.
 - `trap_spawn [count]`
 - `trap_clear`
 - `trap_debug on|off`
+- `hatchet_count <n>` — set hatchet count (0-7)
+- `hatchet_refill` — refill hatchets to max
+- `hatchet_debug on|off` — toggle hatchet debug visualization
+- `locker_spawn` — spawn a locker at killer position
+- `spawn_test_models` — spawn blocky survivor test models at (5,0,5) male and (7,0,5) female
+
+## Update: Blocky Survivor Test Models
+
+Simple blocky 3D models for survivors using cubes (male and female variants):
+
+### Files
+- Meshes:
+  - `assets/meshes/survivor_male_blocky.glb` — blue-themed male (~1.74m tall)
+  - `assets/meshes/survivor_female_blocky.glb` — pink-themed female (~1.64m tall)
+- Character definitions:
+  - `assets/characters/survivors/survivor_male_blocky.json`
+  - `assets/characters/survivors/survivor_female_blocky.json`
+
+### How to Test
+1. Run the game: `./build/asym_horror.exe`
+2. Open console with `` ` ``
+3. Type `spawn_test_models` to spawn placeholder entities at (5,0,5) and (7,0,5)
+4. Navigate to those positions to verify
+
+### Models Structure
+Each model consists of 11 cubes:
+- Head (skin tone)
+- Torso (colored shirt)
+- Hips (darker pants)
+- Upper/Lower arms (shirt + skin)
+- Upper/Lower legs (pants + dark gray shoes)
+
+## Update: Hatchet Power (Huntress-like)
+
+New killer power `hatchet_throw` with projectile physics:
+
+### How to Use
+1. Select killer with hatchet power: `set_killer killer_huntress` or `power_set hatchet_throw`
+2. Hold **RMB** to charge hatchet throw
+3. Release **RMB** to throw
+4. **Partial charge**: slower projectile, more gravity drop
+5. **Full charge**: faster projectile, straighter trajectory
+6. Default: 7 hatchets, replenish at lockers
+
+### Controls
+- **RMB Hold**: Charge hatchet throw
+- **RMB Release**: Throw hatchet
+- **E** near locker: Replenish hatchets (2s channel)
+
+### Console Commands
+- `hatchet_count <n>` — set hatchet count
+- `hatchet_refill` — refill to max
+- `hatchet_debug on|off` — show projectile hitboxes and trajectory prediction
+- `locker_spawn` — spawn locker at killer position (for testing)
+
+### Config
+- Power definition: `assets/powers/hatchet_throw.json`
+- Character: `assets/characters/killers/killer_huntress.json`
 
 ## Update: FX System MVP (VFX + Gameplay Hooks)
 
@@ -831,6 +932,39 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 - `bloodlust_reset` - Reset bloodlust to tier 0
 - `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
 - `bloodlust_dump` - Print bloodlust state and speed info
+
+### Status Effect System
+Status effects are unified modifiers that can be applied to both killers and survivors.
+
+**Killer Effects:**
+- **Undetectable**: No terror radius, no killer light (e.g., Wraith cloaked)
+- **Haste**: Movement speed increased (+X%)
+- **Hindered**: Movement speed decreased (-X%)
+- **Bloodlust**: Chase speed bonus (automatic during chases)
+
+**Survivor Effects:**
+- **Haste**: Movement speed increased (+X%)
+- **Hindered**: Movement speed decreased (-X%)
+- **Exhausted**: Cannot use exhaustion perks until cooldown
+- **Exposed**: One-hit down from any health state
+
+### Console Commands (Status Effects)
+- `add_status <type> [duration] [strength]` - Add status effect to current role
+  - Types: `haste`, `hindered`, `exposed`, `exhausted`, `undetectable`
+  - Duration: 0 = infinite, default 10s
+  - Strength: e.g., 0.15 = 15%, default varies by type
+  - Examples: `add_status haste 10 0.2`, `add_status exposed 30`, `add_status undetectable`
+- `remove_status <type>` - Remove status effect from current role
+- `status_dump` - Print all active status effects for both roles
+
+### Wraith Cloak Updates
+- **First-Person Fix**: Cloak shader effect now hidden when killer plays in first-person view
+- **Undetectable Integration**: Wraith automatically gains Undetectable status when fully cloaked
+- Terror radius and killer look light are disabled while Undetectable
+
+### Config Files
+- `config/status_effects.json` - Status effect definitions (durations, strengths, icons)
+
 ---
 ## Phase B Fixes (2026-02)
 

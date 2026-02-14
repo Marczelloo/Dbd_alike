@@ -144,4 +144,28 @@ struct NameComponent
 {
     std::string name;
 };
+
+struct ProjectileState
+{
+    enum class Type
+    {
+        Hatchet
+    };
+    Type type = Type::Hatchet;
+    bool active = false;
+    glm::vec3 velocity{0.0F};
+    glm::vec3 position{0.0F};
+    glm::vec3 forward{0.0F, 0.0F, -1.0F};
+    float age = 0.0F;
+    float maxLifetime = 5.0F;
+    float gravity = 9.81F;
+    engine::scene::Entity ownerEntity = 0;
+    bool hasHit = false;
+};
+
+struct LockerComponent
+{
+    glm::vec3 halfExtents{0.45F, 1.1F, 0.35F};
+    bool killerOnly = true;
+};
 } // namespace engine::scene

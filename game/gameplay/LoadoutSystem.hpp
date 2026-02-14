@@ -77,6 +77,7 @@ struct SurvivorCharacterDefinition
     std::string id;
     std::string displayName;
     std::string modelPath;
+    float modelYawDegrees = 0.0F;
     std::string cosmeticId;
 };
 

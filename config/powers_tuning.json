@@ -1,0 +1,23 @@
+{
+  "asset_version": 1,
+  "bear_trap": {
+    "start_carry_traps": 5,
+    "max_carry_traps": 5,
+    "ground_spawn_traps": 8,
+    "set_trap_seconds": 1.5,
+    "disarm_seconds": 2.0,
+    "escape_base_chance": 0.2,
+    "escape_chance_step": 0.2,
+    "escape_chance_max": 0.85,
+    "killer_stun_seconds": 2.0
+  },
+  "wraith_cloak": {
+    "cloak_speed_multiplier": 1.3,
+    "cloak_transition_seconds": 1.0,
+    "uncloak_transition_seconds": 1.0,
+    "post_uncloak_haste_seconds": 2.0,
+    "cloak_vault_speed_mult": 1.25,
+    "cloak_pallet_break_speed_mult": 1.35,
+    "cloak_alpha": 0.15
+  }
+}

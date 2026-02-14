@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Huntress",
+  "id": "killer_huntress",
+  "model_path": "assets/meshes/killer_huntress.glb",
+  "power_id": "hatchet_throw"
+}

@@ -307,6 +307,8 @@ bool App::Run()
     (void)LoadGraphicsConfig();
     (void)LoadAudioConfig();
     (void)LoadGameplayConfig();
+    (void)LoadPowersConfig();
+    ApplyPowersSettings(m_powersApplied, false);
     (void)LoadHudLayoutConfig();
 
     m_windowSettings.width = m_graphicsApplied.width;
@@ -351,6 +353,13 @@ bool App::Run()
         return false;
     }
 
+    m_sceneFbo.Create(m_window.FramebufferWidth(), m_window.FramebufferHeight());
+    if (!m_wraithCloakRenderer.Initialize())
+    {
+        std::cerr << "Warning: failed to initialize Wraith cloak renderer.\n";
+    }
+    m_wraithCloakRenderer.SetScreenSize(m_window.FramebufferWidth(), m_window.FramebufferHeight());
+
     if (!m_ui.Initialize())
     {
         std::cerr << "Failed to initialize custom UI.\n";
@@ -381,7 +390,11 @@ bool App::Run()
 
     m_renderer.SetRenderMode(m_graphicsApplied.renderMode);
 
-    m_window.SetResizeCallback([this](int width, int height) { m_renderer.SetViewport(width, height); });
+    m_window.SetResizeCallback([this](int width, int height) {
+        m_renderer.SetViewport(width, height);
+        m_sceneFbo.Resize(width, height);
+        m_wraithCloakRenderer.SetScreenSize(width, height);
+    });
 
     m_gameplay.Initialize(m_eventBus);
     m_gameplay.SetFxReplicationCallback([this](const engine::fx::FxSpawnEvent& event) {
@@ -672,6 +685,18 @@ bool App::Run()
             m_statusToastMessage = m_showLoadingScreenTestPanel ? "Loading screen test panel ON" : "Loading screen test panel OFF";
             m_statusToastUntilSeconds = glfwGetTime() + 2.0;
         }
+        if (m_input.IsKeyPressed(GLFW_KEY_F8))
+        {
+            m_wraithCloakDebugEnabled = !m_wraithCloakDebugEnabled;
+            m_statusToastMessage = m_wraithCloakDebugEnabled ? "Wraith cloak debug ON (F9 to toggle)" : "Wraith cloak debug OFF";
+            m_statusToastUntilSeconds = glfwGetTime() + 2.0;
+        }
+        if (m_input.IsKeyPressed(GLFW_KEY_F9) && m_wraithCloakDebugEnabled)
+        {
+            m_wraithCloakEnabled = !m_wraithCloakEnabled;
+            m_statusToastMessage = m_wraithCloakEnabled ? "Cloak ON" : "Cloak OFF";
+            m_statusToastUntilSeconds = glfwGetTime() + 1.5;
+        }
 
         if (inGame && m_multiplayerMode == MultiplayerMode::Solo && controlsEnabled && m_input.IsKeyPressed(GLFW_KEY_TAB))
         {
@@ -793,6 +818,69 @@ bool App::Run()
             m_renderer.SetCameraWorldPosition(glm::vec3{0.0F, 2.0F, 0.0F});
         }
         m_renderer.EndFrame(viewProjection);
+
+        // Wraith cloak shader rendering
+        if (inGame && m_wraithCloakRenderer.IsInitialized())
+        {
+            const auto hudState = m_gameplay.BuildHudState();
+
+            // Hide cloak effect when the local player is the killer in first-person mode
+            // The cloak should only be visible to other players (or when viewing killer in 3rd person)
+            const bool isLocalKillerInFirstPerson =
+                hudState.roleName == "Killer" &&
+                hudState.cameraModeName == "1st Person";
+
+            // Only render if killer has wraith cloak power and is cloaking/cloaked
+            // AND the local player is NOT the killer in first-person (to avoid obstructing view)
+            if (hudState.killerPowerId == "wraith_cloak" && hudState.wraithCloakAmount > 0.01F && !isLocalKillerInFirstPerson)
+            {
+                m_wraithCloakRenderer.CaptureBackbuffer();
+
+                m_wraithCloakParams.time = static_cast<float>(glfwGetTime());
+                m_wraithCloakParams.cloakAmount = hudState.wraithCloakAmount;
+
+                const glm::mat4 model = glm::translate(glm::mat4{1.0F}, hudState.killerWorldPosition);
+
+                m_wraithCloakRenderer.Render(
+                    viewProjection,
+                    model,
+                    m_gameplay.CameraPosition(),
+                    hudState.killerWorldPosition,
+                    hudState.killerCapsuleHeight,
+                    hudState.killerCapsuleRadius,
+                    m_wraithCloakParams
+                );
+            }
+        }
+        
+        // Debug cloak rendering (F8 toggle)
+        if (m_wraithCloakDebugEnabled && m_wraithCloakRenderer.IsInitialized())
+        {
+            m_wraithCloakRenderer.CaptureBackbuffer();
+            
+            m_wraithCloakParams.time = static_cast<float>(glfwGetTime());
+            
+            const float target = m_wraithCloakEnabled ? 1.0F : 0.0F;
+            const float speed = 3.0F;
+            m_wraithCloakParams.cloakAmount += (target - m_wraithCloakParams.cloakAmount) * speed * static_cast<float>(m_time.DeltaSeconds());
+            m_wraithCloakParams.cloakAmount = std::clamp(m_wraithCloakParams.cloakAmount, 0.0F, 1.0F);
+            
+            if (m_wraithCloakParams.cloakAmount > 0.01F)
+            {
+                const glm::vec3 testPos{0.0F, 1.0F, 3.0F};
+                const glm::mat4 model = glm::translate(glm::mat4{1.0F}, testPos);
+                
+                m_wraithCloakRenderer.Render(
+                    viewProjection,
+                    model,
+                    inGame ? m_gameplay.CameraPosition() : (inEditor ? m_levelEditor.CameraPosition() : glm::vec3{0.0F, 2.0F, 0.0F}),
+                    testPos,
+                    2.0F,
+                    0.4F,
+                    m_wraithCloakParams
+                );
+            }
+        }
         } // end PROFILE_SCOPE("Render")
 
         bool shouldQuit = false;
@@ -1118,6 +1206,14 @@ bool App::Run()
             return m_gameplay.ListSpawnPoints();
         };
 
+        context.spawnTestModels = [this]() {
+            m_gameplay.SpawnTestModels();
+        };
+
+        context.spawnTestModelsHere = [this]() {
+            m_gameplay.SpawnTestModelsHere();
+        };
+
         context.setPhysicsDebug = [this](bool enabled) {
             m_gameplay.TogglePhysicsDebug(enabled);
         };
@@ -1391,6 +1487,8 @@ bool App::Run()
     m_devToolbar.Shutdown();
     m_ui.Shutdown();
     m_audio.Shutdown();
+    m_wraithCloakRenderer.Shutdown();
+    m_sceneFbo.Destroy();
     m_renderer.Shutdown();
     
     // Shutdown threading systems
@@ -3553,6 +3651,263 @@ bool App::SaveAudioConfig() const
     return true;
 }
 
+bool App::LoadPowersConfig()
+{
+    m_powersApplied = PowersTuning{};
+    m_powersEditing = PowersTuning{};
+
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "powers_tuning.json";
+    if (!std::filesystem::exists(path))
+    {
+        return SavePowersConfig();
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        m_powersStatus = "Failed to open powers config.";
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        m_powersStatus = "Invalid powers config. Using defaults.";
+        return SavePowersConfig();
+    }
+
+    // Bear Trap section
+    if (root.contains("bear_trap") && root["bear_trap"].is_object())
+    {
+        const auto& bt = root["bear_trap"];
+        auto readBtInt = [&](const char* key, int& target) {
+            if (bt.contains(key) && bt[key].is_number_integer())
+            {
+                target = bt[key].get<int>();
+            }
+        };
+        auto readBtFloat = [&](const char* key, float& target) {
+            if (bt.contains(key) && bt[key].is_number())
+            {
+                target = bt[key].get<float>();
+            }
+        };
+        readBtInt("start_carry_traps", m_powersApplied.trapperStartCarryTraps);
+        readBtInt("max_carry_traps", m_powersApplied.trapperMaxCarryTraps);
+        readBtInt("ground_spawn_traps", m_powersApplied.trapperGroundSpawnTraps);
+        readBtFloat("set_trap_seconds", m_powersApplied.trapperSetTrapSeconds);
+        readBtFloat("disarm_seconds", m_powersApplied.trapperDisarmSeconds);
+        readBtFloat("escape_base_chance", m_powersApplied.trapEscapeBaseChance);
+        readBtFloat("escape_chance_step", m_powersApplied.trapEscapeChanceStep);
+        readBtFloat("escape_chance_max", m_powersApplied.trapEscapeChanceMax);
+        readBtFloat("killer_stun_seconds", m_powersApplied.trapKillerStunSeconds);
+    }
+
+    // Wraith Cloak section
+    if (root.contains("wraith_cloak") && root["wraith_cloak"].is_object())
+    {
+        const auto& wc = root["wraith_cloak"];
+        auto readWcFloat = [&](const char* key, float& target) {
+            if (wc.contains(key) && wc[key].is_number())
+            {
+                target = wc[key].get<float>();
+            }
+        };
+        readWcFloat("cloak_speed_multiplier", m_powersApplied.wraithCloakMoveSpeedMultiplier);
+        readWcFloat("cloak_transition_seconds", m_powersApplied.wraithCloakTransitionSeconds);
+        readWcFloat("uncloak_transition_seconds", m_powersApplied.wraithUncloakTransitionSeconds);
+        readWcFloat("post_uncloak_haste_seconds", m_powersApplied.wraithPostUncloakHasteSeconds);
+        readWcFloat("cloak_vault_speed_mult", m_powersApplied.wraithCloakVaultSpeedMult);
+        readWcFloat("cloak_pallet_break_speed_mult", m_powersApplied.wraithCloakPalletBreakSpeedMult);
+        readWcFloat("cloak_alpha", m_powersApplied.wraithCloakAlpha);
+    }
+
+    // Hatchet Throw section
+    if (root.contains("hatchet_throw") && root["hatchet_throw"].is_object())
+    {
+        const auto& ht = root["hatchet_throw"];
+        auto readHtInt = [&](const char* key, int& target) {
+            if (ht.contains(key) && ht[key].is_number_integer())
+            {
+                target = ht[key].get<int>();
+            }
+        };
+        auto readHtFloat = [&](const char* key, float& target) {
+            if (ht.contains(key) && ht[key].is_number())
+            {
+                target = ht[key].get<float>();
+            }
+        };
+        readHtInt("max_count", m_powersApplied.hatchetMaxCount);
+        readHtFloat("charge_min_seconds", m_powersApplied.hatchetChargeMinSeconds);
+        readHtFloat("charge_max_seconds", m_powersApplied.hatchetChargeMaxSeconds);
+        readHtFloat("throw_speed_min", m_powersApplied.hatchetThrowSpeedMin);
+        readHtFloat("throw_speed_max", m_powersApplied.hatchetThrowSpeedMax);
+        readHtFloat("gravity_min", m_powersApplied.hatchetGravityMin);
+        readHtFloat("gravity_max", m_powersApplied.hatchetGravityMax);
+        readHtFloat("air_drag", m_powersApplied.hatchetAirDrag);
+        readHtFloat("collision_radius", m_powersApplied.hatchetCollisionRadius);
+        readHtFloat("max_range", m_powersApplied.hatchetMaxRange);
+        readHtFloat("locker_replenish_time", m_powersApplied.hatchetLockerReplenishTime);
+        readHtInt("locker_replenish_count", m_powersApplied.hatchetLockerReplenishCount);
+    }
+
+    m_powersEditing = m_powersApplied;
+    return true;
+}
+
+bool App::SavePowersConfig() const
+{
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "powers_tuning.json";
+
+    json root;
+    root["asset_version"] = m_powersApplied.assetVersion;
+
+    // Bear Trap section
+    json bearTrap;
+    bearTrap["start_carry_traps"] = m_powersApplied.trapperStartCarryTraps;
+    bearTrap["max_carry_traps"] = m_powersApplied.trapperMaxCarryTraps;
+    bearTrap["ground_spawn_traps"] = m_powersApplied.trapperGroundSpawnTraps;
+    bearTrap["set_trap_seconds"] = m_powersApplied.trapperSetTrapSeconds;
+    bearTrap["disarm_seconds"] = m_powersApplied.trapperDisarmSeconds;
+    bearTrap["escape_base_chance"] = m_powersApplied.trapEscapeBaseChance;
+    bearTrap["escape_chance_step"] = m_powersApplied.trapEscapeChanceStep;
+    bearTrap["escape_chance_max"] = m_powersApplied.trapEscapeChanceMax;
+    bearTrap["killer_stun_seconds"] = m_powersApplied.trapKillerStunSeconds;
+    root["bear_trap"] = bearTrap;
+
+    // Wraith Cloak section
+    json wraithCloak;
+    wraithCloak["cloak_speed_multiplier"] = m_powersApplied.wraithCloakMoveSpeedMultiplier;
+    wraithCloak["cloak_transition_seconds"] = m_powersApplied.wraithCloakTransitionSeconds;
+    wraithCloak["uncloak_transition_seconds"] = m_powersApplied.wraithUncloakTransitionSeconds;
+    wraithCloak["post_uncloak_haste_seconds"] = m_powersApplied.wraithPostUncloakHasteSeconds;
+    wraithCloak["cloak_vault_speed_mult"] = m_powersApplied.wraithCloakVaultSpeedMult;
+    wraithCloak["cloak_pallet_break_speed_mult"] = m_powersApplied.wraithCloakPalletBreakSpeedMult;
+    wraithCloak["cloak_alpha"] = m_powersApplied.wraithCloakAlpha;
+    root["wraith_cloak"] = wraithCloak;
+
+    // Hatchet Throw section
+    json hatchetThrow;
+    hatchetThrow["max_count"] = m_powersApplied.hatchetMaxCount;
+    hatchetThrow["charge_min_seconds"] = m_powersApplied.hatchetChargeMinSeconds;
+    hatchetThrow["charge_max_seconds"] = m_powersApplied.hatchetChargeMaxSeconds;
+    hatchetThrow["throw_speed_min"] = m_powersApplied.hatchetThrowSpeedMin;
+    hatchetThrow["throw_speed_max"] = m_powersApplied.hatchetThrowSpeedMax;
+    hatchetThrow["gravity_min"] = m_powersApplied.hatchetGravityMin;
+    hatchetThrow["gravity_max"] = m_powersApplied.hatchetGravityMax;
+    hatchetThrow["air_drag"] = m_powersApplied.hatchetAirDrag;
+    hatchetThrow["collision_radius"] = m_powersApplied.hatchetCollisionRadius;
+    hatchetThrow["max_range"] = m_powersApplied.hatchetMaxRange;
+    hatchetThrow["locker_replenish_time"] = m_powersApplied.hatchetLockerReplenishTime;
+    hatchetThrow["locker_replenish_count"] = m_powersApplied.hatchetLockerReplenishCount;
+    root["hatchet_throw"] = hatchetThrow;
+
+    std::ofstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+    stream << root.dump(2) << "\n";
+    return true;
+}
+
+void App::ApplyPowersSettings(const PowersTuning& tuning, bool fromServer)
+{
+    // Update the powers-specific fields in gameplay tuning
+    m_gameplayApplied.trapperStartCarryTraps = tuning.trapperStartCarryTraps;
+    m_gameplayApplied.trapperMaxCarryTraps = tuning.trapperMaxCarryTraps;
+    m_gameplayApplied.trapperGroundSpawnTraps = tuning.trapperGroundSpawnTraps;
+    m_gameplayApplied.trapperSetTrapSeconds = glm::max(0.1F, tuning.trapperSetTrapSeconds);
+    m_gameplayApplied.trapperDisarmSeconds = glm::max(0.1F, tuning.trapperDisarmSeconds);
+    m_gameplayApplied.trapEscapeBaseChance = glm::clamp(tuning.trapEscapeBaseChance, 0.0F, 1.0F);
+    m_gameplayApplied.trapEscapeChanceStep = glm::clamp(tuning.trapEscapeChanceStep, 0.0F, 1.0F);
+    m_gameplayApplied.trapEscapeChanceMax = glm::clamp(tuning.trapEscapeChanceMax, 0.0F, 1.0F);
+    m_gameplayApplied.trapKillerStunSeconds = glm::max(0.1F, tuning.trapKillerStunSeconds);
+
+    m_gameplayApplied.wraithCloakMoveSpeedMultiplier = glm::max(0.1F, tuning.wraithCloakMoveSpeedMultiplier);
+    m_gameplayApplied.wraithCloakTransitionSeconds = glm::max(0.1F, tuning.wraithCloakTransitionSeconds);
+    m_gameplayApplied.wraithUncloakTransitionSeconds = glm::max(0.1F, tuning.wraithUncloakTransitionSeconds);
+    m_gameplayApplied.wraithPostUncloakHasteSeconds = glm::max(0.0F, tuning.wraithPostUncloakHasteSeconds);
+    m_gameplayApplied.wraithCloakVaultSpeedMult = glm::max(1.0F, tuning.wraithCloakVaultSpeedMult);
+    m_gameplayApplied.wraithCloakPalletBreakSpeedMult = glm::max(1.0F, tuning.wraithCloakPalletBreakSpeedMult);
+    m_gameplayApplied.wraithCloakAlpha = glm::clamp(tuning.wraithCloakAlpha, 0.0F, 1.0F);
+
+    // Hatchet Throw
+    m_gameplayApplied.hatchetMaxCount = glm::max(1, tuning.hatchetMaxCount);
+    m_gameplayApplied.hatchetChargeMinSeconds = glm::max(0.0F, tuning.hatchetChargeMinSeconds);
+    m_gameplayApplied.hatchetChargeMaxSeconds = glm::max(0.1F, tuning.hatchetChargeMaxSeconds);
+    m_gameplayApplied.hatchetThrowSpeedMin = glm::max(1.0F, tuning.hatchetThrowSpeedMin);
+    m_gameplayApplied.hatchetThrowSpeedMax = glm::max(1.0F, tuning.hatchetThrowSpeedMax);
+    m_gameplayApplied.hatchetGravityMin = glm::max(0.1F, tuning.hatchetGravityMin);
+    m_gameplayApplied.hatchetGravityMax = glm::max(0.1F, tuning.hatchetGravityMax);
+    m_gameplayApplied.hatchetAirDrag = glm::clamp(tuning.hatchetAirDrag, 0.8F, 1.0F);
+    m_gameplayApplied.hatchetCollisionRadius = glm::max(0.01F, tuning.hatchetCollisionRadius);
+    m_gameplayApplied.hatchetMaxRange = glm::max(1.0F, tuning.hatchetMaxRange);
+    m_gameplayApplied.hatchetLockerReplenishTime = glm::max(0.1F, tuning.hatchetLockerReplenishTime);
+    m_gameplayApplied.hatchetLockerReplenishCount = glm::max(1, tuning.hatchetLockerReplenishCount);
+
+    m_gameplay.ApplyGameplayTuning(m_gameplayApplied);
+
+    m_powersApplied = tuning;
+    if (!fromServer)
+    {
+        m_powersEditing = tuning;
+        m_gameplayEditing = m_gameplayApplied;
+    }
+}
+
+void App::SendPowersTuningToClient()
+{
+    if (m_multiplayerMode != MultiplayerMode::Host || !m_network.IsConnected())
+    {
+        return;
+    }
+
+    std::vector<std::uint8_t> payload;
+    payload.push_back(0x50); // 'P' packet type for powers tuning
+
+    auto appendFloat = [&payload](float v) {
+        const std::uint8_t* ptr = reinterpret_cast<const std::uint8_t*>(&v);
+        for (std::size_t i = 0; i < sizeof(float); ++i)
+        {
+            payload.push_back(ptr[i]);
+        }
+    };
+    auto appendInt = [&payload](int v) {
+        const std::uint8_t* ptr = reinterpret_cast<const std::uint8_t*>(&v);
+        for (std::size_t i = 0; i < sizeof(int); ++i)
+        {
+            payload.push_back(ptr[i]);
+        }
+    };
+
+    // Bear Trap
+    appendInt(m_powersApplied.trapperStartCarryTraps);
+    appendInt(m_powersApplied.trapperMaxCarryTraps);
+    appendInt(m_powersApplied.trapperGroundSpawnTraps);
+    appendFloat(m_powersApplied.trapperSetTrapSeconds);
+    appendFloat(m_powersApplied.trapperDisarmSeconds);
+    appendFloat(m_powersApplied.trapEscapeBaseChance);
+    appendFloat(m_powersApplied.trapEscapeChanceStep);
+    appendFloat(m_powersApplied.trapEscapeChanceMax);
+    appendFloat(m_powersApplied.trapKillerStunSeconds);
+
+    // Wraith Cloak
+    appendFloat(m_powersApplied.wraithCloakMoveSpeedMultiplier);
+    appendFloat(m_powersApplied.wraithCloakTransitionSeconds);
+    appendFloat(m_powersApplied.wraithUncloakTransitionSeconds);
+    appendFloat(m_powersApplied.wraithPostUncloakHasteSeconds);
+
+    m_network.SendReliable(payload.data(), payload.size());
+}
+
 bool App::LoadGameplayConfig()
 {
     m_gameplayApplied = game::gameplay::GameplaySystems::GameplayTuning{};
@@ -3996,6 +4351,21 @@ void App::UpdateTerrorRadiusAudio(float deltaSeconds, const game::gameplay::HudS
             }
         }
         // Don't update band state for killer (not relevant)
+        return;
+    }
+
+    // Check if killer is undetectable - silence all TR audio
+    if (hudState.killerUndetectable)
+    {
+        for (TerrorRadiusLayerAudio& layer : m_terrorAudioProfile.layers)
+        {
+            if (layer.handle != 0 && layer.currentVolume > 0.0F)
+            {
+                (void)m_audio.SetHandleVolume(layer.handle, 0.0F);
+                layer.currentVolume = 0.0F;
+            }
+        }
+        m_currentBand = TerrorRadiusBand::Outside;
         return;
     }
 
@@ -5253,7 +5623,7 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
     m_ui.PopLayout();
     m_ui.Label("Tabs + scroll region. Use drag scrollbar on the right in long sections.", m_ui.Theme().colorTextMuted);
 
-    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 3);
+    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 4);
     m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
     {
         const glm::vec4 tabColor = m_ui.Theme().colorAccent;
@@ -5272,6 +5642,10 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 3 ? &tabColor : nullptr, 200.0F))
         {
             m_settingsTabIndex = 3;
+        }
+        if (m_ui.Button("tab_powers", "Powers", true, m_settingsTabIndex == 4 ? &tabColor : nullptr, 200.0F))
+        {
+            m_settingsTabIndex = 4;
         }
     }
     m_ui.PopLayout();
@@ -5432,7 +5806,7 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
             m_ui.Label(m_audioStatus, m_ui.Theme().colorTextMuted);
         }
     }
-    else
+    else if (m_settingsTabIndex == 3)
     {
         const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
         if (!allowEdit)
@@ -5607,21 +5981,6 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         m_ui.SliderFloat("gp_map_reveal_range", "Map Reveal Range (m)", &t.mapRevealRangeMeters, 4.0F, 120.0F, "%.1f");
         m_ui.SliderFloat("gp_map_reveal_duration", "Map Reveal Duration (s)", &t.mapRevealDurationSeconds, 0.2F, 12.0F, "%.2f");
 
-        m_ui.Label("Killer Powers: Trapper + Wraith", m_ui.Theme().colorAccent);
-        m_ui.SliderInt("gp_trapper_start", "Trapper Start Carry", &t.trapperStartCarryTraps, 0, 16);
-        m_ui.SliderInt("gp_trapper_max", "Trapper Max Carry", &t.trapperMaxCarryTraps, 1, 16);
-        m_ui.SliderInt("gp_trapper_ground", "Trapper Ground Spawn", &t.trapperGroundSpawnTraps, 0, 48);
-        m_ui.SliderFloat("gp_trapper_set", "Trapper Set Time (s)", &t.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
-        m_ui.SliderFloat("gp_trapper_disarm", "Trapper Disarm Time (s)", &t.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
-        m_ui.SliderFloat("gp_trap_escape_base", "Trap Escape Base Chance", &t.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
-        m_ui.SliderFloat("gp_trap_escape_step", "Trap Escape Step", &t.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
-        m_ui.SliderFloat("gp_trap_escape_max", "Trap Escape Max", &t.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
-        m_ui.SliderFloat("gp_trap_killer_stun", "Trap Killer Stun (s)", &t.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
-        m_ui.SliderFloat("gp_wraith_cloak_speed", "Wraith Cloak Speed Mult", &t.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
-        m_ui.SliderFloat("gp_wraith_cloak_trans", "Wraith Cloak Transition (s)", &t.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
-        m_ui.SliderFloat("gp_wraith_uncloak_trans", "Wraith Uncloak Transition (s)", &t.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
-        m_ui.SliderFloat("gp_wraith_haste", "Wraith Post-Uncloak Haste (s)", &t.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
-
         m_ui.Label("Map Generation", m_ui.Theme().colorAccent);
         m_ui.SliderFloat("gp_weight_tl", "Weight TL", &t.weightTLWalls, 0.0F, 5.0F, "%.2f");
         m_ui.SliderFloat("gp_weight_jgl", "Weight Jungle Long", &t.weightJungleGymLong, 0.0F, 5.0F, "%.2f");
@@ -5641,6 +6000,103 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         if (!m_gameplayStatus.empty())
         {
             m_ui.Label(m_gameplayStatus, m_ui.Theme().colorTextMuted);
+        }
+    }
+    else if (m_settingsTabIndex == 4)
+    {
+        const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
+        if (!allowEdit)
+        {
+            m_ui.Label("Read-only on clients. Host values are authoritative.", m_ui.Theme().colorDanger);
+        }
+        auto& p = m_powersEditing;
+
+        m_ui.Label("Config Actions", m_ui.Theme().colorAccent);
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("apply_powers_btn", "Apply", allowEdit, &m_ui.Theme().colorSuccess, 165.0F))
+        {
+            ApplyPowersSettings(m_powersEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendPowersTuningToClient();
+            }
+            m_powersStatus = "Powers tuning applied.";
+        }
+        if (m_ui.Button("save_powers_btn", "Save To File", allowEdit, nullptr, 165.0F))
+        {
+            m_powersApplied = m_powersEditing;
+            const bool saved = SavePowersConfig();
+            m_powersStatus = saved ? "Saved to config/powers_tuning.json." : "Failed to save powers tuning file.";
+        }
+        if (m_ui.Button("load_powers_btn", "Load From File", true, nullptr, 165.0F))
+        {
+            if (LoadPowersConfig())
+            {
+                if (allowEdit)
+                {
+                    ApplyPowersSettings(m_powersEditing, false);
+                    if (m_multiplayerMode == MultiplayerMode::Host)
+                    {
+                        SendPowersTuningToClient();
+                    }
+                }
+                m_powersStatus = allowEdit ? "Loaded from file and applied." : "Loaded local values (client read-only).";
+            }
+            else
+            {
+                m_powersStatus = "Failed to load config/powers_tuning.json.";
+            }
+        }
+        if (m_ui.Button("defaults_powers_btn", "Set Defaults", allowEdit, &m_ui.Theme().colorDanger, 165.0F))
+        {
+            m_powersEditing = PowersTuning{};
+            ApplyPowersSettings(m_powersEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendPowersTuningToClient();
+            }
+            m_powersStatus = "Defaults applied. Use Save To File to persist.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("Bear Trap (Trapper)", m_ui.Theme().colorAccent);
+        m_ui.SliderInt("pw_trapper_start", "Start Carry Traps", &p.trapperStartCarryTraps, 0, 16);
+        m_ui.SliderInt("pw_trapper_max", "Max Carry Traps", &p.trapperMaxCarryTraps, 1, 16);
+        m_ui.SliderInt("pw_trapper_ground", "Ground Spawn Traps", &p.trapperGroundSpawnTraps, 0, 48);
+        m_ui.SliderFloat("pw_trapper_set", "Set Trap Time (s)", &p.trapperSetTrapSeconds, 0.1F, 6.0F, "%.2f");
+        m_ui.SliderFloat("pw_trapper_disarm", "Disarm Time (s)", &p.trapperDisarmSeconds, 0.1F, 8.0F, "%.2f");
+        m_ui.SliderFloat("pw_trap_escape_base", "Escape Base Chance", &p.trapEscapeBaseChance, 0.01F, 0.9F, "%.2f");
+        m_ui.SliderFloat("pw_trap_escape_step", "Escape Chance Step", &p.trapEscapeChanceStep, 0.01F, 0.8F, "%.2f");
+        m_ui.SliderFloat("pw_trap_escape_max", "Escape Chance Max", &p.trapEscapeChanceMax, 0.05F, 0.98F, "%.2f");
+        m_ui.SliderFloat("pw_trap_killer_stun", "Killer Stun (s)", &p.trapKillerStunSeconds, 0.1F, 8.0F, "%.2f");
+
+        m_ui.Label("Wraith Cloak", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("pw_wraith_cloak_speed", "Cloak Speed Mult", &p.wraithCloakMoveSpeedMultiplier, 1.0F, 3.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_cloak_trans", "Cloak Transition (s)", &p.wraithCloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_uncloak_trans", "Uncloak Transition (s)", &p.wraithUncloakTransitionSeconds, 0.1F, 4.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_haste", "Post-Uncloak Haste (s)", &p.wraithPostUncloakHasteSeconds, 0.0F, 8.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_vault", "Cloak Vault Speed Mult", &p.wraithCloakVaultSpeedMult, 1.0F, 3.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_pallet", "Cloak Pallet Break Mult", &p.wraithCloakPalletBreakSpeedMult, 1.0F, 3.0F, "%.2f");
+        m_ui.SliderFloat("pw_wraith_alpha", "Cloak Alpha (visibility)", &p.wraithCloakAlpha, 0.0F, 1.0F, "%.2f");
+
+        m_ui.Label("Hatchet Throw (Huntress)", m_ui.Theme().colorAccent);
+        m_ui.SliderInt("pw_hatchet_max", "Max Hatchets", &p.hatchetMaxCount, 1, 16);
+        m_ui.SliderFloat("pw_hatchet_charge_min", "Min Charge Time (s)", &p.hatchetChargeMinSeconds, 0.0F, 1.0F, "%.2f");
+        m_ui.SliderFloat("pw_hatchet_charge_max", "Max Charge Time (s)", &p.hatchetChargeMaxSeconds, 0.1F, 3.0F, "%.2f");
+        m_ui.SliderFloat("pw_hatchet_speed_min", "Throw Speed Min", &p.hatchetThrowSpeedMin, 5.0F, 25.0F, "%.1f");
+        m_ui.SliderFloat("pw_hatchet_speed_max", "Throw Speed Max", &p.hatchetThrowSpeedMax, 15.0F, 50.0F, "%.1f");
+        m_ui.SliderFloat("pw_hatchet_gravity_min", "Gravity Min (heavy)", &p.hatchetGravityMin, 1.0F, 25.0F, "%.1f");
+        m_ui.SliderFloat("pw_hatchet_gravity_max", "Gravity Max (light)", &p.hatchetGravityMax, 1.0F, 15.0F, "%.1f");
+        m_ui.SliderFloat("pw_hatchet_drag", "Air Drag", &p.hatchetAirDrag, 0.9F, 1.0F, "%.3f");
+        m_ui.SliderFloat("pw_hatchet_radius", "Collision Radius", &p.hatchetCollisionRadius, 0.05F, 0.5F, "%.2f");
+        m_ui.SliderFloat("pw_hatchet_range", "Max Range", &p.hatchetMaxRange, 10.0F, 100.0F, "%.1f");
+        m_ui.SliderFloat("pw_hatchet_locker_time", "Locker Replenish (s)", &p.hatchetLockerReplenishTime, 0.5F, 10.0F, "%.1f");
+        m_ui.SliderInt("pw_hatchet_locker_count", "Locker Replenish Count", &p.hatchetLockerReplenishCount, 1, 16);
+
+        m_ui.Label("Tip: Apply for runtime changes, Save To File for persistence.", m_ui.Theme().colorTextMuted);
+        if (!m_powersStatus.empty())
+        {
+            m_ui.Label(m_powersStatus, m_ui.Theme().colorTextMuted);
         }
     }
 
@@ -5888,6 +6344,32 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         m_ui.Label("Role: " + hudState.roleName, 1.05F);
         m_ui.Label("State: " + hudState.survivorStateName + " | Move: " + hudState.movementStateName, m_ui.Theme().colorTextMuted);
         m_ui.Label("Camera: " + hudState.cameraModeName + " | Render: " + hudState.renderModeName, m_ui.Theme().colorTextMuted);
+        if (hudState.roleName == "Survivor")
+        {
+            std::ostringstream rot;
+            rot.setf(std::ios::fixed);
+            rot << std::setprecision(1)
+                << "RotDbg model=" << hudState.survivorVisualYawDeg
+                << " target=" << hudState.survivorVisualTargetYawDeg
+                << " look=" << hudState.survivorLookYawDeg
+                << " cam=" << hudState.survivorCameraYawDeg;
+            m_ui.Label(rot.str(), m_ui.Theme().colorTextMuted);
+
+            std::ostringstream input;
+            input.setf(std::ios::fixed);
+            input << std::setprecision(2)
+                  << "MoveInput x=" << hudState.survivorMoveInput.x
+                  << " y=" << hudState.survivorMoveInput.y;
+            m_ui.Label(input.str(), m_ui.Theme().colorTextMuted);
+
+        }
+        std::ostringstream ghost;
+        ghost.setf(std::ios::fixed);
+        ghost << std::setprecision(2)
+              << "HitGhost " << (hudState.killerSurvivorNoCollisionActive ? "ON" : "OFF")
+              << " t=" << hudState.killerSurvivorNoCollisionTimer
+              << " overlap=" << (hudState.killerSurvivorOverlapping ? "YES" : "NO");
+        m_ui.Label(ghost.str(), m_ui.Theme().colorTextMuted);
         m_ui.Label("Chase: " + std::string(hudState.chaseActive ? "ON" : "OFF"), hudState.chaseActive ? m_ui.Theme().colorDanger : m_ui.Theme().colorTextMuted);
         m_ui.Label("Attack: " + hudState.killerAttackStateName, m_ui.Theme().colorTextMuted);
         if (hudState.roleName == "Killer")
@@ -6061,6 +6543,98 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
                 m_ui.Theme().colorDanger
             );
         }
+        m_ui.EndPanel();
+    }
+
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "wraith_cloak")
+    {
+        float panelHeight = 56.0F * scale;
+        if (hudState.wraithCloakTransitionActive)
+        {
+            panelHeight = 88.0F * scale;
+        }
+        else if (hudState.wraithPostUncloakHasteSeconds > 0.0F)
+        {
+            panelHeight = 78.0F * scale;
+        }
+        const engine::ui::UiRect wraithPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 132.0F * scale,
+            280.0F * scale,
+            panelHeight,
+        };
+        m_ui.BeginPanel("hud_wraith_corner", wraithPanel, true);
+        if (hudState.wraithCloaked)
+        {
+            m_ui.Label("CLOAKED", glm::vec4{0.4F, 0.6F, 1.0F, 1.0F});
+        }
+        else if (hudState.wraithCloakTransitionActive)
+        {
+            m_ui.Label(hudState.wraithCloakAction, m_ui.Theme().colorAccent);
+            m_ui.ProgressBar(
+                "hud_wraith_cloak_progress",
+                hudState.wraithCloakProgress01,
+                std::to_string(static_cast<int>(hudState.wraithCloakProgress01 * 100.0F)) + "%"
+            );
+        }
+        else
+        {
+            m_ui.Label("Uncloaked", m_ui.Theme().colorTextMuted);
+        }
+        if (hudState.wraithPostUncloakHasteSeconds > 0.0F)
+        {
+            m_ui.Label(
+                "Haste: " + std::to_string(hudState.wraithPostUncloakHasteSeconds).substr(0, 3) + "s",
+                m_ui.Theme().colorSuccess
+            );
+        }
+        m_ui.EndPanel();
+    }
+
+    // Hatchet power HUD panel
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "hatchet_throw")
+    {
+        float panelHeight = 56.0F * scale;
+        if (hudState.hatchetCharging)
+        {
+            panelHeight = 88.0F * scale;
+        }
+        else if (hudState.lockerReplenishProgress > 0.0F)
+        {
+            panelHeight = 88.0F * scale;
+        }
+        const engine::ui::UiRect hatchetPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 132.0F * scale,
+            280.0F * scale,
+            panelHeight,
+        };
+        m_ui.BeginPanel("hud_hatchet_corner", hatchetPanel, true);
+        m_ui.Label(
+            "Hatchets: " + std::to_string(hudState.hatchetCount) + "/" + std::to_string(hudState.hatchetMaxCount),
+            hudState.hatchetCount > 0 ? m_ui.Theme().colorText : m_ui.Theme().colorDanger
+        );
+
+        if (hudState.hatchetCharging)
+        {
+            m_ui.Label("Charging...", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar(
+                "hud_hatchet_charge",
+                hudState.hatchetCharge01,
+                std::to_string(static_cast<int>(hudState.hatchetCharge01 * 100.0F)) + "%"
+            );
+        }
+
+        if (hudState.lockerReplenishProgress > 0.0F)
+        {
+            m_ui.Label("Replenishing...", m_ui.Theme().colorSuccess);
+            m_ui.ProgressBar(
+                "hud_hatchet_replenish",
+                hudState.lockerReplenishProgress,
+                std::to_string(static_cast<int>(hudState.lockerReplenishProgress * 100.0F)) + "%"
+            );
+        }
+
         m_ui.EndPanel();
     }
 
@@ -6255,6 +6829,58 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         }
 
         m_ui.EndPanel();
+    }
+
+    // Status Effects Panel (right side of screen)
+    {
+        const auto& effects = (hudState.roleName == "Killer")
+            ? hudState.killerStatusEffects
+            : hudState.survivorStatusEffects;
+
+        if (!effects.empty())
+        {
+            const float panelX = static_cast<float>(m_ui.ScreenWidth()) - 190.0F * scale;
+            const float panelWidth = 180.0F * scale;
+            const float badgeHeight = 36.0F * scale;
+            float panelY = static_cast<float>(m_ui.ScreenHeight()) * 0.25F;
+            const float panelHeight = badgeHeight * static_cast<float>(effects.size()) + 16.0F * scale;
+
+            const engine::ui::UiRect statusPanel{panelX, panelY, panelWidth, panelHeight};
+            m_ui.BeginPanel("hud_status_effects", statusPanel, true);
+
+            for (const auto& effect : effects)
+            {
+                // Build label: "EffectName 15s" or "EffectName [inf]"
+                std::string label = effect.displayName;
+                if (!effect.isInfinite && effect.remainingSeconds > 0.0F)
+                {
+                    label += " " + std::to_string(static_cast<int>(effect.remainingSeconds)) + "s";
+                }
+                else if (effect.isInfinite)
+                {
+                    label += " [inf]";
+                }
+
+                // Color based on effect type
+                glm::vec4 effectColor = m_ui.Theme().colorText;
+                if (effect.typeId == "exposed") effectColor = glm::vec4{0.9F, 0.25F, 0.2F, 1.0F};
+                else if (effect.typeId == "undetectable") effectColor = glm::vec4{0.25F, 0.45F, 0.75F, 1.0F};
+                else if (effect.typeId == "haste") effectColor = glm::vec4{0.25F, 0.75F, 0.4F, 1.0F};
+                else if (effect.typeId == "hindered") effectColor = glm::vec4{0.65F, 0.4F, 0.25F, 1.0F};
+                else if (effect.typeId == "exhausted") effectColor = glm::vec4{0.75F, 0.65F, 0.25F, 1.0F};
+                else if (effect.typeId == "bloodlust") effectColor = glm::vec4{0.75F, 0.25F, 0.25F, 1.0F};
+
+                m_ui.Label(label, effectColor);
+
+                // Progress bar for timed effects
+                if (!effect.isInfinite && effect.progress01 > 0.0F)
+                {
+                    m_ui.ProgressBar("status_pb_" + effect.typeId, effect.progress01, "");
+                }
+            }
+
+            m_ui.EndPanel();
+        }
     }
 
     // Phase B2/B3: Scratch marks and blood pools debug overlays

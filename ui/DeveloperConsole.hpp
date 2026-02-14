@@ -65,6 +65,8 @@ struct ConsoleContext
     std::function<void(const std::string&)> spawnRoleHere;
     std::function<void(const std::string&, int)> spawnRoleAt;
     std::function<std::string()> listSpawns;
+    std::function<void()> spawnTestModels; // Spawn blocky survivor test models for visual verification
+    std::function<void()> spawnTestModelsHere; // Spawn test models at player position
     std::function<void(float)> setKillerLightIntensity;
     std::function<void(float)> setKillerLookLightAngle;
     std::function<void(float)> setKillerLookLightPitch;

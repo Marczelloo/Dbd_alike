@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "blender-mcp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["blender-mcp"],
+      "env": {
+        "PORT": "9876",
+        "UV_PYTHON": "C:\\Users\\moskw\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+      }
+    }
+  }
+}

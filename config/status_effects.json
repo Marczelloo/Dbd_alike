@@ -1,0 +1,65 @@
+{
+    "asset_version": 1,
+    "description": "Status effect definitions for killers and survivors",
+    "effects": [
+        {
+            "type": "haste",
+            "name": "Haste",
+            "description": "Movement speed increased",
+            "default_duration": 10.0,
+            "default_strength": 0.15,
+            "icon_color": [0.2, 0.6, 0.3],
+            "applies_to": ["killer", "survivor"]
+        },
+        {
+            "type": "hindered",
+            "name": "Hindered",
+            "description": "Movement speed decreased",
+            "default_duration": 6.0,
+            "default_strength": -0.15,
+            "icon_color": [0.5, 0.3, 0.2],
+            "applies_to": ["killer", "survivor"]
+        },
+        {
+            "type": "undetectable",
+            "name": "Undetectable",
+            "description": "No terror radius, no killer light",
+            "default_duration": 0,
+            "default_strength": 0,
+            "icon_color": [0.15, 0.3, 0.5],
+            "applies_to": ["killer"]
+        },
+        {
+            "type": "exposed",
+            "name": "Exposed",
+            "description": "One-hit down from any health state",
+            "default_duration": 60.0,
+            "default_strength": 0,
+            "icon_color": [0.8, 0.2, 0.15],
+            "applies_to": ["survivor"]
+        },
+        {
+            "type": "exhausted",
+            "name": "Exhausted",
+            "description": "Cannot use exhaustion perks",
+            "default_duration": 40.0,
+            "default_strength": 0,
+            "icon_color": [0.6, 0.5, 0.2],
+            "applies_to": ["survivor"]
+        },
+        {
+            "type": "bloodlust",
+            "name": "Bloodlust",
+            "description": "Chase speed bonus (killer only)",
+            "default_duration": 0,
+            "default_strength": 0,
+            "icon_color": [0.6, 0.15, 0.15],
+            "applies_to": ["killer"],
+            "tier_thresholds": {
+                "tier1": {"time": 15.0, "speed_multiplier": 1.20},
+                "tier2": {"time": 25.0, "speed_multiplier": 1.25},
+                "tier3": {"time": 35.0, "speed_multiplier": 1.30}
+            }
+        }
+    ]
+}

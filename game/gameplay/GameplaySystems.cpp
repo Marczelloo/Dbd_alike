@@ -8,6 +8,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -18,10 +19,12 @@
 #include <GLFW/glfw3.h>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "engine/platform/Input.hpp"
 #include "engine/render/Renderer.hpp"
+#include "engine/assets/MeshLibrary.hpp"
 #include "engine/core/Profiler.hpp"
 #include "game/editor/LevelAssets.hpp"
 #include "game/maps/TileGenerator.hpp"
@@ -116,6 +119,62 @@ std::string MapToName(GameplaySystems::MapType type)
 void ItemPowerLog(const std::string& text)
 {
     std::cout << "[ITEM/POWER] " << text << "\n";
+}
+
+std::filesystem::path ResolveAssetPathFromCwd(const std::string& relativeOrAbsolutePath)
+{
+    std::error_code ec;
+    const std::filesystem::path input = relativeOrAbsolutePath;
+    if (input.is_absolute())
+    {
+        return input;
+    }
+
+    const std::filesystem::path cwd = std::filesystem::current_path(ec);
+    const std::array<std::filesystem::path, 4> candidates{
+        cwd / input,
+        cwd / ".." / input,
+        cwd / ".." / ".." / input,
+        input
+    };
+    for (const std::filesystem::path& candidate : candidates)
+    {
+        if (std::filesystem::exists(candidate, ec))
+        {
+            return std::filesystem::absolute(candidate, ec);
+        }
+    }
+    return std::filesystem::absolute(input, ec);
+}
+
+float WrapAngleRadians(float angle)
+{
+    while (angle > glm::pi<float>())
+    {
+        angle -= glm::two_pi<float>();
+    }
+    while (angle < -glm::pi<float>())
+    {
+        angle += glm::two_pi<float>();
+    }
+    return angle;
+}
+
+glm::vec2 MoveTowardsVector(const glm::vec2& current, const glm::vec2& target, float maxDelta)
+{
+    if (maxDelta <= 0.0F)
+    {
+        return current;
+    }
+
+    const glm::vec2 delta = target - current;
+    const float distance = glm::length(delta);
+    if (distance <= maxDelta || distance <= 1.0e-6F)
+    {
+        return target;
+    }
+
+    return current + (delta / distance) * maxDelta;
 }
 
 // High-poly mesh generation helpers for GPU stress testing
@@ -543,6 +602,9 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
         }
     }
 
+    // Update status effects (tick timers, remove expired)
+    m_statusEffectManager.Update(fixedDt);
+
     RoleCommand survivorCommand = m_localSurvivorCommand;
     RoleCommand killerCommand = m_localKillerCommand;
 
@@ -586,6 +648,60 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
         {
             m_killerSlowMultiplier = 1.0F;
         }
+    }
+    if (m_killerSurvivorNoCollisionTimer > 0.0F)
+    {
+        bool overlapping = false;
+        bool havePair = false;
+        float distanceSq = 0.0F;
+        const auto killerTransformIt = m_world.Transforms().find(m_killer);
+        const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        const auto killerActorIt = m_world.Actors().find(m_killer);
+        const auto survivorActorIt = m_world.Actors().find(m_survivor);
+        if (killerTransformIt != m_world.Transforms().end() &&
+            survivorTransformIt != m_world.Transforms().end() &&
+            killerActorIt != m_world.Actors().end() &&
+            survivorActorIt != m_world.Actors().end())
+        {
+            havePair = true;
+            const float combinedRadius = std::max(
+                0.01F,
+                killerActorIt->second.capsuleRadius + survivorActorIt->second.capsuleRadius
+            );
+            const glm::vec2 delta{
+                survivorTransformIt->second.position.x - killerTransformIt->second.position.x,
+                survivorTransformIt->second.position.z - killerTransformIt->second.position.z
+            };
+            distanceSq = glm::dot(delta, delta);
+            overlapping = distanceSq < (combinedRadius * combinedRadius);
+        }
+
+        if (havePair &&
+            distanceSq >= (m_killerSurvivorNoCollisionBreakDistance * m_killerSurvivorNoCollisionBreakDistance))
+        {
+            // End hit ghost immediately once actors have clearly separated.
+            m_killerSurvivorNoCollisionTimer = 0.0F;
+        }
+        else if (!overlapping)
+        {
+            m_killerSurvivorNoCollisionTimer = std::max(0.0F, m_killerSurvivorNoCollisionTimer - fixedDt);
+        }
+        // If overlapping, freeze timer (do not reduce).
+    }
+
+    m_killerPreMovePositionValid = false;
+    m_survivorPreMovePositionValid = false;
+    if (const auto killerTransformIt = m_world.Transforms().find(m_killer);
+        killerTransformIt != m_world.Transforms().end())
+    {
+        m_killerPreMovePosition = killerTransformIt->second.position;
+        m_killerPreMovePositionValid = true;
+    }
+    if (const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        survivorTransformIt != m_world.Transforms().end())
+    {
+        m_survivorPreMovePosition = survivorTransformIt->second.position;
+        m_survivorPreMovePositionValid = true;
     }
 
     for (auto& [entity, actor] : m_world.Actors())
@@ -640,6 +756,7 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     }
 
     UpdateCarriedSurvivor();
+    ResolveKillerSurvivorCollision();
     UpdateCarryEscapeQte(true, fixedDt);
     UpdateHookStages(fixedDt, survivorCommand.interactPressed, survivorCommand.jumpPressed);
     const bool toolboxRepairHeld = survivorCommand.useAltHeld && m_survivorLoadout.itemId == "toolbox";
@@ -648,6 +765,7 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
     UpdateSurvivorItemSystem(survivorCommand, fixedDt);
     UpdateKillerPowerSystem(killerCommand, fixedDt);
     UpdateBearTrapSystem(survivorCommand, killerCommand, fixedDt);
+    UpdateProjectiles(fixedDt);
 
     const InteractionCandidate survivorCandidate = ResolveInteractionCandidateFromView(m_survivor);
     if (survivorCandidate.type != InteractionType::None && ConsumeInteractBuffered(engine::scene::Role::Survivor))
@@ -801,7 +919,6 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
 void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& input, bool controlsEnabled)
 {
     (void)input;
-    (void)controlsEnabled;
     m_elapsedSeconds += deltaSeconds;
 
     // Update perk system (cooldowns, active durations)
@@ -826,11 +943,113 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
 
     m_fxSystem.Update(deltaSeconds, m_cameraPosition);
     UpdateCamera(deltaSeconds);
+
+    // Update survivor visual facing every frame from look yaw + move input.
+    // This keeps model rotation responsive while holding movement keys and rotating camera.
+    if (m_survivor != 0)
+    {
+        const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+        const auto survivorActorIt = m_world.Actors().find(m_survivor);
+        if (survivorTransformIt != m_world.Transforms().end() && survivorActorIt != m_world.Actors().end())
+        {
+            const engine::scene::Transform& survivorTransform = survivorTransformIt->second;
+            const engine::scene::ActorComponent& survivorActor = survivorActorIt->second;
+
+            glm::vec2 moveAxis{0.0F};
+            if (m_controlledRole == ControlledRole::Survivor && controlsEnabled)
+            {
+                const bool inputLocked =
+                    IsActorInputLocked(survivorActor) ||
+                    m_survivorState == SurvivorHealthState::Hooked ||
+                    m_survivorState == SurvivorHealthState::Trapped ||
+                    m_survivorState == SurvivorHealthState::Dead ||
+                    (m_survivorItemState.actionLockTimer > 0.0F &&
+                     m_survivorState != SurvivorHealthState::Trapped &&
+                     m_survivorState != SurvivorHealthState::Hooked &&
+                     m_survivorState != SurvivorHealthState::Carried);
+                if (!inputLocked)
+                {
+                    moveAxis = m_localSurvivorCommand.moveAxis;
+                }
+            }
+
+            m_survivorVisualMoveInput = moveAxis;
+            glm::vec3 desiredDirection{0.0F};
+            if (glm::length(moveAxis) > 1.0e-5F && m_controlledRole == ControlledRole::Survivor)
+            {
+                const glm::vec3 cameraFlat{m_cameraForward.x, 0.0F, m_cameraForward.z};
+                if (glm::length(cameraFlat) > 1.0e-5F)
+                {
+                    const glm::vec3 camForward = glm::normalize(cameraFlat);
+                    const glm::vec3 camRight = glm::normalize(glm::cross(camForward, glm::vec3{0.0F, 1.0F, 0.0F}));
+                    desiredDirection = glm::normalize(camRight * moveAxis.x + camForward * moveAxis.y);
+                }
+                else
+                {
+                    desiredDirection = glm::normalize(glm::vec3{survivorTransform.forward.x, 0.0F, survivorTransform.forward.z});
+                }
+            }
+            else
+            {
+                const glm::vec3 velocityFlat{survivorActor.velocity.x, 0.0F, survivorActor.velocity.z};
+                if (glm::length(velocityFlat) > 0.05F)
+                {
+                    desiredDirection = glm::normalize(velocityFlat);
+                }
+            }
+            m_survivorVisualDesiredDirection = desiredDirection;
+
+            if (!m_survivorVisualYawInitialized)
+            {
+                glm::vec3 initialFacing = desiredDirection;
+                if (glm::length(initialFacing) <= 1.0e-5F)
+                {
+                    initialFacing = glm::vec3{survivorTransform.forward.x, 0.0F, survivorTransform.forward.z};
+                }
+                if (glm::length(initialFacing) <= 1.0e-5F)
+                {
+                    initialFacing = glm::vec3{0.0F, 0.0F, -1.0F};
+                }
+                else
+                {
+                    initialFacing = glm::normalize(initialFacing);
+                }
+                m_survivorVisualYawRadians = std::atan2(initialFacing.x, -initialFacing.z);
+                m_survivorVisualTargetYawRadians = m_survivorVisualYawRadians;
+                m_survivorVisualYawInitialized = true;
+            }
+
+            if (glm::length(desiredDirection) > 1.0e-5F)
+            {
+                m_survivorVisualTargetYawRadians = std::atan2(desiredDirection.x, -desiredDirection.z);
+            }
+            else
+            {
+                m_survivorVisualTargetYawRadians = m_survivorVisualYawRadians;
+            }
+
+            const float delta = WrapAngleRadians(m_survivorVisualTargetYawRadians - m_survivorVisualYawRadians);
+            const float maxStep = std::max(0.1F, m_survivorVisualTurnSpeedRadiansPerSecond) * deltaSeconds;
+            const float clampedDelta = glm::clamp(delta, -maxStep, maxStep);
+            m_survivorVisualYawRadians = WrapAngleRadians(m_survivorVisualYawRadians + clampedDelta);
+        }
+    }
 }
 
 void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRatio)
 {
     m_rendererPtr = &renderer;
+    if (m_testModels.spawned &&
+        (m_testModelMeshes.maleBody == engine::render::Renderer::kInvalidGpuMesh ||
+         m_testModelMeshes.femaleBody == engine::render::Renderer::kInvalidGpuMesh))
+    {
+        LoadTestModelMeshes();
+    }
+    if (!m_selectedSurvivorCharacterId.empty())
+    {
+        (void)EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
+    }
+
     const glm::mat4 viewProjection = BuildViewProjection(aspectRatio);
     m_frustum.Extract(viewProjection);
 
@@ -1181,6 +1400,47 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
         renderer.DrawBox(transformIt->second.position, halfExtents, color);
     }
 
+    // Render imported test survivor models (spawn_test_models / spawn_test_models_here).
+    if (m_testModels.spawned)
+    {
+        if (m_testModelMeshes.maleBody != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            const glm::vec3 modelPos = m_testModels.malePosition + glm::vec3{0.0F, m_testModelMeshes.maleFeetOffset, 0.0F};
+            const glm::mat4 modelMatrix = glm::translate(glm::mat4{1.0F}, modelPos);
+            renderer.DrawGpuMesh(m_testModelMeshes.maleBody, modelMatrix);
+        }
+        if (m_testModelMeshes.femaleBody != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            const glm::vec3 modelPos = m_testModels.femalePosition + glm::vec3{0.0F, m_testModelMeshes.femaleFeetOffset, 0.0F};
+            const glm::mat4 modelMatrix = glm::translate(glm::mat4{1.0F}, modelPos);
+            renderer.DrawGpuMesh(m_testModelMeshes.femaleBody, modelMatrix);
+        }
+    }
+
+    // Render debug static boxes (test models, etc.)
+    for (const auto& [entity, box] : m_world.StaticBoxes())
+    {
+        // Skip solid boxes (handled by physics/other systems)
+        if (box.solid)
+        {
+            continue;
+        }
+
+        const auto transformIt = transforms.find(entity);
+        const auto colorIt = m_world.DebugColors().find(entity);
+        if (transformIt == transforms.end() || colorIt == m_world.DebugColors().end())
+        {
+            continue;
+        }
+
+        const engine::scene::Transform& transform = transformIt->second;
+        const glm::vec3& color = colorIt->second.color;
+
+        // Position box with feet at ground level (center Y = halfExtents.y)
+        const glm::vec3 boxCenter = transform.position + glm::vec3{0.0F, box.halfExtents.y, 0.0F};
+        renderer.DrawBox(boxCenter, box.halfExtents, color);
+    }
+
     auto drawOverlayBox = [&](const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec3& color) {
         const glm::vec3 c000 = center + glm::vec3{-halfExtents.x, -halfExtents.y, -halfExtents.z};
         const glm::vec3 c001 = center + glm::vec3{-halfExtents.x, -halfExtents.y, halfExtents.z};
@@ -1283,6 +1543,19 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             continue;
         }
 
+        // Skip rendering killer mesh when Wraith is cloaked - shader handles visibility
+        const bool hideKillerCloaked =
+            entity == m_killer &&
+            actor.role == engine::scene::Role::Killer &&
+            m_killerLoadout.powerId == "wraith_cloak" &&
+            (m_killerPowerState.wraithCloaked ||
+             m_killerPowerState.wraithCloakTransition ||
+             m_killerPowerState.wraithUncloakTransition);
+        if (hideKillerCloaked)
+        {
+            continue; // Don't render normal mesh - cloak shader will handle it
+        }
+
         glm::vec3 color = glm::vec3{0.95F, 0.2F, 0.2F};
         if (actor.role == engine::scene::Role::Survivor)
         {
@@ -1298,18 +1571,76 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
                 default: break;
             }
         }
-        else if (actor.role == engine::scene::Role::Killer &&
-                 m_killerLoadout.powerId == "wraith_cloak" &&
-                 (m_killerPowerState.wraithCloaked || m_killerPowerState.wraithCloakTransition))
-        {
-            // Nearly invisible silhouette while cloaked (no alpha path in capsule renderer yet).
-            color = glm::vec3{0.13F, 0.15F, 0.17F};
-        }
 
         const float visualHeightScale =
             actor.crawling ? 0.5F :
             (actor.crouching ? 0.72F : 1.0F);
-        if (actorVisibility == VisibilityLod::EdgeLow)
+        bool renderedSurvivorMesh = false;
+        bool survivorMeshDebugDataValid = false;
+        glm::vec3 survivorMeshDebugPosition{0.0F};
+        float survivorMeshDebugYaw = 0.0F;
+        float survivorMeshDebugScale = 1.0F;
+        glm::vec3 survivorMeshDebugBoundsMin{0.0F};
+        glm::vec3 survivorMeshDebugBoundsMax{0.0F};
+        if (actor.role == engine::scene::Role::Survivor)
+        {
+            const auto meshIt = m_survivorVisualMeshes.find(m_selectedSurvivorCharacterId);
+            if (meshIt != m_survivorVisualMeshes.end() &&
+                meshIt->second.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+            {
+                const SurvivorVisualMesh& mesh = meshIt->second;
+                float visualYaw = m_survivorVisualYawRadians;
+                if (!m_survivorVisualYawInitialized)
+                {
+                    glm::vec3 fallbackFacing = glm::vec3{transformIt->second.forward.x, 0.0F, transformIt->second.forward.z};
+                    if (glm::length(fallbackFacing) <= 1.0e-5F)
+                    {
+                        fallbackFacing = glm::vec3{0.0F, 0.0F, -1.0F};
+                    }
+                    else
+                    {
+                        fallbackFacing = glm::normalize(fallbackFacing);
+                    }
+                    visualYaw = std::atan2(fallbackFacing.x, -fallbackFacing.z);
+                }
+                float modelYawOffsetRadians = 0.0F;
+                if (const loadout::SurvivorCharacterDefinition* survivorDef =
+                        m_loadoutCatalog.FindSurvivor(m_selectedSurvivorCharacterId);
+                    survivorDef != nullptr)
+                {
+                    modelYawOffsetRadians = glm::radians(survivorDef->modelYawDegrees);
+                }
+                // Debug yaw uses forward=(sin(yaw), 0, -cos(yaw)); to match that convention
+                // for meshes authored with -Z forward in GLM rotation space, apply negative yaw.
+                const float appliedMeshYaw = WrapAngleRadians(-(visualYaw + modelYawOffsetRadians));
+                const float modelHeight = std::max(0.01F, mesh.boundsMaxY - mesh.boundsMinY);
+                const float modelScale = std::max(0.05F, (actor.capsuleHeight * visualHeightScale) / modelHeight);
+                const float survivorFeetY = transformIt->second.position.y - actor.capsuleHeight * visualHeightScale * 0.5F;
+                const glm::vec3 modelPosition{
+                    transformIt->second.position.x,
+                    survivorFeetY + (-mesh.boundsMinY * modelScale),
+                    transformIt->second.position.z
+                };
+
+                glm::mat4 modelMatrix = glm::translate(glm::mat4{1.0F}, modelPosition);
+                modelMatrix = glm::rotate(modelMatrix, appliedMeshYaw, glm::vec3{0.0F, 1.0F, 0.0F});
+                modelMatrix = glm::scale(modelMatrix, glm::vec3{modelScale});
+                renderer.DrawGpuMesh(mesh.gpuMesh, modelMatrix);
+                renderedSurvivorMesh = true;
+                survivorMeshDebugDataValid = true;
+                survivorMeshDebugPosition = modelPosition;
+                survivorMeshDebugYaw = appliedMeshYaw;
+                survivorMeshDebugScale = modelScale;
+                survivorMeshDebugBoundsMin = glm::vec3{mesh.boundsMinY, mesh.boundsMinY, mesh.boundsMinY};
+                survivorMeshDebugBoundsMax = glm::vec3{mesh.boundsMaxY, mesh.boundsMaxY, mesh.boundsMaxY};
+                survivorMeshDebugBoundsMin.x = -mesh.maxAbsXZ;
+                survivorMeshDebugBoundsMin.z = -mesh.maxAbsXZ;
+                survivorMeshDebugBoundsMax.x = mesh.maxAbsXZ;
+                survivorMeshDebugBoundsMax.z = mesh.maxAbsXZ;
+            }
+        }
+
+        if (!renderedSurvivorMesh && actorVisibility == VisibilityLod::EdgeLow)
         {
             const glm::vec3 lowLodHalfExtents{
                 actor.capsuleRadius,
@@ -1318,7 +1649,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
             };
             renderer.DrawBox(transformIt->second.position, lowLodHalfExtents, color * 0.9F);
         }
-        else
+        else if (!renderedSurvivorMesh)
         {
             renderer.DrawCapsule(
                 transformIt->second.position,
@@ -1335,6 +1666,122 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
                 transformIt->second.position + transformIt->second.forward * 1.4F,
                 color
             );
+
+            if (entity == m_survivor)
+            {
+                const glm::vec3 origin = transformIt->second.position + glm::vec3{0.0F, 0.05F, 0.0F};
+                const glm::vec3 modelForward{
+                    std::sin(m_survivorVisualYawRadians),
+                    0.0F,
+                    -std::cos(m_survivorVisualYawRadians)
+                };
+                renderer.DrawLine(origin, origin + modelForward * 1.8F, glm::vec3{0.2F, 0.95F, 1.0F});
+
+                if (glm::length(m_survivorVisualDesiredDirection) > 1.0e-5F)
+                {
+                    renderer.DrawLine(origin, origin + glm::normalize(m_survivorVisualDesiredDirection) * 1.6F, glm::vec3{0.2F, 1.0F, 0.2F});
+                }
+
+                const glm::vec3 cameraFlat{m_cameraForward.x, 0.0F, m_cameraForward.z};
+                if (glm::length(cameraFlat) > 1.0e-5F)
+                {
+                    renderer.DrawLine(origin, origin + glm::normalize(cameraFlat) * 1.4F, glm::vec3{1.0F, 0.9F, 0.2F});
+                }
+
+                // Draw survivor hitbox capsule wireframe (debug only).
+                const float capsuleHeight = actor.capsuleHeight * visualHeightScale;
+                const float radius = actor.capsuleRadius;
+                const float halfSegment = std::max(0.0F, capsuleHeight * 0.5F - radius);
+                const glm::vec3 capsuleCenter = transformIt->second.position;
+                const glm::vec3 capTop = capsuleCenter + glm::vec3{0.0F, halfSegment, 0.0F};
+                const glm::vec3 capBottom = capsuleCenter - glm::vec3{0.0F, halfSegment, 0.0F};
+                const glm::vec3 capsuleColor{1.0F, 0.2F, 0.2F};
+                constexpr int kCapsuleSegments = 24;
+                constexpr int kHemisphereStacks = 5;
+                constexpr int kMeridians = 8;
+                constexpr int kArcSegments = 8;
+                for (int i = 0; i < kCapsuleSegments; ++i)
+                {
+                    const float t0 = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(kCapsuleSegments);
+                    const float t1 = glm::two_pi<float>() * static_cast<float>(i + 1) / static_cast<float>(kCapsuleSegments);
+                    const glm::vec3 r0{std::cos(t0) * radius, 0.0F, std::sin(t0) * radius};
+                    const glm::vec3 r1{std::cos(t1) * radius, 0.0F, std::sin(t1) * radius};
+                    renderer.DrawLine(capTop + r0, capTop + r1, capsuleColor);
+                    renderer.DrawLine(capBottom + r0, capBottom + r1, capsuleColor);
+                    if ((i % std::max(1, kCapsuleSegments / kMeridians)) == 0)
+                    {
+                        renderer.DrawLine(capBottom + r0, capTop + r0, capsuleColor);
+                    }
+                }
+                for (int stack = 1; stack <= kHemisphereStacks; ++stack)
+                {
+                    const float a = glm::half_pi<float>() * static_cast<float>(stack) / static_cast<float>(kHemisphereStacks + 1);
+                    const float ringRadius = std::cos(a) * radius;
+                    const float yOffset = std::sin(a) * radius;
+                    for (int i = 0; i < kCapsuleSegments; ++i)
+                    {
+                        const float t0 = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(kCapsuleSegments);
+                        const float t1 = glm::two_pi<float>() * static_cast<float>(i + 1) / static_cast<float>(kCapsuleSegments);
+                        const glm::vec3 top0{std::cos(t0) * ringRadius, yOffset, std::sin(t0) * ringRadius};
+                        const glm::vec3 top1{std::cos(t1) * ringRadius, yOffset, std::sin(t1) * ringRadius};
+                        const glm::vec3 bottom0{std::cos(t0) * ringRadius, -yOffset, std::sin(t0) * ringRadius};
+                        const glm::vec3 bottom1{std::cos(t1) * ringRadius, -yOffset, std::sin(t1) * ringRadius};
+                        renderer.DrawLine(capTop + top0, capTop + top1, capsuleColor);
+                        renderer.DrawLine(capBottom + bottom0, capBottom + bottom1, capsuleColor);
+                    }
+                }
+                for (int meridian = 0; meridian < kMeridians; ++meridian)
+                {
+                    const float t = glm::two_pi<float>() * static_cast<float>(meridian) / static_cast<float>(kMeridians);
+                    const glm::vec3 radial{std::cos(t), 0.0F, std::sin(t)};
+
+                    glm::vec3 prevTop = capTop + radial * radius;
+                    glm::vec3 prevBottom = capBottom + radial * radius;
+                    for (int j = 1; j <= kArcSegments; ++j)
+                    {
+                        const float a = glm::half_pi<float>() * static_cast<float>(j) / static_cast<float>(kArcSegments);
+                        const float ringRadius = std::cos(a) * radius;
+                        const float yOffset = std::sin(a) * radius;
+
+                        const glm::vec3 topPoint = capTop + radial * ringRadius + glm::vec3{0.0F, yOffset, 0.0F};
+                        const glm::vec3 bottomPoint = capBottom + radial * ringRadius - glm::vec3{0.0F, yOffset, 0.0F};
+                        renderer.DrawLine(prevTop, topPoint, capsuleColor);
+                        renderer.DrawLine(prevBottom, bottomPoint, capsuleColor);
+                        prevTop = topPoint;
+                        prevBottom = bottomPoint;
+                    }
+                }
+
+                // Draw mesh wireframe bounds box (debug only) to verify model rotation.
+                if (survivorMeshDebugDataValid)
+                {
+                    const glm::mat4 rot = glm::rotate(glm::mat4{1.0F}, survivorMeshDebugYaw, glm::vec3{0.0F, 1.0F, 0.0F});
+                    const glm::vec3 minV = survivorMeshDebugBoundsMin * survivorMeshDebugScale;
+                    const glm::vec3 maxV = survivorMeshDebugBoundsMax * survivorMeshDebugScale;
+                    const std::array<glm::vec3, 8> localCorners{
+                        glm::vec3{minV.x, minV.y, minV.z},
+                        glm::vec3{minV.x, minV.y, maxV.z},
+                        glm::vec3{minV.x, maxV.y, minV.z},
+                        glm::vec3{minV.x, maxV.y, maxV.z},
+                        glm::vec3{maxV.x, minV.y, minV.z},
+                        glm::vec3{maxV.x, minV.y, maxV.z},
+                        glm::vec3{maxV.x, maxV.y, minV.z},
+                        glm::vec3{maxV.x, maxV.y, maxV.z}
+                    };
+                    std::array<glm::vec3, 8> worldCorners{};
+                    for (std::size_t i = 0; i < localCorners.size(); ++i)
+                    {
+                        const glm::vec4 rotated = rot * glm::vec4{localCorners[i], 1.0F};
+                        worldCorners[i] = survivorMeshDebugPosition + glm::vec3{rotated.x, rotated.y, rotated.z};
+                    }
+                    const auto drawEdge = [&](int a, int b) {
+                        renderer.DrawLine(worldCorners[static_cast<std::size_t>(a)], worldCorners[static_cast<std::size_t>(b)], glm::vec3{0.2F, 0.7F, 1.0F});
+                    };
+                    drawEdge(0, 1); drawEdge(0, 2); drawEdge(1, 3); drawEdge(2, 3);
+                    drawEdge(4, 5); drawEdge(4, 6); drawEdge(5, 7); drawEdge(6, 7);
+                    drawEdge(0, 4); drawEdge(1, 5); drawEdge(2, 6); drawEdge(3, 7);
+                }
+            }
         }
     }
 
@@ -1412,15 +1859,20 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
 
     if (m_terrorRadiusVisible && m_killer != 0)
     {
-        const auto killerTransformIt = transforms.find(m_killer);
-        if (killerTransformIt != transforms.end())
+        const bool killerIsUndetectable = m_statusEffectManager.IsUndetectable(m_killer);
+        // Skip terror radius visualization when killer is undetectable (e.g., Wraith cloaked)
+        if (!killerIsUndetectable)
         {
-            const float perkModifier = m_perkSystem.GetTerrorRadiusModifier(engine::scene::Role::Killer);
-            const float baseRadius = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
-            const float radius = baseRadius + perkModifier;
-            const glm::vec3 center = killerTransformIt->second.position + glm::vec3{0.0F, 0.06F, 0.0F};
-            const glm::vec3 trColor = m_chase.isChasing ? glm::vec3{1.0F, 0.2F, 0.2F} : glm::vec3{1.0F, 0.5F, 0.15F};
-            renderer.DrawCircle(center, radius, 48, trColor, true);
+            const auto killerTransformIt = transforms.find(m_killer);
+            if (killerTransformIt != transforms.end())
+            {
+                const float perkModifier = m_perkSystem.GetTerrorRadiusModifier(engine::scene::Role::Killer);
+                const float baseRadius = m_chase.isChasing ? m_terrorRadiusChaseMeters : m_terrorRadiusMeters;
+                const float radius = baseRadius + perkModifier;
+                const glm::vec3 center = killerTransformIt->second.position + glm::vec3{0.0F, 0.06F, 0.0F};
+                const glm::vec3 trColor = m_chase.isChasing ? glm::vec3{1.0F, 0.2F, 0.2F} : glm::vec3{1.0F, 0.5F, 0.15F};
+                renderer.DrawCircle(center, radius, 48, trColor, true);
+            }
         }
     }
 
@@ -1580,6 +2032,11 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     // High-poly meshes for GPU stress testing (benchmark map)
     RenderHighPolyMeshes(renderer);
 
+    // Hatchet power debug visualization
+    RenderHatchetDebug(renderer);
+    RenderHatchetTrajectoryPrediction(renderer);
+    RenderHatchetProjectiles(renderer);
+
     // Report dynamic object culling stats to profiler.
     auto& profStats = engine::core::Profiler::Instance().StatsMut();
     profStats.dynamicObjectsDrawn = dynamicDrawn;
@@ -1736,14 +2193,101 @@ HudState GameplaySystems::BuildHudState() const
         : 0.0F;
     hud.wraithCloaked = m_killerPowerState.wraithCloaked;
     hud.wraithPostUncloakHasteSeconds = m_killerPowerState.wraithPostUncloakTimer;
+    if (m_killerPowerState.wraithCloakTransition)
+    {
+        hud.wraithCloakTransitionActive = true;
+        hud.wraithCloakProgress01 = glm::clamp(
+            m_killerPowerState.wraithTransitionTimer / std::max(0.01F, m_tuning.wraithCloakTransitionSeconds),
+            0.0F, 1.0F);
+        hud.wraithCloakAction = "Cloaking...";
+    }
+    else if (m_killerPowerState.wraithUncloakTransition)
+    {
+        hud.wraithCloakTransitionActive = true;
+        hud.wraithCloakProgress01 = glm::clamp(
+            m_killerPowerState.wraithTransitionTimer / std::max(0.01F, m_tuning.wraithUncloakTransitionSeconds),
+            0.0F, 1.0F);
+        hud.wraithCloakAction = "Uncloaking...";
+    }
+    else
+    {
+        hud.wraithCloakTransitionActive = false;
+        hud.wraithCloakProgress01 = 0.0F;
+        hud.wraithCloakAction.clear();
+    }
+    
+    // Calculate cloak amount for shader (0 = visible, 1 = fully cloaked)
+    if (m_killerPowerState.wraithCloaked)
+    {
+        hud.wraithCloakAmount = 1.0F;
+    }
+    else if (m_killerPowerState.wraithCloakTransition)
+    {
+        hud.wraithCloakAmount = hud.wraithCloakProgress01;
+    }
+    else if (m_killerPowerState.wraithUncloakTransition)
+    {
+        hud.wraithCloakAmount = 1.0F - hud.wraithCloakProgress01;
+    }
+    else
+    {
+        hud.wraithCloakAmount = 0.0F;
+    }
+    
+    // Killer position and capsule info for cloak shader
+    const auto killerTransformIt = m_world.Transforms().find(m_killer);
+    const auto killerActorIt = m_world.Actors().find(m_killer);
+    if (killerTransformIt != m_world.Transforms().end())
+    {
+        hud.killerWorldPosition = killerTransformIt->second.position;
+    }
+    if (killerActorIt != m_world.Actors().end())
+    {
+        hud.killerCapsuleHeight = killerActorIt->second.capsuleHeight;
+        hud.killerCapsuleRadius = killerActorIt->second.capsuleRadius;
+    }
+    
     hud.trapDebugEnabled = m_trapDebugEnabled;
     hud.killerBlindRemaining = m_killerPowerState.killerBlindTimer;
     hud.killerBlindWhiteStyle = m_tuning.flashlightBlindStyle == 0;
-    const auto killerActorIt = m_world.Actors().find(m_killer);
     hud.killerStunRemaining = killerActorIt != m_world.Actors().end() ? killerActorIt->second.stunTimer : 0.0F;
     hud.trapIndicatorText = m_trapIndicatorText;
     hud.trapIndicatorTtl = m_trapIndicatorTimer;
     hud.trapIndicatorDanger = m_trapIndicatorDanger;
+
+    // Hatchet power HUD fields
+    hud.hatchetCount = m_killerPowerState.hatchetCount;
+    hud.hatchetMaxCount = m_killerPowerState.hatchetMaxCount;
+    hud.hatchetCharging = m_killerPowerState.hatchetCharging;
+    hud.hatchetCharge01 = m_killerPowerState.hatchetCharge01;
+    hud.hatchetDebugEnabled = m_hatchetDebugEnabled;
+    hud.activeProjectileCount = GetActiveProjectileCount();
+    hud.lockerReplenishProgress = m_killerPowerState.lockerReplenishing ?
+        (m_killerPowerState.lockerReplenishTimer / m_tuning.hatchetLockerReplenishTime) : 0.0F;
+
+    // Check if killer is near a locker
+    hud.lockerInRange = false;
+    if (m_killer != 0 && m_controlledRole == ControlledRole::Killer)
+    {
+        const auto killerTransformIt = m_world.Transforms().find(m_killer);
+        if (killerTransformIt != m_world.Transforms().end())
+        {
+            for (const auto& [entity, locker] : m_world.Lockers())
+            {
+                const auto lockerTransformIt = m_world.Transforms().find(entity);
+                if (lockerTransformIt != m_world.Transforms().end())
+                {
+                    const float distance = DistanceXZ(killerTransformIt->second.position, lockerTransformIt->second.position);
+                    if (distance < 2.0F)
+                    {
+                        hud.lockerInRange = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     if (m_survivorState == SurvivorHealthState::Trapped)
     {
         for (const auto& [entity, trap] : m_world.BearTraps())
@@ -1949,6 +2493,34 @@ HudState GameplaySystems::BuildHudState() const
     hud.debugDrawEnabled = m_debugDrawEnabled;
     hud.physicsDebugEnabled = m_physicsDebugEnabled;
     hud.noclipEnabled = m_noClipEnabled;
+    hud.killerSurvivorNoCollisionActive = m_killerSurvivorNoCollisionTimer > 0.0F;
+    hud.killerSurvivorNoCollisionTimer = m_killerSurvivorNoCollisionTimer;
+    hud.killerSurvivorOverlapping = false;
+    if (const auto killerTransformIt = m_world.Transforms().find(m_killer);
+        killerTransformIt != m_world.Transforms().end())
+    {
+        if (const auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+            survivorTransformIt != m_world.Transforms().end())
+        {
+            if (const auto killerActorIt = m_world.Actors().find(m_killer);
+                killerActorIt != m_world.Actors().end())
+            {
+                if (const auto survivorActorIt = m_world.Actors().find(m_survivor);
+                    survivorActorIt != m_world.Actors().end())
+                {
+                    const float combinedRadius = std::max(
+                        0.01F,
+                        killerActorIt->second.capsuleRadius + survivorActorIt->second.capsuleRadius
+                    );
+                    const glm::vec2 delta{
+                        survivorTransformIt->second.position.x - killerTransformIt->second.position.x,
+                        survivorTransformIt->second.position.z - killerTransformIt->second.position.z
+                    };
+                    hud.killerSurvivorOverlapping = glm::dot(delta, delta) < (combinedRadius * combinedRadius);
+                }
+            }
+        }
+    }
 
     const engine::scene::Entity controlled = ControlledEntity();
     const auto actorIt = m_world.Actors().find(controlled);
@@ -1962,6 +2534,19 @@ HudState GameplaySystems::BuildHudState() const
         hud.penetrationDepth = actor.lastPenetrationDepth;
         hud.vaultTypeName = actor.lastVaultType;
         hud.movementStateName = BuildMovementStateText(controlled, actor);
+        if (controlled == m_survivor)
+        {
+            hud.survivorVisualYawDeg = glm::degrees(m_survivorVisualYawRadians);
+            hud.survivorVisualTargetYawDeg = glm::degrees(m_survivorVisualTargetYawRadians);
+            hud.survivorLookYawDeg = glm::degrees(m_world.Transforms().contains(m_survivor)
+                                                      ? m_world.Transforms().at(m_survivor).rotationEuler.y
+                                                      : 0.0F);
+            const glm::vec3 cameraFlat{m_cameraForward.x, 0.0F, m_cameraForward.z};
+            hud.survivorCameraYawDeg = glm::degrees(
+                glm::length(cameraFlat) > 1.0e-5F ? std::atan2(cameraFlat.x, -cameraFlat.z) : 0.0F
+            );
+            hud.survivorMoveInput = m_survivorVisualMoveInput;
+        }
 
         // Populate perk debug info for both roles
         const auto populatePerkDebug = [&](engine::scene::Role role, std::vector<HudState::ActivePerkDebug>& outDebug, float& outSpeedMod) {
@@ -2089,6 +2674,37 @@ HudState GameplaySystems::BuildHudState() const
             };
             // std::cout << "[PERK] KILLER SLOT " << i << ": " << perkId << " (active=" << hud.killerPerkSlots[i].isActive << ")\n";
         }
+    }
+
+    // Populate status effects for HUD display
+    const auto populateStatusEffects = [&](engine::scene::Entity entity, std::vector<HudState::ActiveStatusEffect>& outEffects) {
+        const auto effects = m_statusEffectManager.GetActiveEffects(entity);
+        outEffects.reserve(effects.size());
+        for (const auto& effect : effects)
+        {
+            HudState::ActiveStatusEffect hudEffect;
+            hudEffect.typeId = StatusEffect::TypeToId(effect.type);
+            hudEffect.displayName = StatusEffect::TypeToName(effect.type);
+            hudEffect.remainingSeconds = effect.remainingTime;
+            hudEffect.progress01 = effect.Progress01();
+            hudEffect.strength = effect.strength;
+            hudEffect.stacks = effect.stacks;
+            hudEffect.isInfinite = effect.infinite;
+            outEffects.push_back(hudEffect);
+        }
+    };
+
+    if (m_killer != 0)
+    {
+        populateStatusEffects(m_killer, hud.killerStatusEffects);
+        hud.killerUndetectable = m_statusEffectManager.IsUndetectable(m_killer);
+    }
+
+    if (m_survivor != 0)
+    {
+        populateStatusEffects(m_survivor, hud.survivorStatusEffects);
+        hud.survivorExposed = m_statusEffectManager.IsExposed(m_survivor);
+        hud.survivorExhausted = m_statusEffectManager.IsExhausted(m_survivor);
     }
 
     return hud;
@@ -2764,8 +3380,14 @@ void GameplaySystems::ApplyGameplayTuning(const GameplayTuning& tuning)
         {
             actor.walkSpeed = m_tuning.survivorWalkSpeed * m_survivorSpeedPercent;
             actor.sprintSpeed = m_tuning.survivorSprintSpeed * m_survivorSpeedPercent;
-            actor.capsuleRadius = m_tuning.survivorCapsuleRadius;
-            actor.capsuleHeight = m_tuning.survivorCapsuleHeight;
+            const float survivorCapsuleRadius = (m_survivorCapsuleOverrideRadius > 0.0F)
+                                                    ? m_survivorCapsuleOverrideRadius
+                                                    : m_tuning.survivorCapsuleRadius;
+            const float survivorCapsuleHeight = (m_survivorCapsuleOverrideHeight > 0.0F)
+                                                    ? m_survivorCapsuleOverrideHeight
+                                                    : m_tuning.survivorCapsuleHeight;
+            actor.capsuleRadius = survivorCapsuleRadius;
+            actor.capsuleHeight = survivorCapsuleHeight;
         }
         else
         {
@@ -2949,13 +3571,20 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
         BuildSceneFromMap(snapshot.mapType, snapshot.seed);
     }
 
-    if (!snapshot.survivorCharacterId.empty())
+    bool survivorCharacterChanged = false;
+    if (!snapshot.survivorCharacterId.empty() && snapshot.survivorCharacterId != m_selectedSurvivorCharacterId)
     {
         m_selectedSurvivorCharacterId = snapshot.survivorCharacterId;
+        survivorCharacterChanged = true;
     }
     if (!snapshot.killerCharacterId.empty())
     {
         m_selectedKillerCharacterId = snapshot.killerCharacterId;
+    }
+    if (survivorCharacterChanged)
+    {
+        RefreshSurvivorModelCapsuleOverride();
+        ApplyGameplayTuning(m_tuning);
     }
 
     m_survivorLoadout.itemId = snapshot.survivorItemId;
@@ -3261,6 +3890,142 @@ void GameplaySystems::SpawnFxDebug(const std::string& assetId)
     SpawnGameplayFx(assetId, origin, forward, engine::fx::FxNetMode::Local);
 }
 
+void GameplaySystems::LoadTestModelMeshes()
+{
+    if (m_rendererPtr == nullptr)
+    {
+        std::cout << "[TEST_MODELS] Cannot load meshes: renderer unavailable\n";
+        return;
+    }
+
+    static engine::assets::MeshLibrary fallbackMeshLibrary;
+    engine::assets::MeshLibrary& meshLibrary = (m_meshLibrary != nullptr) ? *m_meshLibrary : fallbackMeshLibrary;
+
+    const auto resolveMeshPath = [](const std::string& fileName) {
+        std::error_code ec;
+        const std::filesystem::path cwd = std::filesystem::current_path(ec);
+        const std::filesystem::path relative = std::filesystem::path("assets") / "meshes" / fileName;
+        const std::array<std::filesystem::path, 4> candidates{
+            cwd / relative,
+            cwd / ".." / relative,
+            cwd / ".." / ".." / relative,
+            relative
+        };
+        for (const std::filesystem::path& candidate : candidates)
+        {
+            if (std::filesystem::exists(candidate, ec))
+            {
+                return std::filesystem::absolute(candidate, ec);
+            }
+        }
+        return std::filesystem::absolute(relative, ec);
+    };
+
+    const auto uploadMesh = [&](const char* label,
+                                const std::string& fileName,
+                                const glm::vec3& color,
+                                engine::render::Renderer::GpuMeshId* outGpuId,
+                                float* outFeetOffset) {
+        if (outGpuId == nullptr || *outGpuId != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            return;
+        }
+
+        const std::filesystem::path meshPath = resolveMeshPath(fileName);
+        std::string error;
+        const engine::assets::MeshData* meshData = meshLibrary.LoadMesh(meshPath, &error);
+        if (meshData == nullptr || !meshData->loaded)
+        {
+            std::cout << "[TEST_MODELS] Failed to load " << label << " mesh from "
+                      << meshPath.string() << ": " << error << "\n";
+            return;
+        }
+
+        const engine::render::MaterialParams material{};
+        *outGpuId = m_rendererPtr->UploadMesh(meshData->geometry, color, material);
+        if (outFeetOffset != nullptr)
+        {
+            *outFeetOffset = -meshData->boundsMin.y;
+        }
+        std::cout << "[TEST_MODELS] Loaded " << label << " mesh from " << meshPath.string() << "\n";
+    };
+
+    uploadMesh(
+        "male",
+        "survivor_male_blocky.glb",
+        glm::vec3{0.23F, 0.51F, 0.96F},
+        &m_testModelMeshes.maleBody,
+        &m_testModelMeshes.maleFeetOffset
+    );
+    uploadMesh(
+        "female",
+        "survivor_female_blocky.glb",
+        glm::vec3{0.93F, 0.27F, 0.60F},
+        &m_testModelMeshes.femaleBody,
+        &m_testModelMeshes.femaleFeetOffset
+    );
+}
+
+void GameplaySystems::SpawnTestModels()
+{
+    std::vector<engine::scene::Entity> legacyEntities;
+    legacyEntities.reserve(4);
+    for (const auto& [entity, name] : m_world.Names())
+    {
+        if (name.name == "test_model_male_blocky" || name.name == "test_model_female_blocky")
+        {
+            legacyEntities.push_back(entity);
+        }
+    }
+    for (engine::scene::Entity entity : legacyEntities)
+    {
+        DestroyEntity(entity);
+    }
+
+    m_testModels.spawned = true;
+    m_testModels.malePosition = glm::vec3{5.0F, 0.0F, 5.0F};
+    m_testModels.femalePosition = glm::vec3{7.0F, 0.0F, 5.0F};
+    LoadTestModelMeshes();
+
+    std::cout << "[TEST_MODELS] Spawned survivor meshes at (5,0,5) and (7,0,5)\n";
+}
+
+void GameplaySystems::SpawnTestModelsHere()
+{
+    std::vector<engine::scene::Entity> legacyEntities;
+    legacyEntities.reserve(4);
+    for (const auto& [entity, name] : m_world.Names())
+    {
+        if (name.name == "test_model_male_blocky" || name.name == "test_model_female_blocky")
+        {
+            legacyEntities.push_back(entity);
+        }
+    }
+    for (engine::scene::Entity entity : legacyEntities)
+    {
+        DestroyEntity(entity);
+    }
+
+    glm::vec3 playerPos = m_cameraPosition;
+    if (m_cameraInitialized)
+    {
+        const glm::vec3 rayStart = playerPos + glm::vec3{0.0F, 20.0F, 0.0F};
+        const glm::vec3 rayEnd = playerPos + glm::vec3{0.0F, -40.0F, 0.0F};
+        if (const auto hit = m_physics.RaycastNearest(rayStart, rayEnd); hit.has_value())
+        {
+            playerPos = hit->position;
+        }
+    }
+
+    m_testModels.spawned = true;
+    m_testModels.malePosition = playerPos + glm::vec3{-2.0F, 0.0F, 0.0F};
+    m_testModels.femalePosition = playerPos + glm::vec3{2.0F, 0.0F, 0.0F};
+    LoadTestModelMeshes();
+
+    std::cout << "[TEST_MODELS] Spawned survivor meshes near player at ("
+              << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")\n";
+}
+
 void GameplaySystems::StopAllFx()
 {
     m_fxSystem.StopAll();
@@ -3380,11 +4145,23 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     m_previousAttackHeld = false;
     m_killerCurrentLungeSpeed = 0.0F;
     m_survivorHitHasteTimer = 0.0F;
+    m_killerSurvivorNoCollisionTimer = 0.0F;
+    m_killerPreMovePosition = glm::vec3{0.0F};
+    m_survivorPreMovePosition = glm::vec3{0.0F};
+    m_killerPreMovePositionValid = false;
+    m_survivorPreMovePositionValid = false;
     m_killerSlowTimer = 0.0F;
     m_killerSlowMultiplier = 1.0F;
     m_carryInputGraceTimer = 0.0F;
     m_mapRevealGenerators.clear();
     m_killerPowerState = KillerPowerRuntimeState{};
+    m_survivorVisualYawRadians = 0.0F;
+    m_survivorVisualYawInitialized = false;
+    m_survivorVisualTargetYawRadians = 0.0F;
+    m_survivorVisualMoveInput = glm::vec2{0.0F};
+    m_survivorVisualDesiredDirection = glm::vec3{0.0F};
+    m_testModels = TestModelData{};
+    m_testModels.spawned = false;
 
     m_world.Clear();
     m_loopDebugTiles.clear();
@@ -3610,8 +4387,14 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     ApplyGameplayTuning(m_tuning);
     SetRoleSpeedPercent("survivor", m_survivorSpeedPercent);
     SetRoleSpeedPercent("killer", m_killerSpeedPercent);
-    SetRoleCapsuleSize("survivor", m_tuning.survivorCapsuleRadius, m_tuning.survivorCapsuleHeight);
-    SetRoleCapsuleSize("killer", m_tuning.killerCapsuleRadius, m_tuning.killerCapsuleHeight);
+    if (const auto survivorActorIt = m_world.Actors().find(m_survivor); survivorActorIt != m_world.Actors().end())
+    {
+        SetRoleCapsuleSize("survivor", survivorActorIt->second.capsuleRadius, survivorActorIt->second.capsuleHeight);
+    }
+    if (const auto killerActorIt = m_world.Actors().find(m_killer); killerActorIt != m_world.Actors().end())
+    {
+        SetRoleCapsuleSize("killer", killerActorIt->second.capsuleRadius, killerActorIt->second.capsuleHeight);
+    }
     SetSurvivorState(SurvivorHealthState::Healthy, "Map spawn", true);
     ResetItemAndPowerRuntimeState();
     SpawnInitialTrapperGroundTraps();
@@ -3934,6 +4717,11 @@ engine::scene::Entity GameplaySystems::SpawnRoleActorAt(const std::string& roleN
     else
     {
         m_survivor = entity;
+        m_survivorVisualYawRadians = 0.0F;
+        m_survivorVisualYawInitialized = false;
+        m_survivorVisualTargetYawRadians = 0.0F;
+        m_survivorVisualMoveInput = glm::vec2{0.0F};
+        m_survivorVisualDesiredDirection = glm::vec3{0.0F};
     }
 
     ApplyGameplayTuning(m_tuning);
@@ -4017,26 +4805,22 @@ void GameplaySystems::UpdateActorMovement(
         return;
     }
 
-    glm::vec3 forwardXZ{0.0F, 0.0F, -1.0F};
-    if (entity == ControlledEntity() && m_cameraInitialized)
+    const float lookYaw = transform.rotationEuler.y;
+    glm::vec3 movementForwardXZ = glm::normalize(glm::vec3{std::sin(lookYaw), 0.0F, -std::cos(lookYaw)});
+    if (entity == ControlledEntity() && entity == m_survivor && m_cameraInitialized)
     {
         const glm::vec3 cameraFlat{m_cameraForward.x, 0.0F, m_cameraForward.z};
         if (glm::length(cameraFlat) > 1.0e-5F)
         {
-            forwardXZ = glm::normalize(cameraFlat);
+            movementForwardXZ = glm::normalize(cameraFlat);
         }
     }
-    else
-    {
-        const float yaw = transform.rotationEuler.y;
-        forwardXZ = glm::normalize(glm::vec3{std::sin(yaw), 0.0F, -std::cos(yaw)});
-    }
-    const glm::vec3 rightXZ = glm::normalize(glm::cross(forwardXZ, glm::vec3{0.0F, 1.0F, 0.0F}));
+    const glm::vec3 movementRightXZ = glm::normalize(glm::cross(movementForwardXZ, glm::vec3{0.0F, 1.0F, 0.0F}));
 
     glm::vec3 moveDirection{0.0F};
     if (glm::length(moveAxis) > 1.0e-5F)
     {
-        moveDirection = glm::normalize(rightXZ * moveAxis.x + forwardXZ * moveAxis.y);
+        moveDirection = glm::normalize(movementRightXZ * moveAxis.x + movementForwardXZ * moveAxis.y);
     }
 
     float speed = actor.walkSpeed;
@@ -4096,8 +4880,17 @@ void GameplaySystems::UpdateActorMovement(
 
     actor.sprinting = actor.role == engine::scene::Role::Survivor && sprinting;
 
-    actor.velocity.x = moveDirection.x * speed;
-    actor.velocity.z = moveDirection.z * speed;
+    const glm::vec2 currentHorizontalVelocity{actor.velocity.x, actor.velocity.z};
+    const glm::vec2 targetHorizontalVelocity{moveDirection.x * speed, moveDirection.z * speed};
+    const bool hasMoveInput = glm::length(moveDirection) > 1.0e-5F;
+    const float horizontalRate = hasMoveInput ? m_actorGroundAcceleration : m_actorGroundDeceleration;
+    const glm::vec2 nextHorizontalVelocity = MoveTowardsVector(
+        currentHorizontalVelocity,
+        targetHorizontalVelocity,
+        std::max(0.0F, horizontalRate * fixedDt)
+    );
+    actor.velocity.x = nextHorizontalVelocity.x;
+    actor.velocity.z = nextHorizontalVelocity.y;
 
     if (entity == m_killer && m_killerAttackState == KillerAttackState::Lunging)
     {
@@ -4106,7 +4899,7 @@ void GameplaySystems::UpdateActorMovement(
         actor.velocity.z = killerForwardXZ.z * m_killerCurrentLungeSpeed;
     }
 
-    if (glm::length(moveDirection) > 1.0e-5F && glm::dot(moveDirection, forwardXZ) > 0.72F)
+    if (glm::length(moveDirection) > 1.0e-5F && glm::dot(moveDirection, movementForwardXZ) > 0.72F)
     {
         actor.forwardRunupDistance = std::min(actor.forwardRunupDistance + speed * fixedDt, 12.0F);
     }
@@ -4320,7 +5113,12 @@ void GameplaySystems::ExecuteInteractionForRole(engine::scene::Entity actorEntit
         auto palletIt = m_world.Pallets().find(candidate.entity);
         if (palletIt != m_world.Pallets().end() && palletIt->second.state == engine::scene::PalletState::Dropped && palletIt->second.breakTimer <= 0.0F)
         {
-            palletIt->second.breakTimer = palletIt->second.breakDuration;
+            float breakTime = palletIt->second.breakDuration;
+            if (m_killerLoadout.powerId == "wraith_cloak" && m_killerPowerState.wraithCloaked)
+            {
+                breakTime /= m_tuning.wraithCloakPalletBreakSpeedMult;
+            }
+            palletIt->second.breakTimer = breakTime;
             m_killerBreakingPallet = candidate.entity;
             const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
                                                                           : engine::fx::FxNetMode::Local;
@@ -4391,6 +5189,20 @@ void GameplaySystems::ExecuteInteractionForRole(engine::scene::Entity actorEntit
     {
         BeginSelfHeal();
     }
+
+    if (candidate.type == InteractionType::ReplenishHatchets)
+    {
+        // Start locker replenish channeling
+        if (!m_killerPowerState.lockerReplenishing &&
+            m_killerPowerState.hatchetCount < m_killerPowerState.hatchetMaxCount)
+        {
+            m_killerPowerState.lockerReplenishing = true;
+            m_killerPowerState.lockerReplenishTimer = 0.0F;
+            m_killerPowerState.lockerTargetEntity = candidate.entity;
+            AddRuntimeMessage("Replenishing hatchets...", 1.0F);
+            ItemPowerLog("Started locker replenish");
+        }
+    }
 }
 
 void GameplaySystems::TryKillerHit()
@@ -4406,6 +5218,7 @@ bool GameplaySystems::ResolveKillerAttackHit(float range, float halfAngleRadians
     }
 
     if (m_survivorState == SurvivorHealthState::Carried ||
+        m_survivorState == SurvivorHealthState::Downed ||
         m_survivorState == SurvivorHealthState::Hooked ||
         m_survivorState == SurvivorHealthState::Dead)
     {
@@ -4469,8 +5282,6 @@ bool GameplaySystems::ResolveKillerAttackHit(float range, float halfAngleRadians
         return false;
     }
 
-    const glm::vec3 knockbackDirection = glm::normalize(glm::vec3{attackForward.x, 0.0F, attackForward.z});
-    survivorTransformIt->second.position += knockbackDirection * 1.4F;
     m_lastHitConnected = true;
     m_killerAttackFlashTtl = 0.12F;
     const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast
@@ -5040,6 +5851,35 @@ GameplaySystems::InteractionCandidate GameplaySystems::ResolveInteractionCandida
     considerCandidate(BuildDropSurvivorCandidate(actorEntity));
     considerCandidate(BuildPickupSurvivorCandidate(actorEntity, castStart, castDirection));
     considerCandidate(BuildSelfHealCandidate(actorEntity));
+
+    // Locker interaction for hatchet replenishment (killer only)
+    if (actor.role == engine::scene::Role::Killer &&
+        m_killerLoadout.powerId == "hatchet_throw" &&
+        m_killerPowerState.hatchetCount < m_killerPowerState.hatchetMaxCount)
+    {
+        for (const auto& [entity, locker] : m_world.Lockers())
+        {
+            const auto lockerTransformIt = m_world.Transforms().find(entity);
+            if (lockerTransformIt == m_world.Transforms().end())
+            {
+                continue;
+            }
+            const float distance = DistanceXZ(actorTransform.position, lockerTransformIt->second.position);
+            if (distance < 2.0F)
+            {
+                InteractionCandidate lockerCandidate;
+                lockerCandidate.type = InteractionType::ReplenishHatchets;
+                lockerCandidate.entity = entity;
+                lockerCandidate.priority = 5; // Lower than most interactions
+                lockerCandidate.castT = distance / kInteractionCastRange;
+                lockerCandidate.prompt = "Hold E to replenish hatchets";
+                lockerCandidate.typeName = "ReplenishHatchets";
+                lockerCandidate.targetName = "Locker";
+                considerCandidate(lockerCandidate);
+                break; // Only consider the nearest locker
+            }
+        }
+    }
 
     return best;
 }
@@ -5697,7 +6537,12 @@ void GameplaySystems::BeginWindowVault(engine::scene::Entity actorEntity, engine
     if (actor.role == engine::scene::Role::Killer)
     {
         vaultType = VaultType::Slow;
-        actor.vaultDuration = m_tuning.vaultSlowTime * window.killerVaultMultiplier;
+        float vaultTime = m_tuning.vaultSlowTime * window.killerVaultMultiplier;
+        if (m_killerLoadout.powerId == "wraith_cloak" && m_killerPowerState.wraithCloaked)
+        {
+            vaultTime /= m_tuning.wraithCloakVaultSpeedMult;
+        }
+        actor.vaultDuration = vaultTime;
         actor.vaultArcHeight = 0.4F;
     }
 
@@ -6484,10 +7329,178 @@ void GameplaySystems::RefreshGeneratorsCompleted()
     m_generatorsCompleted = completed;
 }
 
+void GameplaySystems::ResolveKillerSurvivorCollision()
+{
+    if (!m_collisionEnabled || m_killer == 0 || m_survivor == 0)
+    {
+        return;
+    }
+
+    // Allow temporary overlap right after hit so killer/survivor don't snag on geometry.
+    if (m_killerSurvivorNoCollisionTimer > 0.0F)
+    {
+        return;
+    }
+
+    // Killer can walk through downed/carried/hooked/dead survivor.
+    if (m_survivorState == SurvivorHealthState::Downed ||
+        m_survivorState == SurvivorHealthState::Carried ||
+        m_survivorState == SurvivorHealthState::Hooked ||
+        m_survivorState == SurvivorHealthState::Dead)
+    {
+        return;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+    auto killerActorIt = m_world.Actors().find(m_killer);
+    auto survivorActorIt = m_world.Actors().find(m_survivor);
+    if (killerTransformIt == m_world.Transforms().end() ||
+        survivorTransformIt == m_world.Transforms().end() ||
+        killerActorIt == m_world.Actors().end() ||
+        survivorActorIt == m_world.Actors().end())
+    {
+        return;
+    }
+
+    engine::scene::Transform& killerTransform = killerTransformIt->second;
+    engine::scene::Transform& survivorTransform = survivorTransformIt->second;
+    engine::scene::ActorComponent& killerActor = killerActorIt->second;
+    engine::scene::ActorComponent& survivorActor = survivorActorIt->second;
+    if (!killerActor.collisionEnabled || !survivorActor.collisionEnabled)
+    {
+        return;
+    }
+
+    const float combinedRadius = std::max(0.01F, killerActor.capsuleRadius + survivorActor.capsuleRadius);
+    glm::vec2 delta{survivorTransform.position.x - killerTransform.position.x,
+                    survivorTransform.position.z - killerTransform.position.z};
+    const float distanceSq = glm::dot(delta, delta);
+    if (distanceSq >= combinedRadius * combinedRadius)
+    {
+        return;
+    }
+
+    float distance = std::sqrt(std::max(distanceSq, 1.0e-8F));
+    glm::vec2 normal{0.0F};
+    if (distance > 1.0e-5F)
+    {
+        normal = delta / distance;
+    }
+    else
+    {
+        normal = glm::vec2{killerTransform.forward.x, killerTransform.forward.z};
+        if (glm::length(normal) <= 1.0e-5F)
+        {
+            normal = glm::vec2{1.0F, 0.0F};
+        }
+        else
+        {
+            normal = glm::normalize(normal);
+        }
+        distance = 0.0F;
+    }
+
+    const float penetration = combinedRadius - distance;
+
+    const glm::vec2 killerMoveStep{
+        killerTransform.position.x - m_killerPreMovePosition.x,
+        killerTransform.position.z - m_killerPreMovePosition.z
+    };
+    const glm::vec2 survivorMoveStep{
+        survivorTransform.position.x - m_survivorPreMovePosition.x,
+        survivorTransform.position.z - m_survivorPreMovePosition.z
+    };
+    const bool killerMoved = m_killerPreMovePositionValid && glm::dot(killerMoveStep, killerMoveStep) > 1.0e-8F;
+    const bool survivorMoved = m_survivorPreMovePositionValid && glm::dot(survivorMoveStep, survivorMoveStep) > 1.0e-8F;
+
+    // Slide against the other actor capsule: remove only the into-normal component and keep tangent.
+    if (killerMoved && m_killerPreMovePositionValid)
+    {
+        glm::vec2 adjustedStep = killerMoveStep;
+        const float into = glm::dot(adjustedStep, normal);
+        if (into > 0.0F)
+        {
+            adjustedStep -= normal * into;
+        }
+        killerTransform.position.x = m_killerPreMovePosition.x + adjustedStep.x;
+        killerTransform.position.z = m_killerPreMovePosition.z + adjustedStep.y;
+    }
+
+    if (survivorMoved && m_survivorPreMovePositionValid)
+    {
+        glm::vec2 adjustedStep = survivorMoveStep;
+        const glm::vec2 survivorNormal = -normal;
+        const float into = glm::dot(adjustedStep, survivorNormal);
+        if (into > 0.0F)
+        {
+            adjustedStep -= survivorNormal * into;
+        }
+        survivorTransform.position.x = m_survivorPreMovePosition.x + adjustedStep.x;
+        survivorTransform.position.z = m_survivorPreMovePosition.z + adjustedStep.y;
+    }
+
+    // If capsules are still interpenetrating after slide projection, depenetrate minimally.
+    glm::vec2 postDelta{
+        survivorTransform.position.x - killerTransform.position.x,
+        survivorTransform.position.z - killerTransform.position.z
+    };
+    float postDistanceSq = glm::dot(postDelta, postDelta);
+    if (postDistanceSq < combinedRadius * combinedRadius)
+    {
+        float postDistance = std::sqrt(std::max(postDistanceSq, 1.0e-8F));
+        glm::vec2 postNormal{0.0F};
+        if (postDistance > 1.0e-5F)
+        {
+            postNormal = postDelta / postDistance;
+        }
+        else
+        {
+            postNormal = normal;
+        }
+
+        const float postPenetration = combinedRadius - postDistance;
+        const glm::vec2 depenetration = postNormal * ((postPenetration + 0.002F) * 0.5F);
+        killerTransform.position.x -= depenetration.x;
+        killerTransform.position.z -= depenetration.y;
+        survivorTransform.position.x += depenetration.x;
+        survivorTransform.position.z += depenetration.y;
+    }
+
+    // Preserve tangential motion and cancel only into-normal velocity so actors can slide.
+    glm::vec2 killerHorizontalVel{killerActor.velocity.x, killerActor.velocity.z};
+    const float killerInto = glm::dot(killerHorizontalVel, normal);
+    if (killerInto > 0.0F)
+    {
+        killerHorizontalVel -= normal * killerInto;
+        killerActor.velocity.x = killerHorizontalVel.x;
+        killerActor.velocity.z = killerHorizontalVel.y;
+    }
+
+    glm::vec2 survivorHorizontalVel{survivorActor.velocity.x, survivorActor.velocity.z};
+    const glm::vec2 survivorNormal = -normal;
+    const float survivorInto = glm::dot(survivorHorizontalVel, survivorNormal);
+    if (survivorInto > 0.0F)
+    {
+        survivorHorizontalVel -= survivorNormal * survivorInto;
+        survivorActor.velocity.x = survivorHorizontalVel.x;
+        survivorActor.velocity.z = survivorHorizontalVel.y;
+    }
+
+    killerActor.lastCollisionNormal = glm::vec3{-normal.x, 0.0F, -normal.y};
+    survivorActor.lastCollisionNormal = glm::vec3{normal.x, 0.0F, normal.y};
+    killerActor.lastPenetrationDepth = std::max(killerActor.lastPenetrationDepth, penetration);
+    survivorActor.lastPenetrationDepth = std::max(survivorActor.lastPenetrationDepth, penetration);
+}
+
 void GameplaySystems::ApplyKillerAttackAftermath(bool hit, bool lungeAttack)
 {
     if (hit)
     {
+        m_killerSurvivorNoCollisionTimer = std::max(
+            m_killerSurvivorNoCollisionTimer,
+            m_killerSurvivorNoCollisionAfterHitSeconds
+        );
         m_survivorHitHasteTimer = std::max(m_survivorHitHasteTimer, m_survivorHitHasteSeconds);
         m_killerSlowTimer = std::max(m_killerSlowTimer, m_killerHitSlowSeconds);
         m_killerSlowMultiplier = m_killerHitSlowMultiplier;
@@ -6512,6 +7525,20 @@ void GameplaySystems::ApplySurvivorHit()
     if (m_bloodlust.tier > 0)
     {
         ResetBloodlust();
+    }
+
+    // Check for Exposed status effect - instant down from any non-downed state
+    const bool survivorIsExposed = m_statusEffectManager.IsExposed(m_survivor);
+    if (survivorIsExposed &&
+        m_survivorState != SurvivorHealthState::Downed &&
+        m_survivorState != SurvivorHealthState::Hooked &&
+        m_survivorState != SurvivorHealthState::Dead)
+    {
+        if (SetSurvivorState(SurvivorHealthState::Downed, "Killer hit (Exposed)", true))
+        {
+            m_statusEffectManager.RemoveEffect(m_survivor, StatusEffectType::Exposed);
+            return;
+        }
     }
 
     if (m_survivorState == SurvivorHealthState::Healthy)
@@ -7386,6 +8413,237 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
     }
 }
 
+bool GameplaySystems::LoadSurvivorCharacterBounds(
+    const std::string& characterId,
+    float* outMinY,
+    float* outMaxY,
+    float* outMaxAbsXZ
+)
+{
+    if (characterId.empty())
+    {
+        return false;
+    }
+    const loadout::SurvivorCharacterDefinition* survivorDef = m_loadoutCatalog.FindSurvivor(characterId);
+    if (survivorDef == nullptr || survivorDef->modelPath.empty())
+    {
+        return false;
+    }
+
+    static engine::assets::MeshLibrary fallbackMeshLibrary;
+    engine::assets::MeshLibrary& meshLibrary = (m_meshLibrary != nullptr) ? *m_meshLibrary : fallbackMeshLibrary;
+    const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
+    std::string error;
+    const engine::assets::MeshData* meshData = meshLibrary.LoadMesh(meshPath, &error);
+    if (meshData == nullptr || !meshData->loaded)
+    {
+        std::cout << "[SURVIVOR_MODEL] Failed to load bounds for " << characterId
+                  << " from " << meshPath.string() << ": " << error << "\n";
+        return false;
+    }
+
+    if (outMinY != nullptr)
+    {
+        *outMinY = meshData->boundsMin.y;
+    }
+    if (outMaxY != nullptr)
+    {
+        *outMaxY = meshData->boundsMax.y;
+    }
+    if (outMaxAbsXZ != nullptr)
+    {
+        const float absX = std::max(std::abs(meshData->boundsMin.x), std::abs(meshData->boundsMax.x));
+        const float absZ = std::max(std::abs(meshData->boundsMin.z), std::abs(meshData->boundsMax.z));
+        *outMaxAbsXZ = std::max(absX, absZ);
+    }
+    return true;
+}
+
+bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& characterId)
+{
+    if (characterId.empty())
+    {
+        return false;
+    }
+
+    auto cacheIt = m_survivorVisualMeshes.find(characterId);
+    if (cacheIt == m_survivorVisualMeshes.end())
+    {
+        cacheIt = m_survivorVisualMeshes.emplace(characterId, SurvivorVisualMesh{}).first;
+    }
+    SurvivorVisualMesh& cached = cacheIt->second;
+
+    if (!cached.boundsLoadAttempted)
+    {
+        cached.boundsLoadAttempted = true;
+        float minY = 0.0F;
+        float maxY = 1.8F;
+        float maxAbsXZ = 0.3F;
+        if (!LoadSurvivorCharacterBounds(characterId, &minY, &maxY, &maxAbsXZ))
+        {
+            cached.boundsLoadFailed = true;
+            if (characterId == m_selectedSurvivorCharacterId)
+            {
+                (void)TryFallbackToAvailableSurvivorModel(characterId);
+            }
+            return false;
+        }
+        cached.boundsMinY = minY;
+        cached.boundsMaxY = maxY;
+        cached.maxAbsXZ = maxAbsXZ;
+        cached.boundsLoaded = true;
+        cached.boundsLoadFailed = false;
+    }
+    else if (cached.boundsLoadFailed || !cached.boundsLoaded)
+    {
+        return false;
+    }
+
+    if (cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+    {
+        return true;
+    }
+    if (m_rendererPtr == nullptr || cached.gpuUploadAttempted)
+    {
+        return false;
+    }
+    cached.gpuUploadAttempted = true;
+
+    const loadout::SurvivorCharacterDefinition* survivorDef = m_loadoutCatalog.FindSurvivor(characterId);
+    if (survivorDef == nullptr || survivorDef->modelPath.empty())
+    {
+        return false;
+    }
+
+    static engine::assets::MeshLibrary fallbackMeshLibrary;
+    engine::assets::MeshLibrary& meshLibrary = (m_meshLibrary != nullptr) ? *m_meshLibrary : fallbackMeshLibrary;
+    const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
+    std::string error;
+    const engine::assets::MeshData* meshData = meshLibrary.LoadMesh(meshPath, &error);
+    if (meshData == nullptr || !meshData->loaded)
+    {
+        std::cout << "[SURVIVOR_MODEL] Failed to upload mesh for " << characterId
+                  << " from " << meshPath.string() << ": " << error << "\n";
+        return false;
+    }
+
+    const engine::render::MaterialParams material{};
+    cached.gpuMesh = m_rendererPtr->UploadMesh(meshData->geometry, glm::vec3{1.0F, 1.0F, 1.0F}, material);
+    cached.boundsMinY = meshData->boundsMin.y;
+    cached.boundsMaxY = meshData->boundsMax.y;
+    const float absX = std::max(std::abs(meshData->boundsMin.x), std::abs(meshData->boundsMax.x));
+    const float absZ = std::max(std::abs(meshData->boundsMin.z), std::abs(meshData->boundsMax.z));
+    cached.maxAbsXZ = std::max(absX, absZ);
+    cached.boundsLoaded = true;
+    return cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh;
+}
+
+bool GameplaySystems::TryFallbackToAvailableSurvivorModel(const std::string& failedCharacterId)
+{
+    if (m_selectedSurvivorCharacterId != failedCharacterId)
+    {
+        return false;
+    }
+
+    const auto isUsableModel = [&](const std::string& characterId) {
+        const loadout::SurvivorCharacterDefinition* def = m_loadoutCatalog.FindSurvivor(characterId);
+        if (def == nullptr || def->modelPath.empty())
+        {
+            return false;
+        }
+        const auto cacheIt = m_survivorVisualMeshes.find(characterId);
+        if (cacheIt != m_survivorVisualMeshes.end() && cacheIt->second.boundsLoadFailed)
+        {
+            return false;
+        }
+        std::error_code ec;
+        const std::filesystem::path meshPath = ResolveAssetPathFromCwd(def->modelPath);
+        return std::filesystem::exists(meshPath, ec) && std::filesystem::is_regular_file(meshPath, ec);
+    };
+
+    std::vector<std::string> candidates;
+    candidates.reserve(8);
+    candidates.push_back("survivor_male_blocky");
+    candidates.push_back("survivor_female_blocky");
+    for (const std::string& id : m_loadoutCatalog.ListSurvivorIds())
+    {
+        if (id != failedCharacterId)
+        {
+            candidates.push_back(id);
+        }
+    }
+
+    for (const std::string& candidate : candidates)
+    {
+        if (candidate == failedCharacterId)
+        {
+            continue;
+        }
+        if (!isUsableModel(candidate))
+        {
+            continue;
+        }
+
+        m_selectedSurvivorCharacterId = candidate;
+        RefreshSurvivorModelCapsuleOverride();
+        ApplyGameplayTuning(m_tuning);
+        AddRuntimeMessage("Survivor model fallback: " + failedCharacterId + " -> " + candidate, 3.0F);
+        std::cout << "[SURVIVOR_MODEL] Fallback to " << candidate
+                  << " because " << failedCharacterId << " model is unavailable\n";
+        return true;
+    }
+
+    AddRuntimeMessage("Survivor model unavailable: " + failedCharacterId + " (using capsule fallback)", 3.0F);
+    return false;
+}
+
+void GameplaySystems::RefreshSurvivorModelCapsuleOverride()
+{
+    m_survivorCapsuleOverrideRadius = -1.0F;
+    m_survivorCapsuleOverrideHeight = -1.0F;
+
+    if (m_selectedSurvivorCharacterId.empty())
+    {
+        return;
+    }
+
+    auto cacheIt = m_survivorVisualMeshes.find(m_selectedSurvivorCharacterId);
+    if (cacheIt == m_survivorVisualMeshes.end())
+    {
+        cacheIt = m_survivorVisualMeshes.emplace(m_selectedSurvivorCharacterId, SurvivorVisualMesh{}).first;
+    }
+    SurvivorVisualMesh& cached = cacheIt->second;
+
+    if (!cached.boundsLoadAttempted)
+    {
+        cached.boundsLoadAttempted = true;
+        float minY = 0.0F;
+        float maxY = 0.0F;
+        float maxAbsXZ = 0.0F;
+        if (!LoadSurvivorCharacterBounds(m_selectedSurvivorCharacterId, &minY, &maxY, &maxAbsXZ))
+        {
+            cached.boundsLoadFailed = true;
+            (void)TryFallbackToAvailableSurvivorModel(m_selectedSurvivorCharacterId);
+            return;
+        }
+        cached.boundsMinY = minY;
+        cached.boundsMaxY = maxY;
+        cached.maxAbsXZ = maxAbsXZ;
+        cached.boundsLoaded = true;
+        cached.boundsLoadFailed = false;
+    }
+
+    if (cached.boundsLoadFailed || !cached.boundsLoaded)
+    {
+        return;
+    }
+
+    const float height = std::max(0.9F, (cached.boundsMaxY - cached.boundsMinY) * 1.02F);
+    const float radius = std::max(0.2F, cached.maxAbsXZ * 1.05F);
+    m_survivorCapsuleOverrideHeight = height;
+    m_survivorCapsuleOverrideRadius = radius;
+}
+
 void GameplaySystems::InitializeLoadoutCatalog()
 {
     if (!m_loadoutCatalog.Initialize("assets"))
@@ -7395,6 +8653,11 @@ void GameplaySystems::InitializeLoadoutCatalog()
     }
 
     const std::vector<std::string> survivorIds = m_loadoutCatalog.ListSurvivorIds();
+    if (m_loadoutCatalog.FindSurvivor("survivor_male_blocky") != nullptr &&
+        (m_selectedSurvivorCharacterId.empty() || m_selectedSurvivorCharacterId == "survivor_dwight"))
+    {
+        m_selectedSurvivorCharacterId = "survivor_male_blocky";
+    }
     if (!survivorIds.empty() && !m_loadoutCatalog.FindSurvivor(m_selectedSurvivorCharacterId))
     {
         m_selectedSurvivorCharacterId = survivorIds.front();
@@ -7431,6 +8694,7 @@ void GameplaySystems::InitializeLoadoutCatalog()
         }
     }
 
+    RefreshSurvivorModelCapsuleOverride();
     RefreshLoadoutModifiers();
     ResetItemAndPowerRuntimeState();
 }
@@ -7498,6 +8762,20 @@ void GameplaySystems::ResetItemAndPowerRuntimeState()
     {
         m_killerPowerState.trapperMaxCarryTraps = std::max(1, m_tuning.trapperMaxCarryTraps);
         m_killerPowerState.trapperCarriedTraps = std::max(0, std::min(m_tuning.trapperStartCarryTraps, m_killerPowerState.trapperMaxCarryTraps));
+    }
+    if (powerDef != nullptr && powerDef->id == "hatchet_throw")
+    {
+        m_killerPowerState.hatchetCount = static_cast<int>(m_killerPowerModifiers.ApplyStat(
+            "max_count", static_cast<float>(m_tuning.hatchetMaxCount)));
+        m_killerPowerState.hatchetMaxCount = static_cast<int>(m_killerPowerModifiers.ApplyStat(
+            "max_count", static_cast<float>(m_tuning.hatchetMaxCount)));
+        m_killerPowerState.hatchetChargeTimer = 0.0F;
+        m_killerPowerState.hatchetCharging = false;
+        m_killerPowerState.hatchetCharge01 = 0.0F;
+        m_killerPowerState.hatchetThrowRequiresRelease = false;
+        m_killerPowerState.lockerReplenishTimer = 0.0F;
+        m_killerPowerState.lockerReplenishing = false;
+        m_killerPowerState.lockerTargetEntity = 0;
     }
 }
 
@@ -7639,6 +8917,9 @@ bool GameplaySystems::SetSelectedSurvivorCharacter(const std::string& characterI
         return false;
     }
     m_selectedSurvivorCharacterId = characterId;
+    RefreshSurvivorModelCapsuleOverride();
+    ApplyGameplayTuning(m_tuning);
+    (void)EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
     return true;
 }
 
@@ -8684,6 +9965,13 @@ void GameplaySystems::UpdateKillerPowerSystem(const RoleCommand& killerCommand, 
         return;
     }
 
+    if (powerDef->id == "hatchet_throw")
+    {
+        m_trapPreviewActive = false;
+        UpdateHatchetPowerSystem(killerCommand, fixedDt);
+        return;
+    }
+
     if (powerDef->id != "bear_trap")
     {
         m_trapPreviewActive = false;
@@ -8913,6 +10201,7 @@ void GameplaySystems::UpdateWraithPowerSystem(const RoleCommand& killerCommand, 
     if (m_killerPowerState.wraithCloakTransition)
     {
         m_killerPowerState.wraithTransitionTimer += fixedDt;
+        
         if (m_killerPowerState.wraithTransitionTimer >= cloakDuration)
         {
             m_killerPowerState.wraithCloakTransition = false;
@@ -8925,6 +10214,7 @@ void GameplaySystems::UpdateWraithPowerSystem(const RoleCommand& killerCommand, 
     else if (m_killerPowerState.wraithUncloakTransition)
     {
         m_killerPowerState.wraithTransitionTimer += fixedDt;
+        
         if (m_killerPowerState.wraithTransitionTimer >= uncloakDuration)
         {
             m_killerPowerState.wraithUncloakTransition = false;
@@ -8945,6 +10235,22 @@ void GameplaySystems::UpdateWraithPowerSystem(const RoleCommand& killerCommand, 
     if (m_killerPowerState.wraithPostUncloakTimer > 0.0F)
     {
         m_killerPowerState.wraithPostUncloakTimer = std::max(0.0F, m_killerPowerState.wraithPostUncloakTimer - fixedDt);
+    }
+
+    // Apply Undetectable status effect when fully cloaked
+    // This disables terror radius and killer look light
+    if (m_killerPowerState.wraithCloaked && !m_killerPowerState.wraithUncloakTransition)
+    {
+        StatusEffect undetectable;
+        undetectable.type = StatusEffectType::Undetectable;
+        undetectable.infinite = true;
+        undetectable.sourceId = "wraith_cloak";
+        m_statusEffectManager.ApplyEffect(m_killer, undetectable);
+    }
+    else
+    {
+        // Remove Undetectable when not fully cloaked
+        m_statusEffectManager.RemoveEffectBySource(m_killer, "wraith_cloak");
     }
 
     if (!killerCommand.useAltPressed)
@@ -9414,6 +10720,751 @@ void GameplaySystems::SetBloodProfile(const std::string& profileName)
 {
     (void)profileName;
     m_bloodProfile = BloodProfile{};
+}
+
+// ============================================================================
+// Hatchet Power System Implementation
+// ============================================================================
+
+void GameplaySystems::UpdateHatchetPowerSystem(const RoleCommand& killerCommand, float fixedDt)
+{
+    if (m_killer == 0)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "hatchet_throw")
+    {
+        return;
+    }
+
+    const auto killerTransformIt = m_world.Transforms().find(m_killer);
+    const auto killerActorIt = m_world.Actors().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end() || killerActorIt == m_world.Actors().end())
+    {
+        return;
+    }
+
+    // Read power parameters from definition or use tuning defaults
+    const auto readParam = [&](const std::string& key, float fallback) {
+        if (powerDef == nullptr) return fallback;
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+
+    m_killerPowerState.hatchetMaxCount = static_cast<int>(m_killerPowerModifiers.ApplyStat(
+        "max_count", static_cast<float>(m_tuning.hatchetMaxCount)));
+    const float chargeMinSeconds = readParam("charge_min_seconds", m_tuning.hatchetChargeMinSeconds);
+    const float chargeMaxSeconds = readParam("charge_max_seconds", m_tuning.hatchetChargeMaxSeconds);
+
+    // Handle locker replenishing
+    if (m_killerPowerState.lockerReplenishing)
+    {
+        const float replenishTime = readParam("locker_replenish_time", m_tuning.hatchetLockerReplenishTime);
+        m_killerPowerState.lockerReplenishTimer += fixedDt;
+
+        if (!killerCommand.interactHeld ||
+            m_killerPowerState.lockerTargetEntity == 0 ||
+            m_world.Lockers().find(m_killerPowerState.lockerTargetEntity) == m_world.Lockers().end())
+        {
+            m_killerPowerState.lockerReplenishing = false;
+            m_killerPowerState.lockerReplenishTimer = 0.0F;
+            m_killerPowerState.lockerTargetEntity = 0;
+            ItemPowerLog("Hatchet replenish cancelled");
+        }
+        else if (m_killerPowerState.lockerReplenishTimer >= replenishTime)
+        {
+            const int replenishCount = static_cast<int>(readParam("locker_replenish_count", static_cast<float>(m_tuning.hatchetLockerReplenishCount)));
+            m_killerPowerState.hatchetCount = std::min(m_killerPowerState.hatchetMaxCount, replenishCount);
+            m_killerPowerState.lockerReplenishing = false;
+            m_killerPowerState.lockerReplenishTimer = 0.0F;
+            m_killerPowerState.lockerTargetEntity = 0;
+            AddRuntimeMessage("Hatchets replenished!", 1.5F);
+            ItemPowerLog("Hatchet replenish complete, count=" + std::to_string(m_killerPowerState.hatchetCount));
+        }
+        return;
+    }
+
+    // Reset throw requires release flag when RMB is not held
+    if (!killerCommand.useAltHeld)
+    {
+        m_killerPowerState.hatchetThrowRequiresRelease = false;
+    }
+
+    // Don't allow charging if no hatchets or if in attack
+    if (m_killerPowerState.hatchetCount <= 0 ||
+        m_killerAttackState != KillerAttackState::Idle ||
+        killerActorIt->second.stunTimer > 0.0F ||
+        m_survivorState == SurvivorHealthState::Carried)
+    {
+        m_killerPowerState.hatchetCharging = false;
+        m_killerPowerState.hatchetChargeTimer = 0.0F;
+        m_killerPowerState.hatchetCharge01 = 0.0F;
+        return;
+    }
+
+    // Start charging on RMB hold
+    if (killerCommand.useAltHeld && !m_killerPowerState.hatchetThrowRequiresRelease)
+    {
+        if (!m_killerPowerState.hatchetCharging)
+        {
+            m_killerPowerState.hatchetCharging = true;
+            m_killerPowerState.hatchetChargeTimer = 0.0F;
+            ItemPowerLog("Hatchet charging started");
+        }
+
+        m_killerPowerState.hatchetChargeTimer += fixedDt;
+        m_killerPowerState.hatchetCharge01 = glm::clamp(
+            (m_killerPowerState.hatchetChargeTimer - chargeMinSeconds) / (chargeMaxSeconds - chargeMinSeconds),
+            0.0F, 1.0F
+        );
+    }
+
+    // Throw on RMB release
+    if (killerCommand.useAltReleased && m_killerPowerState.hatchetCharging)
+    {
+        // Use actual camera position for spawn (center of screen)
+        const glm::vec3 spawnPos = m_cameraPosition;
+        glm::vec3 forward = m_cameraForward;
+        if (glm::length(forward) < 1.0e-5F)
+        {
+            forward = glm::vec3{0.0F, 0.0F, -1.0F};
+        }
+        else
+        {
+            forward = glm::normalize(forward);
+        }
+
+        SpawnHatchetProjectile(spawnPos, forward, m_killerPowerState.hatchetCharge01);
+        m_killerPowerState.hatchetCount = std::max(0, m_killerPowerState.hatchetCount - 1);
+        m_killerPowerState.hatchetCharging = false;
+        m_killerPowerState.hatchetChargeTimer = 0.0F;
+        m_killerPowerState.hatchetCharge01 = 0.0F;
+        m_killerPowerState.hatchetThrowRequiresRelease = true;
+        ItemPowerLog("Hatchet thrown, remaining=" + std::to_string(m_killerPowerState.hatchetCount));
+    }
+}
+
+engine::scene::Entity GameplaySystems::SpawnHatchetProjectile(
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    float charge01)
+{
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    const auto readParam = [&](const std::string& key, float fallback) {
+        if (powerDef == nullptr) return fallback;
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+
+    const float speedMin = readParam("throw_speed_min", m_tuning.hatchetThrowSpeedMin);
+    const float speedMax = readParam("throw_speed_max", m_tuning.hatchetThrowSpeedMax);
+    const float gravityMin = readParam("gravity_min", m_tuning.hatchetGravityMin);
+    const float gravityMax = readParam("gravity_max", m_tuning.hatchetGravityMax);
+    const float maxLifetime = readParam("max_lifetime", 5.0F);
+    const float maxRange = readParam("max_range", m_tuning.hatchetMaxRange);
+
+    const float speed = glm::mix(speedMin, speedMax, charge01);
+    const float gravity = glm::mix(gravityMin, gravityMax, charge01);
+
+    const engine::scene::Entity entity = m_world.CreateEntity();
+
+    engine::scene::Transform transform;
+    transform.position = origin;
+    transform.forward = direction;
+    transform.scale = glm::vec3{1.0F};
+    m_world.Transforms()[entity] = transform;
+
+    engine::scene::ProjectileState projectile;
+    projectile.type = engine::scene::ProjectileState::Type::Hatchet;
+    projectile.active = true;
+    projectile.position = origin;
+    projectile.velocity = direction * speed;
+    projectile.forward = direction;
+    projectile.age = 0.0F;
+    projectile.maxLifetime = maxLifetime;
+    projectile.gravity = gravity;
+    projectile.ownerEntity = m_killer;
+    projectile.hasHit = false;
+    m_world.Projectiles()[entity] = projectile;
+
+    engine::scene::DebugColorComponent debugColor;
+    debugColor.color = glm::vec3{0.8F, 0.6F, 0.2F}; // Brown/orange for hatchets
+    m_world.DebugColors()[entity] = debugColor;
+
+    m_world.Names()[entity] = engine::scene::NameComponent{"hatchet_projectile"};
+
+    ItemPowerLog("Spawned hatchet projectile entity=" + std::to_string(entity) +
+        " speed=" + std::to_string(speed) + " gravity=" + std::to_string(gravity));
+
+    (void)maxRange; // Used for range limiting if needed
+    return entity;
+}
+
+void GameplaySystems::UpdateProjectiles(float fixedDt)
+{
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    const auto readParam = [&](const std::string& key, float fallback) {
+        if (powerDef == nullptr) return fallback;
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+    const float collisionRadius = readParam("collision_radius", m_tuning.hatchetCollisionRadius);
+
+    std::vector<engine::scene::Entity> toDestroy;
+
+    for (auto& [entity, projectile] : m_world.Projectiles())
+    {
+        if (!projectile.active)
+        {
+            continue;
+        }
+
+        // Apply gravity
+        projectile.velocity.y -= projectile.gravity * fixedDt;
+
+        // Apply air drag (velocity decay) - makes hatchet arc more at distance
+        projectile.velocity *= m_tuning.hatchetAirDrag;
+
+        // Calculate next position
+        const glm::vec3 nextPos = projectile.position + projectile.velocity * fixedDt;
+
+        // Update forward direction based on velocity
+        if (glm::length(projectile.velocity) > 1.0e-5F)
+        {
+            projectile.forward = glm::normalize(projectile.velocity);
+        }
+
+        // Update transform
+        auto transformIt = m_world.Transforms().find(entity);
+        if (transformIt != m_world.Transforms().end())
+        {
+            transformIt->second.position = nextPos;
+            transformIt->second.forward = projectile.forward;
+        }
+
+        // World collision raycast
+        const auto hitOpt = m_physics.RaycastNearest(projectile.position, nextPos, projectile.ownerEntity);
+        if (hitOpt.has_value())
+        {
+            const auto& hit = hitOpt.value();
+            projectile.active = false;
+            projectile.hasHit = true;
+            projectile.position = hit.position;
+
+            // Spawn impact FX
+            const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast : engine::fx::FxNetMode::Local;
+            SpawnGameplayFx("fx_hatchet_impact", hit.position, projectile.forward, netMode);
+            ItemPowerLog("Hatchet hit world at " + std::to_string(hit.position.x) + "," +
+                std::to_string(hit.position.y) + "," + std::to_string(hit.position.z));
+            continue;
+        }
+
+        // Survivor collision check
+        if (m_survivor != 0 && projectile.ownerEntity == m_killer)
+        {
+            auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+            auto survivorActorIt = m_world.Actors().find(m_survivor);
+            if (survivorTransformIt != m_world.Transforms().end() &&
+                survivorActorIt != m_world.Actors().end())
+            {
+                const glm::vec3 survivorPos = survivorTransformIt->second.position;
+                const float survivorRadius = survivorActorIt->second.capsuleRadius;
+                const float survivorHeight = survivorActorIt->second.capsuleHeight;
+
+                if (ProjectileHitsCapsule(nextPos, collisionRadius, survivorPos, survivorRadius, survivorHeight))
+                {
+                    projectile.active = false;
+                    projectile.hasHit = true;
+                    projectile.position = nextPos;
+
+                    const engine::fx::FxNetMode netMode = m_networkAuthorityMode ? engine::fx::FxNetMode::ServerBroadcast : engine::fx::FxNetMode::Local;
+
+                    // Apply damage to survivor
+                    if (m_survivorState == SurvivorHealthState::Healthy)
+                    {
+                        SetSurvivorState(SurvivorHealthState::Injured, "hatchet_hit");
+                        SpawnGameplayFx("fx_blood_splatter", survivorPos, projectile.forward, netMode);
+                        AddRuntimeMessage("Hatchet hit survivor!", 1.5F);
+                    }
+                    else if (m_survivorState == SurvivorHealthState::Injured)
+                    {
+                        SetSurvivorState(SurvivorHealthState::Downed, "hatchet_hit");
+                        SpawnGameplayFx("fx_blood_splatter_large", survivorPos, projectile.forward, netMode);
+                        AddRuntimeMessage("Hatchet downed survivor!", 2.0F);
+                    }
+
+                    ItemPowerLog("Hatchet hit survivor!");
+                    continue;
+                }
+            }
+        }
+
+        // Update position
+        projectile.position = nextPos;
+
+        // Lifetime check
+        projectile.age += fixedDt;
+        if (projectile.age >= projectile.maxLifetime)
+        {
+            projectile.active = false;
+            ItemPowerLog("Hatchet expired");
+        }
+
+        // Range check (optional - could use maxRange)
+        // Deactivate if too far from origin
+        const float maxRange = readParam("max_range", m_tuning.hatchetMaxRange);
+        if (projectile.age * glm::length(projectile.velocity) > maxRange)
+        {
+            projectile.active = false;
+            ItemPowerLog("Hatchet exceeded max range");
+        }
+    }
+
+    // Cleanup inactive projectiles (optional - could keep for debugging)
+    // For now, we'll leave them but they won't be rendered
+}
+
+bool GameplaySystems::ProjectileHitsCapsule(
+    const glm::vec3& projectilePos,
+    float projectileRadius,
+    const glm::vec3& capsulePos,
+    float capsuleRadius,
+    float capsuleHeight) const
+{
+    // Sphere vs capsule collision
+    // Capsule is vertical, centered at capsulePos
+    const float halfHeight = capsuleHeight * 0.5F - capsuleRadius;
+    const glm::vec3 capsuleTop = capsulePos + glm::vec3{0.0F, halfHeight, 0.0F};
+    const glm::vec3 capsuleBottom = capsulePos - glm::vec3{0.0F, halfHeight, 0.0F};
+
+    // Find closest point on capsule line segment to projectile
+    const glm::vec3 closestPoint = ClosestPointOnSegment(projectilePos, capsuleBottom, capsuleTop);
+
+    // Check if within combined radii
+    const float combinedRadius = projectileRadius + capsuleRadius;
+    const float dist = glm::distance(projectilePos, closestPoint);
+    return dist <= combinedRadius;
+}
+
+glm::vec3 GameplaySystems::ClosestPointOnSegment(const glm::vec3& point, const glm::vec3& a, const glm::vec3& b) const
+{
+    const glm::vec3 ab = b - a;
+    const float abLenSq = glm::dot(ab, ab);
+    if (abLenSq < 1.0e-10F)
+    {
+        return a;
+    }
+    float t = glm::dot(point - a, ab) / abLenSq;
+    t = glm::clamp(t, 0.0F, 1.0F);
+    return a + t * ab;
+}
+
+engine::scene::Entity GameplaySystems::SpawnLocker(const glm::vec3& position, const glm::vec3& forward)
+{
+    const engine::scene::Entity entity = m_world.CreateEntity();
+
+    engine::scene::Transform transform;
+    transform.position = position;
+    transform.forward = forward;
+    transform.scale = glm::vec3{1.0F};
+    m_world.Transforms()[entity] = transform;
+
+    engine::scene::LockerComponent locker;
+    locker.halfExtents = glm::vec3{0.45F, 1.1F, 0.35F};
+    locker.killerOnly = true;
+    m_world.Lockers()[entity] = locker;
+
+    engine::scene::DebugColorComponent debugColor;
+    debugColor.color = glm::vec3{0.4F, 0.3F, 0.2F}; // Brown for lockers
+    m_world.DebugColors()[entity] = debugColor;
+
+    m_world.Names()[entity] = engine::scene::NameComponent{"locker"};
+
+    ItemPowerLog("Spawned locker entity=" + std::to_string(entity));
+    return entity;
+}
+
+void GameplaySystems::SpawnLockerAtKiller()
+{
+    if (m_killer == 0)
+    {
+        AddRuntimeMessage("No killer to spawn locker at", 1.0F);
+        return;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+
+    glm::vec3 spawnPos = killerTransformIt->second.position;
+    glm::vec3 forward = killerTransformIt->second.forward;
+    forward.y = 0.0F;
+    if (glm::length(forward) > 1.0e-5F)
+    {
+        spawnPos += glm::normalize(forward) * 1.5F;
+    }
+    else
+    {
+        spawnPos += glm::vec3{0.0F, 0.0F, -1.5F};
+    }
+
+    SpawnLocker(spawnPos, killerTransformIt->second.forward);
+    AddRuntimeMessage("Spawned locker", 1.0F);
+    RebuildPhysicsWorld();
+}
+
+void GameplaySystems::SetHatchetCount(int count)
+{
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    int maxCount = m_tuning.hatchetMaxCount;
+    if (powerDef != nullptr)
+    {
+        const auto it = powerDef->params.find("max_count");
+        if (it != powerDef->params.end())
+        {
+            maxCount = static_cast<int>(it->second);
+        }
+    }
+    m_killerPowerState.hatchetCount = glm::clamp(count, 0, maxCount);
+    m_killerPowerState.hatchetMaxCount = maxCount;
+    ItemPowerLog("Set hatchet count to " + std::to_string(m_killerPowerState.hatchetCount));
+}
+
+void GameplaySystems::RefillHatchets()
+{
+    SetHatchetCount(m_killerPowerState.hatchetMaxCount);
+    AddRuntimeMessage("Hatchets refilled!", 1.0F);
+}
+
+int GameplaySystems::GetActiveProjectileCount() const
+{
+    int count = 0;
+    for (const auto& [entity, projectile] : m_world.Projectiles())
+    {
+        if (projectile.active)
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void GameplaySystems::RenderHatchetDebug(engine::render::Renderer& renderer)
+{
+    if (!m_hatchetDebugEnabled)
+    {
+        return;
+    }
+
+    // Draw active projectile hitboxes (using small box instead of sphere)
+    for (const auto& [entity, projectile] : m_world.Projectiles())
+    {
+        if (!projectile.active)
+        {
+            continue;
+        }
+
+        // Draw collision box (approximation for sphere)
+        const float r = m_tuning.hatchetCollisionRadius;
+        renderer.DrawBox(
+            projectile.position,
+            glm::vec3{r, r, r},
+            glm::vec3{1.0F, 0.8F, 0.2F}
+        );
+
+        // Draw velocity direction
+        const glm::vec3 velEnd = projectile.position + projectile.forward * 0.5F;
+        renderer.DrawLine(
+            projectile.position,
+            velEnd,
+            glm::vec3{1.0F, 1.0F, 0.0F}
+        );
+    }
+
+    // Draw locker interaction ranges
+    if (m_killer != 0)
+    {
+        auto killerTransformIt = m_world.Transforms().find(m_killer);
+        if (killerTransformIt != m_world.Transforms().end())
+        {
+            for (const auto& [entity, locker] : m_world.Lockers())
+            {
+                auto lockerTransformIt = m_world.Transforms().find(entity);
+                if (lockerTransformIt == m_world.Transforms().end())
+                {
+                    continue;
+                }
+
+                const float distance = DistanceXZ(killerTransformIt->second.position, lockerTransformIt->second.position);
+                const bool inRange = distance < 2.0F;
+
+                renderer.DrawBox(
+                    lockerTransformIt->second.position,
+                    locker.halfExtents,
+                    inRange ? glm::vec3{0.0F, 1.0F, 0.0F} : glm::vec3{0.5F, 0.5F, 0.5F}
+                );
+            }
+        }
+    }
+}
+
+void GameplaySystems::RenderHatchetTrajectoryPrediction(engine::render::Renderer& renderer)
+{
+    // Trajectory prediction is always visible while charging (not debug-only)
+    if (!m_killerPowerState.hatchetCharging)
+    {
+        return;
+    }
+
+    if (m_killer == 0)
+    {
+        return;
+    }
+
+    // Calculate predicted trajectory using camera position (matches spawn point)
+    const float charge01 = m_killerPowerState.hatchetCharge01;
+    const float speed = glm::mix(m_tuning.hatchetThrowSpeedMin, m_tuning.hatchetThrowSpeedMax, charge01);
+    const float gravity = glm::mix(m_tuning.hatchetGravityMin, m_tuning.hatchetGravityMax, charge01);
+
+    // Use camera position and forward (center of screen)
+    glm::vec3 pos = m_cameraPosition;
+    glm::vec3 velocity = m_cameraForward * speed;
+    if (glm::length(velocity) < 1.0e-5F)
+    {
+        velocity = glm::vec3{0.0F, 0.0F, -speed};
+    }
+    else
+    {
+        velocity = glm::normalize(velocity) * speed;
+    }
+
+    const float dt = 0.05F;
+    const int steps = 40; // More steps for longer prediction with drag
+    glm::vec3 prevPos = pos;
+
+    for (int i = 0; i < steps; ++i)
+    {
+        // Apply gravity
+        velocity.y -= gravity * dt;
+        // Apply air drag (slows down over distance, creates more arc)
+        velocity *= m_tuning.hatchetAirDrag;
+        pos += velocity * dt;
+
+        // Draw trajectory line (yellow, fading based on distance)
+        const float fade = 1.0F - static_cast<float>(i) / static_cast<float>(steps);
+        renderer.DrawLine(prevPos, pos, glm::vec3{1.0F, 1.0F, 0.3F} * fade);
+        prevPos = pos;
+
+        // Stop if below ground
+        if (pos.y < 0.0F)
+        {
+            break;
+        }
+    }
+}
+
+void GameplaySystems::RenderHatchetProjectiles(engine::render::Renderer& renderer)
+{
+    // Draw visible hatchet projectiles (always visible, not debug-only)
+    for (const auto& [entity, projectile] : m_world.Projectiles())
+    {
+        if (!projectile.active || projectile.type != engine::scene::ProjectileState::Type::Hatchet)
+        {
+            continue;
+        }
+
+        const glm::vec3 pos = projectile.position;
+        const glm::vec3 dir = projectile.forward;
+        const float size = 0.15F; // Hatchet visual size
+
+        // Hatchet color (brown/orange)
+        const glm::vec3 hatchetColor{0.8F, 0.5F, 0.2F};
+        const glm::vec3 highlightColor{1.0F, 0.8F, 0.3F};
+
+        // Draw main body line in direction of travel
+        renderer.DrawLine(pos, pos + dir * size * 2.5F, hatchetColor);
+
+        // Draw cross shape for visibility (perpendicular to direction)
+        glm::vec3 up{0.0F, 1.0F, 0.0F};
+        glm::vec3 right = glm::normalize(glm::cross(dir, up));
+        if (glm::length(right) < 0.1F)
+        {
+            // Dir is nearly vertical, use a different up vector
+            up = glm::vec3{0.0F, 0.0F, 1.0F};
+            right = glm::normalize(glm::cross(dir, up));
+        }
+        renderer.DrawLine(pos - right * size * 0.8F, pos + right * size * 0.8F, highlightColor);
+
+        // Draw a small sphere indicator at the center
+        const float sphereRadius = 0.06F;
+        renderer.DrawBox(pos, glm::vec3{sphereRadius, sphereRadius, sphereRadius}, hatchetColor);
+    }
+}
+
+// ============================================================================
+// Status Effect System
+// ============================================================================
+
+void GameplaySystems::ApplyStatusEffect(
+    StatusEffectType type,
+    const std::string& targetRole,
+    float duration,
+    float strength,
+    const std::string& sourceId)
+{
+    engine::scene::Entity targetEntity = 0;
+    if (targetRole == "survivor" || targetRole == "Survivor")
+    {
+        targetEntity = m_survivor;
+    }
+    else if (targetRole == "killer" || targetRole == "Killer")
+    {
+        targetEntity = m_killer;
+    }
+
+    if (targetEntity == 0)
+    {
+        return;
+    }
+
+    // Validate effect type for role
+    if (StatusEffect::IsKillerOnly(type) && targetEntity == m_survivor)
+    {
+        AddRuntimeMessage("Cannot apply killer-only effect to survivor", 1.5F);
+        return;
+    }
+    if (StatusEffect::IsSurvivorOnly(type) && targetEntity == m_killer)
+    {
+        AddRuntimeMessage("Cannot apply survivor-only effect to killer", 1.5F);
+        return;
+    }
+
+    StatusEffect effect;
+    effect.type = type;
+    effect.duration = duration;
+    effect.remainingTime = duration;
+    effect.strength = strength;
+    effect.sourceId = sourceId;
+    effect.infinite = (duration <= 0.0F);
+
+    m_statusEffectManager.ApplyEffect(targetEntity, effect);
+
+    const char* typeName = StatusEffect::TypeToName(type);
+    AddRuntimeMessage("Applied " + std::string(typeName) + " to " + targetRole, 1.5F);
+}
+
+void GameplaySystems::RemoveStatusEffect(StatusEffectType type, const std::string& targetRole)
+{
+    engine::scene::Entity targetEntity = 0;
+    if (targetRole == "survivor" || targetRole == "Survivor")
+    {
+        targetEntity = m_survivor;
+    }
+    else if (targetRole == "killer" || targetRole == "Killer")
+    {
+        targetEntity = m_killer;
+    }
+
+    if (targetEntity == 0)
+    {
+        return;
+    }
+
+    m_statusEffectManager.RemoveEffect(targetEntity, type);
+}
+
+bool GameplaySystems::IsKillerUndetectable() const
+{
+    if (m_killer == 0) return false;
+    return m_statusEffectManager.IsUndetectable(m_killer);
+}
+
+bool GameplaySystems::IsSurvivorExposed() const
+{
+    if (m_survivor == 0) return false;
+    return m_statusEffectManager.IsExposed(m_survivor);
+}
+
+bool GameplaySystems::IsSurvivorExhausted() const
+{
+    if (m_survivor == 0) return false;
+    return m_statusEffectManager.IsExhausted(m_survivor);
+}
+
+std::string GameplaySystems::StatusEffectDump() const
+{
+    std::ostringstream oss;
+    oss << "=== Status Effects ===\n";
+
+    // Killer effects
+    if (m_killer != 0)
+    {
+        oss << "Killer:\n";
+        const auto killerEffects = m_statusEffectManager.GetActiveEffects(m_killer);
+        if (killerEffects.empty())
+        {
+            oss << "  (none)\n";
+        }
+        else
+        {
+            for (const auto& effect : killerEffects)
+            {
+                oss << "  " << StatusEffect::TypeToName(effect.type);
+                oss << " (source: " << effect.sourceId << ")";
+                if (effect.infinite)
+                {
+                    oss << " [infinite]";
+                }
+                else
+                {
+                    oss << " [" << effect.remainingTime << "s remaining]";
+                }
+                if (effect.strength != 0.0F)
+                {
+                    oss << " strength=" << effect.strength;
+                }
+                oss << "\n";
+            }
+        }
+    }
+
+    // Survivor effects
+    if (m_survivor != 0)
+    {
+        oss << "Survivor:\n";
+        const auto survivorEffects = m_statusEffectManager.GetActiveEffects(m_survivor);
+        if (survivorEffects.empty())
+        {
+            oss << "  (none)\n";
+        }
+        else
+        {
+            for (const auto& effect : survivorEffects)
+            {
+                oss << "  " << StatusEffect::TypeToName(effect.type);
+                oss << " (source: " << effect.sourceId << ")";
+                if (effect.infinite)
+                {
+                    oss << " [infinite]";
+                }
+                else
+                {
+                    oss << " [" << effect.remainingTime << "s remaining]";
+                }
+                if (effect.strength != 0.0F)
+                {
+                    oss << " strength=" << effect.strength;
+                }
+                oss << "\n";
+            }
+        }
+    }
+
+    return oss.str();
 }
 
 } // namespace game::gameplay

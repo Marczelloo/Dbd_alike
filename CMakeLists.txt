@@ -89,6 +89,8 @@ set(ENGINE_SOURCES
     engine/render/Frustum.cpp
     engine/render/StaticBatcher.cpp
     engine/render/RenderThread.cpp
+    engine/render/SceneCaptureFBO.cpp
+    engine/render/WraithCloakRenderer.cpp
     engine/physics/PhysicsWorld.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
@@ -105,6 +107,7 @@ set(ENGINE_SOURCES
     game/gameplay/SpawnSystem.cpp
     game/gameplay/PerkSystem.cpp
     game/gameplay/LoadoutSystem.cpp
+    game/gameplay/StatusEffectManager.cpp
     game/editor/LevelAssets.cpp
     game/editor/LevelEditor.cpp
     ui/DeveloperConsole.cpp

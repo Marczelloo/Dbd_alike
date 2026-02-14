@@ -1,8 +1,8 @@
 {
   "asset_version": 1,
   "cosmetic_id": "default",
-  "display_name": "Meg",
-  "id": "survivor_meg",
+  "display_name": "Blocky Female",
+  "id": "survivor_female_blocky",
   "model_path": "assets/meshes/survivor_female_blocky.glb",
   "model_yaw_degrees": 0.0
 }

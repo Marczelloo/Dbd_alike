@@ -1,0 +1,20 @@
+{
+  "asset_version": 1,
+  "description": "Charge and throw hatchets at survivors. Partial charge = slower, more drop. Full charge = faster, straighter.",
+  "display_name": "Hunting Hatchets",
+  "id": "hatchet_throw",
+  "params": {
+    "max_count": 7.0,
+    "charge_min_seconds": 0.1,
+    "charge_max_seconds": 1.0,
+    "throw_speed_min": 12.0,
+    "throw_speed_max": 28.0,
+    "gravity_min": 12.0,
+    "gravity_max": 4.0,
+    "collision_radius": 0.12,
+    "max_range": 40.0,
+    "max_lifetime": 5.0,
+    "locker_replenish_time": 2.0,
+    "locker_replenish_count": 7.0
+  }
+}

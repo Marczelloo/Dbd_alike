@@ -18,6 +18,8 @@
 #include "engine/platform/Input.hpp"
 #include "engine/platform/Window.hpp"
 #include "engine/render/Renderer.hpp"
+#include "engine/render/SceneCaptureFBO.hpp"
+#include "engine/render/WraithCloakRenderer.hpp"
 #include "engine/ui/UiSystem.hpp"
 #include "game/editor/LevelEditor.hpp"
 #include "game/gameplay/GameplaySystems.hpp"
@@ -84,6 +86,45 @@ public:
         float killerLightRed = 1.0F;
         float killerLightGreen = 0.15F;
         float killerLightBlue = 0.1F;
+    };
+
+    struct PowersTuning
+    {
+        int assetVersion = 1;
+
+        // Bear Trap (Trapper)
+        int trapperStartCarryTraps = 5;
+        int trapperMaxCarryTraps = 5;
+        int trapperGroundSpawnTraps = 8;
+        float trapperSetTrapSeconds = 1.5F;
+        float trapperDisarmSeconds = 2.0F;
+        float trapEscapeBaseChance = 0.2F;
+        float trapEscapeChanceStep = 0.2F;
+        float trapEscapeChanceMax = 0.85F;
+        float trapKillerStunSeconds = 2.0F;
+
+        // Wraith Cloak
+        float wraithCloakMoveSpeedMultiplier = 1.3F;
+        float wraithCloakTransitionSeconds = 1.0F;
+        float wraithUncloakTransitionSeconds = 1.0F;
+        float wraithPostUncloakHasteSeconds = 2.0F;
+        float wraithCloakVaultSpeedMult = 1.25F;
+        float wraithCloakPalletBreakSpeedMult = 1.35F;
+        float wraithCloakAlpha = 0.15F;
+
+        // Hatchet Throw (Huntress-like)
+        int hatchetMaxCount = 7;
+        float hatchetChargeMinSeconds = 0.1F;
+        float hatchetChargeMaxSeconds = 1.0F;
+        float hatchetThrowSpeedMin = 12.0F;
+        float hatchetThrowSpeedMax = 28.0F;
+        float hatchetGravityMin = 12.0F;
+        float hatchetGravityMax = 4.0F;
+        float hatchetAirDrag = 0.985F;
+        float hatchetCollisionRadius = 0.12F;
+        float hatchetMaxRange = 40.0F;
+        float hatchetLockerReplenishTime = 2.0F;
+        int hatchetLockerReplenishCount = 7;
     };
 
 private:
@@ -252,6 +293,10 @@ private:
     [[nodiscard]] std::string DumpTerrorRadiusState() const;
     void SendGameplayTuningToClient();
     void ApplyMapEnvironment(const std::string& mapName);
+    [[nodiscard]] bool LoadPowersConfig();
+    [[nodiscard]] bool SavePowersConfig() const;
+    void ApplyPowersSettings(const PowersTuning& tuning, bool fromServer);
+    void SendPowersTuningToClient();
 
     platform::WindowSettings m_windowSettings{};
 
@@ -260,6 +305,11 @@ private:
     platform::ActionBindings m_actionBindings;
     audio::AudioSystem m_audio;
     render::Renderer m_renderer;
+    render::SceneCaptureFBO m_sceneFbo;
+    render::WraithCloakRenderer m_wraithCloakRenderer;
+    render::WraithCloakParams m_wraithCloakParams;
+    bool m_wraithCloakEnabled = false;
+    bool m_wraithCloakDebugEnabled = false;
     ui::UiSystem m_ui;
 
     EventBus m_eventBus;
@@ -300,7 +350,7 @@ private:
     bool m_settingsMenuOpen = false;
     bool m_settingsOpenedFromPause = false;
     int m_settingsTabIndex = 0;
-    std::array<float, 4> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F};
+    std::array<float, 5> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
     float m_mainMenuScrollY = 0.0F;
     bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
@@ -337,6 +387,8 @@ private:
     AudioSettings m_audioSettings{};
     game::gameplay::GameplaySystems::GameplayTuning m_gameplayApplied{};
     game::gameplay::GameplaySystems::GameplayTuning m_gameplayEditing{};
+    PowersTuning m_powersApplied{};
+    PowersTuning m_powersEditing{};
     bool m_serverGameplayValues = false;
     bool m_graphicsAutoConfirmPending = false;
     double m_graphicsAutoConfirmDeadline = 0.0;
@@ -353,6 +405,7 @@ private:
     std::string m_graphicsStatus;
     std::string m_audioStatus;
     std::string m_gameplayStatus;
+    std::string m_powersStatus;
 
     int m_menuRoleIndex = 0;
     int m_menuMapIndex = 0;

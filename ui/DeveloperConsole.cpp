@@ -1124,6 +1124,40 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
         });
 
+        RegisterCommand("spawn_test_models", "Spawn imported survivor test meshes at (5,0,5) and (7,0,5)", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.spawnTestModels)
+            {
+                context.spawnTestModels();
+                LogSuccess("Spawned survivor test meshes at (5,0,5) male and (7,0,5) female");
+            }
+            else if (context.gameplay)
+            {
+                context.gameplay->SpawnTestModels();
+                LogSuccess("Spawned survivor test meshes at (5,0,5) male and (7,0,5) female");
+            }
+            else
+            {
+                LogError("spawn_test_models not available");
+            }
+        });
+
+        RegisterCommand("spawn_test_models_here", "Spawn imported survivor test meshes at player position", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.spawnTestModelsHere)
+            {
+                context.spawnTestModelsHere();
+                LogSuccess("Spawned survivor test meshes at your position (male 2m left, female 2m right)");
+            }
+            else if (context.gameplay)
+            {
+                context.gameplay->SpawnTestModelsHere();
+                LogSuccess("Spawned survivor test meshes at your position (male 2m left, female 2m right)");
+            }
+            else
+            {
+                LogError("spawn_test_models_here not available");
+            }
+        });
+
         RegisterCommand("teleport survivor|killer x y z", "Teleport survivor or killer", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 5)
             {
@@ -1825,6 +1859,95 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             AddLog("Killer Current Speed: " + std::to_string(hudState.killerCurrentSpeed) + " m/s");
         });
 
+        // Status Effect commands
+        RegisterCommand("add_status <type> [duration] [strength]", "Add status effect to current role (types: haste, hindered, exposed, exhausted, undetectable)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: add_status <type> [duration] [strength]");
+                LogInfo("Types: haste, hindered, exposed, exhausted, undetectable");
+                LogInfo("Duration: 0 = infinite, default 10s");
+                LogInfo("Strength: e.g., 0.15 = 15%, default varies by type");
+                return;
+            }
+
+            const std::string typeStr = tokens[1];
+            const float duration = tokens.size() > 2 ? ParseFloatOr(10.0F, tokens[2]) : 10.0F;
+            const float strength = tokens.size() > 3 ? ParseFloatOr(0.15F, tokens[3]) : 0.15F;
+
+            // Determine target role from effect type
+            std::string targetRole;
+            game::gameplay::StatusEffectType type = game::gameplay::StatusEffect::ParseType(typeStr);
+
+            if (typeStr == "undetectable")
+            {
+                targetRole = "Killer";
+                type = game::gameplay::StatusEffectType::Undetectable;
+            }
+            else if (typeStr == "haste")
+            {
+                type = game::gameplay::StatusEffectType::Haste;
+                const auto hudState = context.gameplay->BuildHudState();
+                targetRole = hudState.roleName;
+            }
+            else if (typeStr == "hindered")
+            {
+                type = game::gameplay::StatusEffectType::Hindered;
+                const auto hudState = context.gameplay->BuildHudState();
+                targetRole = hudState.roleName;
+            }
+            else if (typeStr == "exposed")
+            {
+                targetRole = "Survivor";
+                type = game::gameplay::StatusEffectType::Exposed;
+            }
+            else if (typeStr == "exhausted")
+            {
+                targetRole = "Survivor";
+                type = game::gameplay::StatusEffectType::Exhausted;
+            }
+            else
+            {
+                LogError("Unknown status effect type: " + typeStr);
+                LogInfo("Valid types: haste, hindered, exposed, exhausted, undetectable");
+                return;
+            }
+
+            context.gameplay->ApplyStatusEffect(type, targetRole, duration, strength, "console");
+            LogSuccess("Applied " + typeStr + " to " + targetRole + " for " + std::to_string(duration) + "s");
+        });
+
+        RegisterCommand("remove_status <type>", "Remove status effect from current role", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: remove_status <type>");
+                LogInfo("Types: haste, hindered, exposed, exhausted, undetectable");
+                return;
+            }
+
+            const std::string typeStr = tokens[1];
+            game::gameplay::StatusEffectType type = game::gameplay::StatusEffect::ParseType(typeStr);
+
+            const auto hudState = context.gameplay->BuildHudState();
+            context.gameplay->RemoveStatusEffect(type, hudState.roleName);
+            LogSuccess("Removed " + typeStr + " from " + hudState.roleName);
+        });
+
+        RegisterCommand("status_dump", "Print all active status effects for current roles", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+
+            const std::string dump = context.gameplay->StatusEffectDump();
+            // Split by newlines and add each line
+            std::istringstream stream(dump);
+            std::string line;
+            while (std::getline(stream, line))
+            {
+                AddLog(line, ConsoleColors::Info);
+            }
+        });
+
         RegisterCommand("scratch_debug on|off", "Toggle scratch marks debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -2370,6 +2493,67 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess("set_survivor: " + tokens[1]);
         });
 
+        RegisterCommand("list_survivor_models", "List available survivor model ids", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            const std::vector<std::string> ids = context.gameplay->ListSurvivorCharacters();
+            if (ids.empty())
+            {
+                LogError("No survivor models found");
+                return;
+            }
+            AddLog("Survivor models:");
+            for (const std::string& id : ids)
+            {
+                AddLog("  - " + id);
+            }
+        });
+
+        RegisterCommand("set_survivor_model <male|female|id>", "Quick survivor model switch", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: set_survivor_model <male|female|id>");
+                return;
+            }
+
+            std::string targetId = tokens[1];
+            if (targetId == "male")
+            {
+                targetId = "survivor_male_blocky";
+            }
+            else if (targetId == "female")
+            {
+                targetId = "survivor_female_blocky";
+            }
+
+            if (!context.gameplay->SetSelectedSurvivorCharacter(targetId))
+            {
+                LogError("set_survivor_model failed: unknown id");
+                return;
+            }
+            LogSuccess("set_survivor_model: " + targetId);
+        });
+
+        RegisterCommand("toggle_survivor_model", "Toggle male/female blocky survivor model", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+
+            const game::gameplay::HudState hud = context.gameplay->BuildHudState();
+            const std::string targetId = hud.survivorCharacterId == "survivor_male_blocky"
+                ? "survivor_female_blocky"
+                : "survivor_male_blocky";
+            if (!context.gameplay->SetSelectedSurvivorCharacter(targetId))
+            {
+                LogError("toggle_survivor_model failed: blocky survivor ids missing");
+                return;
+            }
+            LogSuccess("toggle_survivor_model: " + targetId);
+        });
+
         RegisterCommand("set_killer <id>", "Select killer character id (updates power_id)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() != 2)
             {
@@ -2442,6 +2626,51 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
             context.gameplay->SetTrapDebug(enabled);
             LogSuccess(std::string("trap_debug ") + (enabled ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("hatchet_count <n>", "Set hatchet count (0-7)", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: hatchet_count <n>");
+                return;
+            }
+            const int count = ParseIntOr(7, tokens[1]);
+            context.gameplay->SetHatchetCount(count);
+            LogSuccess("hatchet_count set to " + std::to_string(context.gameplay->GetHatchetCount()));
+        });
+
+        RegisterCommand("hatchet_refill", "Refill hatchets to max", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            context.gameplay->RefillHatchets();
+            LogSuccess("Hatchets refilled to " + std::to_string(context.gameplay->GetHatchetCount()));
+        });
+
+        RegisterCommand("hatchet_debug on|off", "Toggle hatchet debug visualization", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: hatchet_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                LogError("Expected on|off");
+                return;
+            }
+            context.gameplay->SetHatchetDebug(enabled);
+            LogSuccess(std::string("hatchet_debug ") + (enabled ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("locker_spawn", "Spawn a locker at killer position", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            context.gameplay->SpawnLockerAtKiller();
+            LogSuccess("Locker spawned");
         });
 
         RegisterCommand("render_mode wireframe|filled", "Set render mode", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {

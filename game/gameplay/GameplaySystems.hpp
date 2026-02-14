@@ -23,6 +23,7 @@
 #include "engine/scene/World.hpp"
 #include "game/gameplay/LoadoutSystem.hpp"
 #include "game/gameplay/PerkSystem.hpp"
+#include "game/gameplay/StatusEffectManager.hpp"
 #include "game/maps/TileGenerator.hpp"
 
 namespace engine::scene
@@ -38,6 +39,11 @@ class Input;
 namespace engine::render
 {
 class Renderer;
+}
+
+namespace engine::assets
+{
+class MeshLibrary;
 }
 
 namespace game::gameplay::perks
@@ -112,6 +118,11 @@ struct HudState
     bool hookSkillChecksEnabled = false;
     std::string runtimeMessage;
     std::string movementStateName = "Walking";
+    float survivorVisualYawDeg = 0.0F;
+    float survivorVisualTargetYawDeg = 0.0F;
+    float survivorLookYawDeg = 0.0F;
+    float survivorCameraYawDeg = 0.0F;
+    glm::vec2 survivorMoveInput{0.0F};
     std::string killerAttackStateName = "Idle";
     float lungeCharge01 = 0.0F;
     std::string attackHint = "LMB click short / hold LMB lunge";
@@ -152,6 +163,9 @@ struct HudState
     bool debugDrawEnabled = true;
     bool physicsDebugEnabled = false;
     bool noclipEnabled = false;
+    bool killerSurvivorNoCollisionActive = false;
+    float killerSurvivorNoCollisionTimer = 0.0F;
+    bool killerSurvivorOverlapping = false;
 
     float playerSpeed = 0.0F;
     bool grounded = false;
@@ -183,7 +197,17 @@ struct HudState
     int carriedTrapCount = 0;
     float trapSetProgress01 = 0.0F;
     bool wraithCloaked = false;
+    bool wraithCloakTransitionActive = false;
+    float wraithCloakProgress01 = 0.0F;
+    float wraithCloakAmount = 0.0F;
+    std::string wraithCloakAction;
     float wraithPostUncloakHasteSeconds = 0.0F;
+    
+    // Killer render info for cloak shader
+    glm::vec3 killerWorldPosition{0.0F};
+    float killerCapsuleHeight = 2.0F;
+    float killerCapsuleRadius = 0.4F;
+    
     bool trapDebugEnabled = false;
     int trappedEscapeAttempts = 0;
     float trappedEscapeChance = 0.0F;
@@ -193,6 +217,16 @@ struct HudState
     std::string trapIndicatorText;
     float trapIndicatorTtl = 0.0F;
     bool trapIndicatorDanger = true;
+
+    // Hatchet power HUD fields
+    int hatchetCount = 7;
+    int hatchetMaxCount = 7;
+    bool hatchetCharging = false;
+    float hatchetCharge01 = 0.0F;
+    bool hatchetDebugEnabled = false;
+    int activeProjectileCount = 0;
+    float lockerReplenishProgress = 0.0F;
+    bool lockerInRange = false;
 
     // Perks debug info
     struct ActivePerkDebug
@@ -215,6 +249,25 @@ struct HudState
     static constexpr std::size_t kPerkSlotCount = 4;
     std::array<ActivePerkDebug, kPerkSlotCount> survivorPerkSlots{};
     std::array<ActivePerkDebug, kPerkSlotCount> killerPerkSlots{};
+
+    // Status Effects HUD
+    struct ActiveStatusEffect
+    {
+        std::string typeId;              // "haste", "exposed", etc.
+        std::string displayName;         // "Haste", "Exposed"
+        float remainingSeconds = 0.0F;
+        float progress01 = 0.0F;         // For progress bar
+        float strength = 0.0F;
+        int stacks = 1;
+        bool isInfinite = false;
+    };
+    std::vector<ActiveStatusEffect> killerStatusEffects;
+    std::vector<ActiveStatusEffect> survivorStatusEffects;
+
+    // Quick access flags for common status effect queries
+    bool killerUndetectable = false;
+    bool survivorExposed = false;
+    bool survivorExhausted = false;
 };
 
 class GameplaySystems
@@ -310,6 +363,23 @@ public:
         float wraithCloakTransitionSeconds = 1.0F;
         float wraithUncloakTransitionSeconds = 1.0F;
         float wraithPostUncloakHasteSeconds = 2.0F;
+        float wraithCloakVaultSpeedMult = 1.25F;
+        float wraithCloakPalletBreakSpeedMult = 1.35F;
+        float wraithCloakAlpha = 0.15F;
+
+        // Hatchet power (Huntress-like)
+        int hatchetMaxCount = 7;
+        float hatchetChargeMinSeconds = 0.1F;
+        float hatchetChargeMaxSeconds = 1.0F;
+        float hatchetThrowSpeedMin = 12.0F;   // Partial charge
+        float hatchetThrowSpeedMax = 28.0F;   // Full charge
+        float hatchetGravityMin = 12.0F;      // Heavy drop for partial
+        float hatchetGravityMax = 4.0F;       // Light drop for full charge
+        float hatchetAirDrag = 0.985F;        // Velocity multiplier per frame
+        float hatchetCollisionRadius = 0.12F;
+        float hatchetMaxRange = 40.0F;
+        float hatchetLockerReplenishTime = 2.0F;
+        int hatchetLockerReplenishCount = 7;
 
         float weightTLWalls = 1.0F;
         float weightJungleGymLong = 1.0F;
@@ -535,6 +605,10 @@ public:
     [[nodiscard]] bool QuitRequested() const { return m_quitRequested; }
 
     void SpawnFxDebug(const std::string& assetId);
+    void SpawnTestModels(); // Spawn imported survivor mesh test models
+    void SpawnTestModelsHere(); // Spawn imported survivor mesh test models at player's position
+    void LoadTestModelMeshes(); // Load glTF meshes for test model rendering
+    void SetMeshLibrary(engine::assets::MeshLibrary* lib) { m_meshLibrary = lib; }
     void StopAllFx();
     [[nodiscard]] std::vector<std::string> ListFxAssets() const;
     [[nodiscard]] std::optional<engine::fx::FxAsset> GetFxAsset(const std::string& assetId) const;
@@ -567,6 +641,15 @@ public:
     void TrapClearDebug();
     void SetTrapDebug(bool enabled) { m_trapDebugEnabled = enabled; }
     [[nodiscard]] bool TrapDebugEnabled() const { return m_trapDebugEnabled; }
+
+    // Hatchet power debug and control
+    void SetHatchetDebug(bool enabled) { m_hatchetDebugEnabled = enabled; }
+    [[nodiscard]] bool HatchetDebugEnabled() const { return m_hatchetDebugEnabled; }
+    void SetHatchetCount(int count);
+    void RefillHatchets();
+    void SpawnLockerAtKiller();
+    [[nodiscard]] int GetHatchetCount() const { return m_killerPowerState.hatchetCount; }
+    [[nodiscard]] int GetActiveProjectileCount() const;
 
     // Phase B2/B3: Scratch Marks and Blood Pools debug control
     void SetScratchDebug(bool enabled);
@@ -612,6 +695,16 @@ public:
 
     void SetMapSpotLightCount(std::size_t count) { m_mapSpotLightCount = count; }
 
+    // Status Effect System
+    void ApplyStatusEffect(StatusEffectType type, const std::string& targetRole, float duration, float strength, const std::string& sourceId);
+    void RemoveStatusEffect(StatusEffectType type, const std::string& targetRole);
+    [[nodiscard]] StatusEffectManager& GetStatusEffectManager() { return m_statusEffectManager; }
+    [[nodiscard]] const StatusEffectManager& GetStatusEffectManager() const { return m_statusEffectManager; }
+    [[nodiscard]] bool IsKillerUndetectable() const;
+    [[nodiscard]] bool IsSurvivorExposed() const;
+    [[nodiscard]] bool IsSurvivorExhausted() const;
+    [[nodiscard]] std::string StatusEffectDump() const;
+
 private:
     enum class InteractionType
     {
@@ -624,7 +717,8 @@ private:
         DropSurvivor,
         HookSurvivor,
         RepairGenerator,
-        SelfHeal
+        SelfHeal,
+        ReplenishHatchets
     };
 
     enum class VaultType
@@ -799,6 +893,7 @@ private:
     void CompleteSkillCheck(bool success, bool timeout = false);
     void ScheduleNextSkillCheck();
     void RefreshGeneratorsCompleted();
+    void ResolveKillerSurvivorCollision();
     void ApplyKillerAttackAftermath(bool hit, bool lungeAttack);
     void ApplySurvivorHit();
     bool SetSurvivorState(SurvivorHealthState nextState, const std::string& reason, bool force = false);
@@ -830,11 +925,35 @@ private:
     [[nodiscard]] static glm::vec3 ForwardFromYawPitch(float yaw, float pitch);
     void InitializeLoadoutCatalog();
     void RefreshLoadoutModifiers();
+    void RefreshSurvivorModelCapsuleOverride();
+    bool TryFallbackToAvailableSurvivorModel(const std::string& failedCharacterId);
+    [[nodiscard]] bool LoadSurvivorCharacterBounds(
+        const std::string& characterId,
+        float* outMinY,
+        float* outMaxY,
+        float* outMaxAbsXZ
+    );
+    [[nodiscard]] bool EnsureSurvivorCharacterMeshLoaded(const std::string& characterId);
     void ResetItemAndPowerRuntimeState();
     void UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt);
     void UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt);
     void UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt);
     void UpdateWraithPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void UpdateHatchetPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void UpdateProjectiles(float fixedDt);
+    engine::scene::Entity SpawnHatchetProjectile(const glm::vec3& origin, const glm::vec3& direction, float charge01);
+    engine::scene::Entity SpawnLocker(const glm::vec3& position, const glm::vec3& forward);
+    void RenderHatchetDebug(engine::render::Renderer& renderer);
+    void RenderHatchetTrajectoryPrediction(engine::render::Renderer& renderer);
+    void RenderHatchetProjectiles(engine::render::Renderer& renderer);
+    [[nodiscard]] bool ProjectileHitsCapsule(
+        const glm::vec3& projectilePos,
+        float projectileRadius,
+        const glm::vec3& capsulePos,
+        float capsuleRadius,
+        float capsuleHeight
+    ) const;
+    [[nodiscard]] glm::vec3 ClosestPointOnSegment(const glm::vec3& point, const glm::vec3& a, const glm::vec3& b) const;
     void ApplySurvivorItemActionLock(float durationSeconds);
     bool TryDropSurvivorItemToGround();
     bool TryPickupSurvivorGroundItem();
@@ -911,6 +1030,46 @@ private:
     bool m_noClipEnabled = false;
     bool m_quitRequested = false;
     bool m_networkAuthorityMode = false;
+
+    // Test model mesh loading and rendering
+    engine::assets::MeshLibrary* m_meshLibrary = nullptr;
+    struct TestModelGpuMeshes
+    {
+        engine::render::Renderer::GpuMeshId maleBody = engine::render::Renderer::kInvalidGpuMesh;
+        engine::render::Renderer::GpuMeshId femaleBody = engine::render::Renderer::kInvalidGpuMesh;
+        float maleFeetOffset = 0.0F;
+        float femaleFeetOffset = 0.0F;
+    };
+    TestModelGpuMeshes m_testModelMeshes;
+
+    struct SurvivorVisualMesh
+    {
+        engine::render::Renderer::GpuMeshId gpuMesh = engine::render::Renderer::kInvalidGpuMesh;
+        float boundsMinY = 0.0F;
+        float boundsMaxY = 1.8F;
+        float maxAbsXZ = 0.3F;
+        bool boundsLoadAttempted = false;
+        bool boundsLoaded = false;
+        bool boundsLoadFailed = false;
+        bool gpuUploadAttempted = false;
+    };
+    std::unordered_map<std::string, SurvivorVisualMesh> m_survivorVisualMeshes;
+    float m_survivorCapsuleOverrideRadius = -1.0F;
+    float m_survivorCapsuleOverrideHeight = -1.0F;
+    float m_survivorVisualYawRadians = 0.0F;
+    bool m_survivorVisualYawInitialized = false;
+    float m_survivorVisualTurnSpeedRadiansPerSecond = 8.0F;
+    float m_survivorVisualTargetYawRadians = 0.0F;
+    glm::vec2 m_survivorVisualMoveInput{0.0F};
+    glm::vec3 m_survivorVisualDesiredDirection{0.0F};
+
+    struct TestModelData
+    {
+        glm::vec3 malePosition{5.0F, 0.0F, 5.0F};
+        glm::vec3 femalePosition{7.0F, 0.0F, 5.0F};
+        bool spawned = false;
+    };
+    TestModelData m_testModels;
     bool m_dbdSpawnsEnabled = false;
 
     RoleCommand m_localSurvivorCommand{};
@@ -949,6 +1108,15 @@ private:
     float m_survivorHitHasteTimer = 0.0F;
     float m_survivorHitHasteSeconds = 1.45F;
     float m_survivorHitHasteMultiplier = 1.18F;
+    float m_actorGroundAcceleration = 36.0F;
+    float m_actorGroundDeceleration = 22.0F;
+    float m_killerSurvivorNoCollisionTimer = 0.0F;
+    float m_killerSurvivorNoCollisionAfterHitSeconds = 1.8F;
+    float m_killerSurvivorNoCollisionBreakDistance = 4.0F;
+    glm::vec3 m_killerPreMovePosition{0.0F};
+    glm::vec3 m_survivorPreMovePosition{0.0F};
+    bool m_killerPreMovePositionValid = false;
+    bool m_survivorPreMovePositionValid = false;
     float m_killerSlowTimer = 0.0F;
     float m_killerSlowMultiplier = 1.0F;
     float m_killerHitSlowSeconds = 1.05F;
@@ -1027,6 +1195,9 @@ private:
     perks::PerkLoadout m_survivorPerks;
     perks::PerkLoadout m_killerPerks;
 
+    // Status Effect System
+    StatusEffectManager m_statusEffectManager;
+
     loadout::GameplayCatalog m_loadoutCatalog;
     loadout::LoadoutSurvivor m_survivorLoadout;
     loadout::LoadoutKiller m_killerLoadout;
@@ -1035,6 +1206,7 @@ private:
     std::string m_selectedSurvivorCharacterId = "survivor_dwight";
     std::string m_selectedKillerCharacterId = "killer_trapper";
     bool m_trapDebugEnabled = false;
+    bool m_hatchetDebugEnabled = false;
 
     struct SurvivorItemRuntimeState
     {
@@ -1069,6 +1241,17 @@ private:
         float wraithPostUncloakTimer = 0.0F;
 
         float killerBlindTimer = 0.0F;
+
+        // Hatchet power state
+        int hatchetCount = 7;
+        int hatchetMaxCount = 7;
+        float hatchetChargeTimer = 0.0F;
+        bool hatchetCharging = false;
+        float hatchetCharge01 = 0.0F;
+        bool hatchetThrowRequiresRelease = false;
+        float lockerReplenishTimer = 0.0F;
+        bool lockerReplenishing = false;
+        engine::scene::Entity lockerTargetEntity = 0;
     };
 
     SurvivorItemRuntimeState m_survivorItemState{};
