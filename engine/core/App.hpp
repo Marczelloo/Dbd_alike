@@ -125,6 +125,26 @@ public:
         float hatchetMaxRange = 40.0F;
         float hatchetLockerReplenishTime = 2.0F;
         int hatchetLockerReplenishCount = 7;
+
+        // Chainsaw Sprint (Hillbilly)
+        float chainsawChargeTime = 2.5F;
+        float chainsawSprintSpeedMultiplier = 2.4F;
+        float chainsawTurnBoostWindow = 0.5F;
+        float chainsawTurnBoostRate = 120.0F;
+        float chainsawTurnRestrictedRate = 25.0F;
+        float chainsawCollisionRecoveryDuration = 1.5F;
+        float chainsawRecoveryHitDuration = 0.5F;
+        float chainsawRecoveryCancelDuration = 0.5F;
+        float chainsawOverheatPerSecondCharge = 15.0F;
+        float chainsawOverheatPerSecondSprint = 25.0F;
+        float chainsawOverheatCooldownRate = 10.0F;
+        float chainsawOverheatBuffThreshold = 100.0F;
+        float chainsawOverheatChargeBonus = 0.2F;
+        float chainsawOverheatSpeedBonus = 0.1F;
+        float chainsawOverheatTurnBonus = 0.15F;
+        float chainsawCollisionRaycastDistance = 2.0F;
+        float chainsawSurvivorHitRadius = 1.5F;
+        float chainsawChargeSlowdownMultiplier = 0.3F;
     };
 
 private:

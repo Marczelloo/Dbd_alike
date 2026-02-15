@@ -723,8 +723,49 @@ void GameplaySystems::FixedUpdate(float fixedDt, const engine::platform::Input& 
             (m_survivorState == SurvivorHealthState::Hooked || m_survivorState == SurvivorHealthState::Trapped);
         if ((!inputLocked || allowLookWhileLocked) && glm::length(command.lookDelta) > 1.0e-5F)
         {
-            const float sensitivity = role == engine::scene::Role::Survivor ? m_survivorLookSensitivity : m_killerLookSensitivity;
-            UpdateActorLook(entity, command.lookDelta, sensitivity);
+            float sensitivity = role == engine::scene::Role::Survivor ? m_survivorLookSensitivity : m_killerLookSensitivity;
+
+            // Apply chainsaw sprint turn rate restriction when sprinting
+            if (role == engine::scene::Role::Killer &&
+                m_killerPowerState.chainsawState == ChainsawSprintState::Sprinting)
+            {
+                // Get base turn rate based on boost window
+                float turnRateDegPerSec = m_killerPowerState.chainsawInTurnBoostWindow
+                    ? m_chainsawConfig.turnBoostRate      // 120 deg/sec during boost
+                    : m_chainsawConfig.turnRestrictedRate; // 25 deg/sec after boost
+
+                // Apply overheat turn bonus if buffed
+                const bool overheatBuffed = m_killerPowerState.chainsawOverheat >= m_chainsawConfig.overheatBuffThreshold;
+                if (overheatBuffed)
+                {
+                    turnRateDegPerSec *= (1.0F + m_chainsawConfig.overheatTurnBonus);
+                }
+
+                // Calculate max yaw change per frame (in radians)
+                const float maxYawChangeRadians = glm::radians(turnRateDegPerSec) * fixedDt;
+
+                // Calculate requested yaw change with normal sensitivity
+                const float requestedYawChange = command.lookDelta.x * m_killerLookSensitivity;
+
+                // Clamp the yaw change to the max allowed per frame
+                const float clampedYawChange = glm::clamp(requestedYawChange, -maxYawChangeRadians, maxYawChangeRadians);
+
+                // Apply directly to transform (bypassing UpdateActorLook for yaw)
+                // NOTE: Pitch is NOT modified during chainsaw sprint - vertical camera is locked
+                auto transformIt = m_world.Transforms().find(entity);
+                if (transformIt != m_world.Transforms().end())
+                {
+                    engine::scene::Transform& transform = transformIt->second;
+                    transform.rotationEuler.y += clampedYawChange;
+                    // Pitch (vertical look) is locked during chainsaw sprint - do not modify rotationEuler.x
+                    // Recalculate forward from yaw only (pitch stays at current value)
+                    transform.forward = ForwardFromYawPitch(transform.rotationEuler.y, transform.rotationEuler.x);
+                }
+            }
+            else
+            {
+                UpdateActorLook(entity, command.lookDelta, sensitivity);
+            }
         }
 
         const bool survivorActionLocked =
@@ -2037,6 +2078,9 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     RenderHatchetTrajectoryPrediction(renderer);
     RenderHatchetProjectiles(renderer);
 
+    // Chainsaw sprint power debug visualization
+    RenderChainsawDebug(renderer);
+
     // Report dynamic object culling stats to profiler.
     auto& profStats = engine::core::Profiler::Instance().StatsMut();
     profStats.dynamicObjectsDrawn = dynamicDrawn;
@@ -2264,6 +2308,70 @@ HudState GameplaySystems::BuildHudState() const
     hud.activeProjectileCount = GetActiveProjectileCount();
     hud.lockerReplenishProgress = m_killerPowerState.lockerReplenishing ?
         (m_killerPowerState.lockerReplenishTimer / m_tuning.hatchetLockerReplenishTime) : 0.0F;
+
+    // Chainsaw sprint power HUD fields
+    {
+        auto stateToText = [](ChainsawSprintState state) -> std::string {
+            switch (state)
+            {
+                case ChainsawSprintState::Idle: return "Idle";
+                case ChainsawSprintState::Charging: return "Charging";
+                case ChainsawSprintState::Sprinting: return "Sprinting";
+                case ChainsawSprintState::Recovery: return "Recovery";
+                default: return "Unknown";
+            }
+        };
+        hud.chainsawState = stateToText(m_killerPowerState.chainsawState);
+        hud.chainsawCharge01 = glm::clamp(
+            m_killerPowerState.chainsawChargeTimer / std::max(0.01F, m_chainsawConfig.chargeTime),
+            0.0F, 1.0F
+        );
+        hud.chainsawOverheat01 = glm::clamp(
+            m_killerPowerState.chainsawOverheat / std::max(0.01F, m_chainsawConfig.overheatMax),
+            0.0F, 1.0F
+        );
+        hud.chainsawSprintTimer = m_killerPowerState.chainsawSprintTimer;
+        hud.chainsawSprintMaxDuration = 0.0F; // No max duration - sprint until collision/release/hit
+        hud.chainsawCurrentSpeed = m_killerPowerState.chainsawCurrentSpeed;
+        hud.chainsawDebugEnabled = m_chainsawDebugEnabled;
+
+        // New HUD fields
+        hud.chainsawTurnBoostActive = m_killerPowerState.chainsawInTurnBoostWindow;
+        hud.chainsawRecoveryTimer = m_killerPowerState.chainsawRecoveryTimer;
+
+        // Calculate recovery duration based on cause
+        if (m_killerPowerState.chainsawRecoveryWasCollision)
+        {
+            hud.chainsawRecoveryDuration = m_chainsawConfig.collisionRecoveryDuration;
+        }
+        else if (m_killerPowerState.chainsawRecoveryWasHit)
+        {
+            hud.chainsawRecoveryDuration = m_chainsawConfig.recoveryHitDuration;
+        }
+        else
+        {
+            hud.chainsawRecoveryDuration = m_chainsawConfig.recoveryCancelDuration;
+        }
+
+        hud.chainsawOverheatBuffed = m_killerPowerState.chainsawOverheat >= m_chainsawConfig.overheatBuffThreshold;
+
+        // Calculate current turn rate
+        if (m_killerPowerState.chainsawState == ChainsawSprintState::Sprinting)
+        {
+            float turnRate = m_killerPowerState.chainsawInTurnBoostWindow
+                ? m_chainsawConfig.turnBoostRate
+                : m_chainsawConfig.turnRestrictedRate;
+            if (hud.chainsawOverheatBuffed)
+            {
+                turnRate *= (1.0F + m_chainsawConfig.overheatTurnBonus);
+            }
+            hud.chainsawTurnRate = turnRate;
+        }
+        else
+        {
+            hud.chainsawTurnRate = m_chainsawConfig.turnRateDegreesPerSec;
+        }
+    }
 
     // Check if killer is near a locker
     hud.lockerInRange = false;
@@ -9972,6 +10080,13 @@ void GameplaySystems::UpdateKillerPowerSystem(const RoleCommand& killerCommand, 
         return;
     }
 
+    if (powerDef->id == "chainsaw_sprint")
+    {
+        m_trapPreviewActive = false;
+        UpdateChainsawSprintPowerSystem(killerCommand, fixedDt);
+        return;
+    }
+
     if (powerDef->id != "bear_trap")
     {
         m_trapPreviewActive = false;
@@ -11465,6 +11580,490 @@ std::string GameplaySystems::StatusEffectDump() const
     }
 
     return oss.str();
+}
+
+// ============================================================================
+// Chainsaw Sprint Power System Implementation
+// ============================================================================
+
+void GameplaySystems::LoadChainsawSprintConfig()
+{
+    // Load config from power definition params (already loaded by loadout catalog)
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "chainsaw_sprint")
+    {
+        ItemPowerLog("ChainsawSprint: Using default config (power not equipped)");
+        return;
+    }
+
+    // Helper to read float from power params
+    const auto readParam = [&powerDef](const std::string& key, float fallback) -> float {
+        if (powerDef == nullptr)
+        {
+            return fallback;
+        }
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+
+    m_chainsawConfig.chargeTime = readParam("charge_time", 2.5F);
+    m_chainsawConfig.sprintSpeedMultiplier = readParam("sprint_speed_multiplier", 2.4F);
+    // REMOVED: maxSprintDuration - sprint continues until collision/RMB release/hit
+    m_chainsawConfig.turnRateDegreesPerSec = readParam("turn_rate_degrees_per_sec", 90.0F);
+    m_chainsawConfig.recoveryDuration = readParam("recovery_duration", 1.5F);
+    m_chainsawConfig.collisionRecoveryDuration = readParam("collision_recovery_duration", 2.5F);
+    m_chainsawConfig.overheatMax = readParam("overheat_max", 100.0F);
+    m_chainsawConfig.overheatPerSecondCharge = readParam("overheat_per_second_charge", 15.0F);
+    m_chainsawConfig.overheatPerSecondSprint = readParam("overheat_per_second_sprint", 25.0F);
+    m_chainsawConfig.overheatCooldownRate = readParam("overheat_cooldown_rate", 10.0F);
+    m_chainsawConfig.overheatThreshold = readParam("overheat_threshold", 20.0F);
+    m_chainsawConfig.fovBoost = readParam("fov_boost", 15.0F);
+    m_chainsawConfig.collisionRaycastDistance = readParam("collision_raycast_distance", 2.0F);
+    m_chainsawConfig.survivorHitRadius = readParam("survivor_hit_radius", 1.2F);
+
+    // New turn rate phases
+    m_chainsawConfig.turnBoostWindow = readParam("turn_boost_window", 0.5F);
+    m_chainsawConfig.turnBoostRate = readParam("turn_boost_rate", 270.0F);
+    m_chainsawConfig.turnRestrictedRate = readParam("turn_restricted_rate", 45.0F);
+
+    // New recovery durations
+    m_chainsawConfig.recoveryHitDuration = readParam("recovery_hit_duration", 0.5F);
+    m_chainsawConfig.recoveryCancelDuration = readParam("recovery_cancel_duration", 0.5F);
+
+    // New overheat buff system
+    m_chainsawConfig.overheatBuffThreshold = readParam("overheat_buff_threshold", 100.0F);
+    m_chainsawConfig.overheatChargeBonus = readParam("overheat_charge_bonus", 0.2F);
+    m_chainsawConfig.overheatSpeedBonus = readParam("overheat_speed_bonus", 0.1F);
+    m_chainsawConfig.overheatTurnBonus = readParam("overheat_turn_bonus", 0.3F);
+
+    // Movement during charging
+    m_chainsawConfig.chargeSlowdownMultiplier = readParam("charge_slowdown_multiplier", 0.3F);
+
+    ItemPowerLog("ChainsawSprint: Config loaded from power definition");
+}
+
+void GameplaySystems::ApplyChainsawConfig(
+    float chargeTime,
+    float sprintSpeedMultiplier,
+    float turnBoostWindow,
+    float turnBoostRate,
+    float turnRestrictedRate,
+    float collisionRecoveryDuration,
+    float recoveryHitDuration,
+    float recoveryCancelDuration,
+    float overheatPerSecondCharge,
+    float overheatPerSecondSprint,
+    float overheatCooldownRate,
+    float overheatBuffThreshold,
+    float overheatChargeBonus,
+    float overheatSpeedBonus,
+    float overheatTurnBonus,
+    float collisionRaycastDistance,
+    float survivorHitRadius,
+    float chargeSlowdownMultiplier
+)
+{
+    m_chainsawConfig.chargeTime = chargeTime;
+    m_chainsawConfig.sprintSpeedMultiplier = sprintSpeedMultiplier;
+    m_chainsawConfig.turnBoostWindow = turnBoostWindow;
+    m_chainsawConfig.turnBoostRate = turnBoostRate;
+    m_chainsawConfig.turnRestrictedRate = turnRestrictedRate;
+    m_chainsawConfig.collisionRecoveryDuration = collisionRecoveryDuration;
+    m_chainsawConfig.recoveryHitDuration = recoveryHitDuration;
+    m_chainsawConfig.recoveryCancelDuration = recoveryCancelDuration;
+    m_chainsawConfig.overheatPerSecondCharge = overheatPerSecondCharge;
+    m_chainsawConfig.overheatPerSecondSprint = overheatPerSecondSprint;
+    m_chainsawConfig.overheatCooldownRate = overheatCooldownRate;
+    m_chainsawConfig.overheatBuffThreshold = overheatBuffThreshold;
+    m_chainsawConfig.overheatChargeBonus = overheatChargeBonus;
+    m_chainsawConfig.overheatSpeedBonus = overheatSpeedBonus;
+    m_chainsawConfig.overheatTurnBonus = overheatTurnBonus;
+    m_chainsawConfig.collisionRaycastDistance = collisionRaycastDistance;
+    m_chainsawConfig.survivorHitRadius = survivorHitRadius;
+    m_chainsawConfig.chargeSlowdownMultiplier = chargeSlowdownMultiplier;
+
+    ItemPowerLog("ChainsawSprint: Config applied from settings UI");
+}
+
+void GameplaySystems::UpdateChainsawSprintPowerSystem(const RoleCommand& killerCommand, float fixedDt)
+{
+    if (m_killer == 0)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "chainsaw_sprint")
+    {
+        return;
+    }
+
+    // Load config on first use
+    static bool configLoaded = false;
+    if (!configLoaded)
+    {
+        LoadChainsawSprintConfig();
+        configLoaded = true;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    auto killerActorIt = m_world.Actors().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end() || killerActorIt == m_world.Actors().end())
+    {
+        return;
+    }
+
+    glm::vec3& killerPos = killerTransformIt->second.position;
+    glm::vec3& killerForward = killerTransformIt->second.forward;
+    glm::vec3& killerVelocity = killerActorIt->second.velocity;
+
+    const bool canUsePower = m_killerAttackState == KillerAttackState::Idle &&
+                             killerActorIt->second.stunTimer <= 0.0F &&
+                             m_survivorState != SurvivorHealthState::Carried;
+
+    // Check if overheat buff is active
+    const bool overheatBuffed = m_killerPowerState.chainsawOverheat >= m_chainsawConfig.overheatBuffThreshold;
+
+    // Helper to transition to recovery with cause tracking
+    const auto transitionToRecovery = [&](bool fromCollision, bool fromHit) {
+        m_killerPowerState.chainsawState = ChainsawSprintState::Recovery;
+        m_killerPowerState.chainsawRecoveryTimer = 0.0F;
+        m_killerPowerState.chainsawSprintTimer = 0.0F;
+        m_killerPowerState.chainsawChargeTimer = 0.0F;
+        m_killerPowerState.chainsawCurrentSpeed = 0.0F;
+        m_killerPowerState.chainsawSprintRequiresRelease = true;
+        m_killerPowerState.chainsawInTurnBoostWindow = false;
+        m_killerPowerState.chainsawSprintTurnBoostTimer = 0.0F;
+
+        // Track recovery cause
+        m_killerPowerState.chainsawRecoveryWasCollision = fromCollision;
+        m_killerPowerState.chainsawRecoveryWasHit = fromHit;
+
+        if (fromCollision)
+        {
+            ItemPowerLog("ChainsawSprint: Collision! Entering extended recovery (1.5s)");
+        }
+        else if (fromHit)
+        {
+            ItemPowerLog("ChainsawSprint: Survivor hit! Entering recovery (0.5s)");
+        }
+        else
+        {
+            ItemPowerLog("ChainsawSprint: Cancelled! Entering recovery (0.5s)");
+        }
+    };
+
+    // Reset requires release flag when RMB not held
+    if (!killerCommand.useAltHeld)
+    {
+        m_killerPowerState.chainsawSprintRequiresRelease = false;
+    }
+
+    // State machine
+    switch (m_killerPowerState.chainsawState)
+    {
+        case ChainsawSprintState::Idle:
+        {
+            // Heat decay
+            m_killerPowerState.chainsawOverheat = std::max(
+                0.0F,
+                m_killerPowerState.chainsawOverheat - m_chainsawConfig.overheatCooldownRate * fixedDt
+            );
+
+            // Can start charging if RMB held (no overheat blocking - buff system instead)
+            if (killerCommand.useAltHeld &&
+                !m_killerPowerState.chainsawSprintRequiresRelease &&
+                canUsePower)
+            {
+                m_killerPowerState.chainsawState = ChainsawSprintState::Charging;
+                m_killerPowerState.chainsawChargeTimer = 0.0F;
+                ItemPowerLog("ChainsawSprint: Started charging" + std::string(overheatBuffed ? " (BUFFED)" : ""));
+            }
+            break;
+        }
+
+        case ChainsawSprintState::Charging:
+        {
+            // Cancel conditions (RMB released or cannot use power)
+            if (!killerCommand.useAltHeld || !canUsePower || m_killerPowerState.chainsawSprintRequiresRelease)
+            {
+                // Cancelled - back to idle (partial charge lost)
+                m_killerPowerState.chainsawState = ChainsawSprintState::Idle;
+                m_killerPowerState.chainsawChargeTimer = 0.0F;
+                ItemPowerLog("ChainsawSprint: Charge cancelled");
+                break;
+            }
+
+            // Apply overheat charge bonus
+            float chargeRate = 1.0F;
+            if (overheatBuffed)
+            {
+                chargeRate += m_chainsawConfig.overheatChargeBonus;
+            }
+
+            // Charge progress
+            m_killerPowerState.chainsawChargeTimer += fixedDt * chargeRate;
+
+            // Heat buildup while charging - BUT if already buffed, only decay
+            if (overheatBuffed)
+            {
+                // When buffed, heat only decays until it reaches 0
+                m_killerPowerState.chainsawOverheat = std::max(
+                    0.0F,
+                    m_killerPowerState.chainsawOverheat - m_chainsawConfig.overheatCooldownRate * fixedDt
+                );
+            }
+            else
+            {
+                // Normal heat buildup
+                m_killerPowerState.chainsawOverheat = std::min(
+                    m_chainsawConfig.overheatBuffThreshold,
+                    m_killerPowerState.chainsawOverheat + m_chainsawConfig.overheatPerSecondCharge * fixedDt
+                );
+            }
+
+            // AUTO-SPRINT when fully charged (no release needed)
+            if (m_killerPowerState.chainsawChargeTimer >= m_chainsawConfig.chargeTime)
+            {
+                m_killerPowerState.chainsawState = ChainsawSprintState::Sprinting;
+                m_killerPowerState.chainsawSprintTimer = 0.0F;
+                m_killerPowerState.chainsawHitThisSprint = false;
+                m_killerPowerState.chainsawCollisionThisSprint = false;
+                m_killerPowerState.chainsawSprintRequiresRelease = true;
+                m_killerPowerState.chainsawSprintTurnBoostTimer = 0.0F;
+                m_killerPowerState.chainsawInTurnBoostWindow = true;
+                ItemPowerLog("ChainsawSprint: Sprint started!" + std::string(overheatBuffed ? " (BUFFED)" : ""));
+                break;
+            }
+
+            // Reduced movement while charging (from config)
+            killerVelocity *= m_chainsawConfig.chargeSlowdownMultiplier;
+            break;
+        }
+
+        case ChainsawSprintState::Sprinting:
+        {
+            m_killerPowerState.chainsawSprintTimer += fixedDt;
+
+            // Update turn boost window
+            m_killerPowerState.chainsawSprintTurnBoostTimer += fixedDt;
+            if (m_killerPowerState.chainsawSprintTurnBoostTimer >= m_chainsawConfig.turnBoostWindow)
+            {
+                m_killerPowerState.chainsawInTurnBoostWindow = false;
+            }
+
+            // Heat buildup while sprinting - BUT if already buffed, only decay
+            if (overheatBuffed)
+            {
+                // When buffed, heat only decays until it reaches 0
+                m_killerPowerState.chainsawOverheat = std::max(
+                    0.0F,
+                    m_killerPowerState.chainsawOverheat - m_chainsawConfig.overheatCooldownRate * fixedDt
+                );
+            }
+            else
+            {
+                // Normal heat buildup
+                m_killerPowerState.chainsawOverheat = std::min(
+                    m_chainsawConfig.overheatBuffThreshold,
+                    m_killerPowerState.chainsawOverheat + m_chainsawConfig.overheatPerSecondSprint * fixedDt
+                );
+            }
+
+            // Calculate sprint speed with overheat bonus
+            float speedMult = m_chainsawConfig.sprintSpeedMultiplier;
+            if (overheatBuffed)
+            {
+                speedMult += m_chainsawConfig.overheatSpeedBonus;
+            }
+
+            const float baseSpeed = m_tuning.killerMoveSpeed;
+            const float sprintSpeed = baseSpeed * speedMult;
+            m_killerPowerState.chainsawCurrentSpeed = sprintSpeed;
+
+            // Move forward at sprint speed - use HORIZONTAL forward only (no flying!)
+            // This ensures the killer stays on the ground even if camera pitch is non-zero
+            glm::vec3 forwardXZ = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+            killerVelocity = forwardXZ * sprintSpeed;
+
+            // === SURVIVOR HIT DETECTION (FIRST - before wall collision) ===
+            // Must check survivor hit BEFORE wall collision, otherwise raycast hitting
+            // a wall at 2.0m would prevent detecting a survivor at 1.5m
+            if (m_survivor != 0 && !m_killerPowerState.chainsawHitThisSprint)
+            {
+                auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+                if (survivorTransformIt != m_world.Transforms().end())
+                {
+                    const glm::vec3 survivorPos = survivorTransformIt->second.position;
+
+                    // Use XZ (horizontal) distance for hit detection, like DBD
+                    const float distXZ = DistanceXZ(killerPos, survivorPos);
+
+                    // Hit radius includes both capsule radii for generous detection
+                    const float hitRadius = m_chainsawConfig.survivorHitRadius
+                        + m_tuning.killerCapsuleRadius
+                        + m_tuning.survivorCapsuleRadius;
+
+                    if (distXZ <= hitRadius)
+                    {
+                        // For direction check, use horizontal direction only
+                        const glm::vec3 toSurvivorXZ = glm::normalize(glm::vec3(
+                            survivorPos.x - killerPos.x,
+                            0.0F,
+                            survivorPos.z - killerPos.z
+                        ));
+                        const glm::vec3 killerForwardXZ = glm::normalize(glm::vec3(
+                            killerForward.x,
+                            0.0F,
+                            killerForward.z
+                        ));
+                        const float dot = glm::dot(killerForwardXZ, toSurvivorXZ);
+
+                        if (dot > 0.5F) // ~60 degree cone in front
+                        {
+                            m_killerPowerState.chainsawHitThisSprint = true;
+
+                            // Apply Downed state (instant down - force=true to bypass state checks)
+                            // Chainsaw instantly downs from any state (Healthy, Injured, etc.)
+                            if (m_survivorState != SurvivorHealthState::Downed &&
+                                m_survivorState != SurvivorHealthState::Dead &&
+                                m_survivorState != SurvivorHealthState::Hooked &&
+                                m_survivorState != SurvivorHealthState::Carried)
+                            {
+                                SetSurvivorState(SurvivorHealthState::Downed, "chainsaw_hit", true);
+
+                                // Blood FX
+                                const engine::fx::FxNetMode netMode = m_networkAuthorityMode
+                                    ? engine::fx::FxNetMode::ServerBroadcast
+                                    : engine::fx::FxNetMode::Local;
+                                SpawnGameplayFx("fx_blood_splatter_large", survivorPos, killerForward, netMode);
+                                AddRuntimeMessage("CHAINSAW DOWN!", 2.0F);
+                                ItemPowerLog("ChainsawSprint: Survivor hit and downed!");
+                            }
+
+                            transitionToRecovery(false, true);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // === COLLISION DETECTION (SECOND - after survivor check) ===
+            const glm::vec3 rayOrigin = killerPos + glm::vec3(0.0F, 0.5F, 0.0F);
+            const glm::vec3 rayEnd = rayOrigin + killerForward * m_chainsawConfig.collisionRaycastDistance;
+            const auto hitOpt = m_physics.RaycastNearest(rayOrigin, rayEnd);
+
+            if (hitOpt.has_value())
+            {
+                // Wall collision - longer recovery (1.5s)
+                m_killerPowerState.chainsawCollisionThisSprint = true;
+                transitionToRecovery(true, false);
+                break;
+            }
+
+            // === End Conditions ===
+            // Manual cancel (release RMB) - 0.5s recovery
+            if (killerCommand.useAltReleased)
+            {
+                transitionToRecovery(false, false);
+                break;
+            }
+
+            // No max duration - sprint continues until collision/RMB release/hit
+            break;
+        }
+
+        case ChainsawSprintState::Recovery:
+        {
+            // Stunned - no movement
+            killerVelocity = glm::vec3(0.0F);
+
+            m_killerPowerState.chainsawRecoveryTimer += fixedDt;
+
+            // Heat decay during recovery
+            m_killerPowerState.chainsawOverheat = std::max(
+                0.0F,
+                m_killerPowerState.chainsawOverheat - m_chainsawConfig.overheatCooldownRate * fixedDt
+            );
+
+            // Variable recovery duration based on cause
+            float recoveryDuration = m_chainsawConfig.recoveryCancelDuration; // 0.5s default
+            if (m_killerPowerState.chainsawRecoveryWasCollision)
+            {
+                recoveryDuration = m_chainsawConfig.collisionRecoveryDuration; // 1.5s for collision
+            }
+            else if (m_killerPowerState.chainsawRecoveryWasHit)
+            {
+                recoveryDuration = m_chainsawConfig.recoveryHitDuration; // 0.5s for hit
+            }
+
+            if (m_killerPowerState.chainsawRecoveryTimer >= recoveryDuration)
+            {
+                m_killerPowerState.chainsawState = ChainsawSprintState::Idle;
+                m_killerPowerState.chainsawRecoveryWasCollision = false;
+                m_killerPowerState.chainsawRecoveryWasHit = false;
+                ItemPowerLog("ChainsawSprint: Recovery complete");
+            }
+            break;
+        }
+    }
+}
+
+void GameplaySystems::RenderChainsawDebug(engine::render::Renderer& renderer)
+{
+    if (!m_chainsawDebugEnabled || m_killer == 0)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "chainsaw_sprint")
+    {
+        return;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+
+    const glm::vec3& killerPos = killerTransformIt->second.position;
+    const glm::vec3& killerForward = killerTransformIt->second.forward;
+
+    // Draw forward collision raycast line (red)
+    const glm::vec3 rayStart = killerPos + glm::vec3(0.0F, 0.5F, 0.0F);
+    const glm::vec3 rayEnd = rayStart + killerForward * m_chainsawConfig.collisionRaycastDistance;
+    renderer.DrawLine(rayStart, rayEnd, glm::vec3(1.0F, 0.2F, 0.2F));
+
+    // Draw survivor hit radius indicator (yellow circle on ground)
+    const glm::vec3 hitCenter = killerPos + killerForward * 0.6F;
+    const float hitRadius = m_chainsawConfig.survivorHitRadius;
+    renderer.DrawCircle(hitCenter, hitRadius, 16, glm::vec3(1.0F, 1.0F, 0.2F));
+}
+
+void GameplaySystems::SetChainsawOverheat(float value)
+{
+    m_killerPowerState.chainsawOverheat = glm::clamp(value, 0.0F, m_chainsawConfig.overheatMax);
+    ItemPowerLog("ChainsawSprint: Overheat set to " + std::to_string(m_killerPowerState.chainsawOverheat));
+}
+
+void GameplaySystems::ResetChainsawState()
+{
+    m_killerPowerState.chainsawState = ChainsawSprintState::Idle;
+    m_killerPowerState.chainsawChargeTimer = 0.0F;
+    m_killerPowerState.chainsawSprintTimer = 0.0F;
+    m_killerPowerState.chainsawRecoveryTimer = 0.0F;
+    m_killerPowerState.chainsawOverheat = 0.0F;
+    m_killerPowerState.chainsawCurrentSpeed = 0.0F;
+    m_killerPowerState.chainsawHitThisSprint = false;
+    m_killerPowerState.chainsawCollisionThisSprint = false;
+    m_killerPowerState.chainsawSprintRequiresRelease = false;
+    m_killerPowerState.chainsawSprintTurnBoostTimer = 0.0F;
+    m_killerPowerState.chainsawInTurnBoostWindow = false;
+    m_killerPowerState.chainsawRecoveryWasCollision = false;
+    m_killerPowerState.chainsawRecoveryWasHit = false;
+    ItemPowerLog("ChainsawSprint: State reset to Idle");
 }
 
 } // namespace game::gameplay

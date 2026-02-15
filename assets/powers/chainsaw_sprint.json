@@ -1,0 +1,32 @@
+{
+  "asset_version": 1,
+  "description": "Charge and unleash a high-speed chainsaw sprint. Instantly downs survivors on hit.",
+  "display_name": "Chainsaw Sprint",
+  "id": "chainsaw_sprint",
+  "params": {
+    "charge_time": 2.5,
+    "sprint_speed_multiplier": 2.4,
+    "turn_rate_degrees_per_sec": 90.0,
+    "recovery_duration": 1.5,
+    "collision_recovery_duration": 2.5,
+    "overheat_max": 100.0,
+    "overheat_per_second_charge": 15.0,
+    "overheat_per_second_sprint": 25.0,
+    "overheat_cooldown_rate": 10.0,
+    "overheat_threshold": 20.0,
+    "fov_boost": 15.0,
+    "collision_raycast_distance": 2.0,
+
+    "turn_boost_window": 0.5,
+    "turn_boost_rate": 360.0,
+    "turn_restricted_rate": 90.0,
+    "recovery_hit_duration": 0.5,
+    "recovery_cancel_duration": 0.5,
+    "overheat_buff_threshold": 100.0,
+    "overheat_charge_bonus": 0.2,
+    "overheat_speed_bonus": 0.1,
+    "overheat_turn_bonus": 0.15,
+    "survivor_hit_radius": 1.5,
+    "charge_slowdown_multiplier": 0.3
+  }
+}

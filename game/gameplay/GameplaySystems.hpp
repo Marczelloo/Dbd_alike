@@ -228,6 +228,22 @@ struct HudState
     float lockerReplenishProgress = 0.0F;
     bool lockerInRange = false;
 
+    // Chainsaw sprint power HUD fields
+    std::string chainsawState = "Idle";
+    float chainsawCharge01 = 0.0F;
+    float chainsawOverheat01 = 0.0F;
+    float chainsawSprintTimer = 0.0F;
+    float chainsawSprintMaxDuration = 5.0F;
+    float chainsawCurrentSpeed = 0.0F;
+    bool chainsawDebugEnabled = false;
+
+    // New chainsaw HUD fields
+    bool chainsawTurnBoostActive = false;     // True during first 0.5s
+    float chainsawRecoveryTimer = 0.0F;       // Time remaining in recovery
+    float chainsawRecoveryDuration = 0.0F;    // Total recovery duration
+    bool chainsawOverheatBuffed = false;      // True when heat >= 100%
+    float chainsawTurnRate = 0.0F;            // Current turn rate (deg/sec)
+
     // Perks debug info
     struct ActivePerkDebug
     {
@@ -651,6 +667,35 @@ public:
     [[nodiscard]] int GetHatchetCount() const { return m_killerPowerState.hatchetCount; }
     [[nodiscard]] int GetActiveProjectileCount() const;
 
+    // Chainsaw sprint power debug and control
+    void SetChainsawDebug(bool enabled) { m_chainsawDebugEnabled = enabled; }
+    [[nodiscard]] bool ChainsawDebugEnabled() const { return m_chainsawDebugEnabled; }
+    void SetChainsawOverheat(float value);
+    void ResetChainsawState();
+    [[nodiscard]] float GetChainsawOverheat() const { return m_killerPowerState.chainsawOverheat; }
+
+    // Apply chainsaw config from external settings (for live tuning)
+    void ApplyChainsawConfig(
+        float chargeTime,
+        float sprintSpeedMultiplier,
+        float turnBoostWindow,
+        float turnBoostRate,
+        float turnRestrictedRate,
+        float collisionRecoveryDuration,
+        float recoveryHitDuration,
+        float recoveryCancelDuration,
+        float overheatPerSecondCharge,
+        float overheatPerSecondSprint,
+        float overheatCooldownRate,
+        float overheatBuffThreshold,
+        float overheatChargeBonus,
+        float overheatSpeedBonus,
+        float overheatTurnBonus,
+        float collisionRaycastDistance,
+        float survivorHitRadius,
+        float chargeSlowdownMultiplier
+    );
+
     // Phase B2/B3: Scratch Marks and Blood Pools debug control
     void SetScratchDebug(bool enabled);
     void SetBloodDebug(bool enabled);
@@ -745,6 +790,15 @@ private:
         ChargingLunge,
         Lunging,
         Recovering
+    };
+
+    enum class ChainsawSprintState
+    {
+        Idle,
+        Charging,
+        Sprinting,
+        Recovery
+        // REMOVED: Overheated - now overheat grants buffs instead of locking
     };
 
     enum class SkillCheckMode
@@ -940,6 +994,9 @@ private:
     void UpdateBearTrapSystem(const RoleCommand& survivorCommand, const RoleCommand& killerCommand, float fixedDt);
     void UpdateWraithPowerSystem(const RoleCommand& killerCommand, float fixedDt);
     void UpdateHatchetPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void UpdateChainsawSprintPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void LoadChainsawSprintConfig();
+    void RenderChainsawDebug(engine::render::Renderer& renderer);
     void UpdateProjectiles(float fixedDt);
     engine::scene::Entity SpawnHatchetProjectile(const glm::vec3& origin, const glm::vec3& direction, float charge01);
     engine::scene::Entity SpawnLocker(const glm::vec3& position, const glm::vec3& forward);
@@ -1252,6 +1309,25 @@ private:
         float lockerReplenishTimer = 0.0F;
         bool lockerReplenishing = false;
         engine::scene::Entity lockerTargetEntity = 0;
+
+        // Chainsaw sprint power state
+        ChainsawSprintState chainsawState = ChainsawSprintState::Idle;
+        float chainsawChargeTimer = 0.0F;
+        float chainsawSprintTimer = 0.0F;
+        float chainsawRecoveryTimer = 0.0F;
+        float chainsawOverheat = 0.0F;
+        float chainsawCurrentSpeed = 0.0F;
+        bool chainsawHitThisSprint = false;
+        bool chainsawCollisionThisSprint = false;
+        bool chainsawSprintRequiresRelease = false;
+
+        // New turn rate tracking
+        float chainsawSprintTurnBoostTimer = 0.0F;  // Timer for turn boost (0-0.5s)
+        bool chainsawInTurnBoostWindow = false;     // True during first 0.5s
+
+        // New recovery tracking
+        bool chainsawRecoveryWasCollision = false;  // Track recovery type
+        bool chainsawRecoveryWasHit = false;        // Track if recovery from hit
     };
 
     SurvivorItemRuntimeState m_survivorItemState{};
@@ -1319,6 +1395,42 @@ private:
         bool allowSurvivorSeeOwn = false;
     };
 
+    struct ChainsawSprintConfig
+    {
+        float chargeTime = 2.5F;
+        float sprintSpeedMultiplier = 2.4F;
+        // REMOVED: maxSprintDuration - sprint until collision/RMB release/hit
+        float turnRateDegreesPerSec = 90.0F;
+        float recoveryDuration = 1.5F;           // Default recovery (for RMB release/hit)
+        float collisionRecoveryDuration = 2.5F;  // Wall collision recovery (longer)
+        float overheatMax = 100.0F;
+        float overheatPerSecondCharge = 15.0F;
+        float overheatPerSecondSprint = 25.0F;
+        float overheatCooldownRate = 10.0F;
+        float overheatThreshold = 20.0F;
+        float fovBoost = 15.0F;
+        float collisionRaycastDistance = 2.0F;
+        float survivorHitRadius = 1.5F;
+
+        // New turn rate phases
+        float turnBoostWindow = 0.5F;            // First 0.5s = high turn rate
+        float turnBoostRate = 360.0F;            // Deg/sec during boost
+        float turnRestrictedRate = 90.0F;        // Deg/sec after boost window
+
+        // New recovery durations
+        float recoveryHitDuration = 0.5F;        // Recovery after hitting survivor
+        float recoveryCancelDuration = 0.5F;     // Recovery after RMB release
+
+        // New overheat buff system (instead of locked state)
+        float overheatBuffThreshold = 100.0F;    // When buffs activate
+        float overheatChargeBonus = 0.2F;        // +20% charge rate when buffed
+        float overheatSpeedBonus = 0.1F;         // +10% sprint speed when buffed
+        float overheatTurnBonus = 0.15F;         // +15% turn rate when buffed
+
+        // Movement during charging
+        float chargeSlowdownMultiplier = 0.3F;   // Movement speed while charging (0.3 = 30% speed)
+    };
+
     void UpdateScratchMarks(float fixedDt, const glm::vec3& survivorPos, const glm::vec3& survivorForward, bool survivorSprinting);
     void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
     void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
@@ -1343,6 +1455,9 @@ private:
     BloodProfile m_bloodProfile{};
     bool m_scratchDebugEnabled = false;
     bool m_bloodDebugEnabled = false;
+
+    ChainsawSprintConfig m_chainsawConfig{};
+    bool m_chainsawDebugEnabled = false;
 
     KillerLookLight m_killerLookLight{};
     bool m_killerLookLightDebug = false;

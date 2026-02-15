@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "cosmetic_id": "default",
+  "display_name": "Hillbilly",
+  "id": "killer_hillbilly",
+  "model_path": "assets/meshes/killer_hillbilly.glb",
+  "power_id": "chainsaw_sprint"
+}

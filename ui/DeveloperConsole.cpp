@@ -2664,6 +2664,49 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess(std::string("hatchet_debug ") + (enabled ? "enabled" : "disabled"));
         });
 
+        RegisterCommand("chainsaw_debug on|off", "Toggle chainsaw sprint debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: chainsaw_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                LogError("Expected on|off");
+                return;
+            }
+            context.gameplay->SetChainsawDebug(enabled);
+            LogSuccess(std::string("chainsaw_debug ") + (enabled ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("chainsaw_heat <0-100>", "Set chainsaw overheat value for testing", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: chainsaw_heat <0-100>");
+                return;
+            }
+            try
+            {
+                const float value = std::stof(tokens[1]);
+                context.gameplay->SetChainsawOverheat(value);
+                LogSuccess("Chainsaw overheat set to " + std::to_string(value));
+            }
+            catch (...)
+            {
+                LogError("Invalid value. Usage: chainsaw_heat <0-100>");
+            }
+        });
+
+        RegisterCommand("chainsaw_reset", "Reset chainsaw state to Idle", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            context.gameplay->ResetChainsawState();
+            LogSuccess("Chainsaw state reset to Idle");
+        });
+
         RegisterCommand("locker_spawn", "Spawn a locker at killer position", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.gameplay == nullptr)
             {

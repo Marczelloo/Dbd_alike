@@ -3757,6 +3757,36 @@ bool App::LoadPowersConfig()
         readHtInt("locker_replenish_count", m_powersApplied.hatchetLockerReplenishCount);
     }
 
+    // Chainsaw Sprint section
+    if (root.contains("chainsaw_sprint") && root["chainsaw_sprint"].is_object())
+    {
+        const auto& cs = root["chainsaw_sprint"];
+        auto readCsFloat = [&](const char* key, float& target) {
+            if (cs.contains(key) && cs[key].is_number())
+            {
+                target = cs[key].get<float>();
+            }
+        };
+        readCsFloat("charge_time", m_powersApplied.chainsawChargeTime);
+        readCsFloat("sprint_speed_multiplier", m_powersApplied.chainsawSprintSpeedMultiplier);
+        readCsFloat("turn_boost_window", m_powersApplied.chainsawTurnBoostWindow);
+        readCsFloat("turn_boost_rate", m_powersApplied.chainsawTurnBoostRate);
+        readCsFloat("turn_restricted_rate", m_powersApplied.chainsawTurnRestrictedRate);
+        readCsFloat("collision_recovery_duration", m_powersApplied.chainsawCollisionRecoveryDuration);
+        readCsFloat("recovery_hit_duration", m_powersApplied.chainsawRecoveryHitDuration);
+        readCsFloat("recovery_cancel_duration", m_powersApplied.chainsawRecoveryCancelDuration);
+        readCsFloat("overheat_per_second_charge", m_powersApplied.chainsawOverheatPerSecondCharge);
+        readCsFloat("overheat_per_second_sprint", m_powersApplied.chainsawOverheatPerSecondSprint);
+        readCsFloat("overheat_cooldown_rate", m_powersApplied.chainsawOverheatCooldownRate);
+        readCsFloat("overheat_buff_threshold", m_powersApplied.chainsawOverheatBuffThreshold);
+        readCsFloat("overheat_charge_bonus", m_powersApplied.chainsawOverheatChargeBonus);
+        readCsFloat("overheat_speed_bonus", m_powersApplied.chainsawOverheatSpeedBonus);
+        readCsFloat("overheat_turn_bonus", m_powersApplied.chainsawOverheatTurnBonus);
+        readCsFloat("collision_raycast_distance", m_powersApplied.chainsawCollisionRaycastDistance);
+        readCsFloat("survivor_hit_radius", m_powersApplied.chainsawSurvivorHitRadius);
+        readCsFloat("charge_slowdown_multiplier", m_powersApplied.chainsawChargeSlowdownMultiplier);
+    }
+
     m_powersEditing = m_powersApplied;
     return true;
 }
@@ -3809,6 +3839,28 @@ bool App::SavePowersConfig() const
     hatchetThrow["locker_replenish_count"] = m_powersApplied.hatchetLockerReplenishCount;
     root["hatchet_throw"] = hatchetThrow;
 
+    // Chainsaw Sprint section
+    json chainsawSprint;
+    chainsawSprint["charge_time"] = m_powersApplied.chainsawChargeTime;
+    chainsawSprint["sprint_speed_multiplier"] = m_powersApplied.chainsawSprintSpeedMultiplier;
+    chainsawSprint["turn_boost_window"] = m_powersApplied.chainsawTurnBoostWindow;
+    chainsawSprint["turn_boost_rate"] = m_powersApplied.chainsawTurnBoostRate;
+    chainsawSprint["turn_restricted_rate"] = m_powersApplied.chainsawTurnRestrictedRate;
+    chainsawSprint["collision_recovery_duration"] = m_powersApplied.chainsawCollisionRecoveryDuration;
+    chainsawSprint["recovery_hit_duration"] = m_powersApplied.chainsawRecoveryHitDuration;
+    chainsawSprint["recovery_cancel_duration"] = m_powersApplied.chainsawRecoveryCancelDuration;
+    chainsawSprint["overheat_per_second_charge"] = m_powersApplied.chainsawOverheatPerSecondCharge;
+    chainsawSprint["overheat_per_second_sprint"] = m_powersApplied.chainsawOverheatPerSecondSprint;
+    chainsawSprint["overheat_cooldown_rate"] = m_powersApplied.chainsawOverheatCooldownRate;
+    chainsawSprint["overheat_buff_threshold"] = m_powersApplied.chainsawOverheatBuffThreshold;
+    chainsawSprint["overheat_charge_bonus"] = m_powersApplied.chainsawOverheatChargeBonus;
+    chainsawSprint["overheat_speed_bonus"] = m_powersApplied.chainsawOverheatSpeedBonus;
+    chainsawSprint["overheat_turn_bonus"] = m_powersApplied.chainsawOverheatTurnBonus;
+    chainsawSprint["collision_raycast_distance"] = m_powersApplied.chainsawCollisionRaycastDistance;
+    chainsawSprint["survivor_hit_radius"] = m_powersApplied.chainsawSurvivorHitRadius;
+    chainsawSprint["charge_slowdown_multiplier"] = m_powersApplied.chainsawChargeSlowdownMultiplier;
+    root["chainsaw_sprint"] = chainsawSprint;
+
     std::ofstream stream(path);
     if (!stream.is_open())
     {
@@ -3852,6 +3904,28 @@ void App::ApplyPowersSettings(const PowersTuning& tuning, bool fromServer)
     m_gameplayApplied.hatchetMaxRange = glm::max(1.0F, tuning.hatchetMaxRange);
     m_gameplayApplied.hatchetLockerReplenishTime = glm::max(0.1F, tuning.hatchetLockerReplenishTime);
     m_gameplayApplied.hatchetLockerReplenishCount = glm::max(1, tuning.hatchetLockerReplenishCount);
+
+    // Chainsaw Sprint - apply directly to GameplaySystems for live tuning
+    m_gameplay.ApplyChainsawConfig(
+        glm::max(0.1F, tuning.chainsawChargeTime),
+        glm::max(1.0F, tuning.chainsawSprintSpeedMultiplier),
+        glm::max(0.1F, tuning.chainsawTurnBoostWindow),
+        glm::max(10.0F, tuning.chainsawTurnBoostRate),
+        glm::max(10.0F, tuning.chainsawTurnRestrictedRate),
+        glm::max(0.1F, tuning.chainsawCollisionRecoveryDuration),
+        glm::max(0.1F, tuning.chainsawRecoveryHitDuration),
+        glm::max(0.1F, tuning.chainsawRecoveryCancelDuration),
+        glm::max(1.0F, tuning.chainsawOverheatPerSecondCharge),
+        glm::max(1.0F, tuning.chainsawOverheatPerSecondSprint),
+        glm::max(1.0F, tuning.chainsawOverheatCooldownRate),
+        glm::max(50.0F, tuning.chainsawOverheatBuffThreshold),
+        glm::clamp(tuning.chainsawOverheatChargeBonus, 0.0F, 1.0F),
+        glm::clamp(tuning.chainsawOverheatSpeedBonus, 0.0F, 1.0F),
+        glm::clamp(tuning.chainsawOverheatTurnBonus, 0.0F, 1.0F),
+        glm::max(0.5F, tuning.chainsawCollisionRaycastDistance),
+        glm::max(0.5F, tuning.chainsawSurvivorHitRadius),
+        glm::clamp(tuning.chainsawChargeSlowdownMultiplier, 0.0F, 1.0F)
+    );
 
     m_gameplay.ApplyGameplayTuning(m_gameplayApplied);
 
@@ -6093,6 +6167,26 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         m_ui.SliderFloat("pw_hatchet_locker_time", "Locker Replenish (s)", &p.hatchetLockerReplenishTime, 0.5F, 10.0F, "%.1f");
         m_ui.SliderInt("pw_hatchet_locker_count", "Locker Replenish Count", &p.hatchetLockerReplenishCount, 1, 16);
 
+        m_ui.Label("Chainsaw Sprint (Hillbilly)", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("pw_chainsaw_charge", "Charge Time (s)", &p.chainsawChargeTime, 0.5F, 5.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_speed", "Sprint Speed Mult", &p.chainsawSprintSpeedMultiplier, 1.5F, 4.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_turn_boost_window", "Turn Boost Window (s)", &p.chainsawTurnBoostWindow, 0.1F, 2.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_turn_boost_rate", "Turn Boost Rate (deg/s)", &p.chainsawTurnBoostRate, 30.0F, 300.0F, "%.0f");
+        m_ui.SliderFloat("pw_chainsaw_turn_restricted", "Turn Restricted Rate (deg/s)", &p.chainsawTurnRestrictedRate, 10.0F, 90.0F, "%.0f");
+        m_ui.SliderFloat("pw_chainsaw_collision_recovery", "Collision Recovery (s)", &p.chainsawCollisionRecoveryDuration, 0.5F, 5.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_hit_recovery", "Hit Recovery (s)", &p.chainsawRecoveryHitDuration, 0.1F, 2.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_cancel_recovery", "Cancel Recovery (s)", &p.chainsawRecoveryCancelDuration, 0.1F, 2.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_heat_charge", "Heat/Sec (Charging)", &p.chainsawOverheatPerSecondCharge, 5.0F, 50.0F, "%.1f");
+        m_ui.SliderFloat("pw_chainsaw_heat_sprint", "Heat/Sec (Sprinting)", &p.chainsawOverheatPerSecondSprint, 5.0F, 50.0F, "%.1f");
+        m_ui.SliderFloat("pw_chainsaw_heat_cooldown", "Heat Cooldown/Sec", &p.chainsawOverheatCooldownRate, 2.0F, 30.0F, "%.1f");
+        m_ui.SliderFloat("pw_chainsaw_buff_threshold", "Buff Threshold (%)", &p.chainsawOverheatBuffThreshold, 50.0F, 150.0F, "%.0f");
+        m_ui.SliderFloat("pw_chainsaw_charge_bonus", "Buff: Charge Bonus", &p.chainsawOverheatChargeBonus, 0.0F, 0.5F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_speed_bonus", "Buff: Speed Bonus", &p.chainsawOverheatSpeedBonus, 0.0F, 0.5F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_turn_bonus", "Buff: Turn Bonus", &p.chainsawOverheatTurnBonus, 0.0F, 0.5F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_raycast_dist", "Collision Raycast Dist", &p.chainsawCollisionRaycastDistance, 0.5F, 5.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_hit_radius", "Survivor Hit Radius", &p.chainsawSurvivorHitRadius, 0.5F, 3.0F, "%.2f");
+        m_ui.SliderFloat("pw_chainsaw_charge_slowdown", "Charge Slowdown", &p.chainsawChargeSlowdownMultiplier, 0.0F, 1.0F, "%.2f");
+
         m_ui.Label("Tip: Apply for runtime changes, Save To File for persistence.", m_ui.Theme().colorTextMuted);
         if (!m_powersStatus.empty())
         {
@@ -6634,6 +6728,120 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
                 std::to_string(static_cast<int>(hudState.lockerReplenishProgress * 100.0F)) + "%"
             );
         }
+
+        m_ui.EndPanel();
+    }
+
+    // Chainsaw sprint power HUD panel
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "chainsaw_sprint")
+    {
+        float panelHeight = 56.0F * scale;
+        if (hudState.chainsawState == "Charging")
+        {
+            panelHeight = 120.0F * scale;
+        }
+        else if (hudState.chainsawState == "Sprinting")
+        {
+            panelHeight = 140.0F * scale;
+        }
+        else if (hudState.chainsawState == "Recovery")
+        {
+            panelHeight = 88.0F * scale;
+        }
+
+        const engine::ui::UiRect chainsawPanel{
+            18.0F * scale,
+            static_cast<float>(m_ui.ScreenHeight()) - 132.0F * scale - panelHeight + 56.0F * scale,
+            280.0F * scale,
+            panelHeight,
+        };
+        m_ui.BeginPanel("hud_chainsaw_corner", chainsawPanel, true);
+
+        // State label with color coding
+        glm::vec4 stateColor = m_ui.Theme().colorText;
+        if (hudState.chainsawOverheatBuffed)
+        {
+            stateColor = glm::vec4{1.0F, 0.5F, 0.1F, 1.0F}; // Fiery orange for buffed
+        }
+        else if (hudState.chainsawState == "Charging")
+        {
+            stateColor = m_ui.Theme().colorAccent;
+        }
+        else if (hudState.chainsawState == "Sprinting")
+        {
+            stateColor = glm::vec4{0.9F, 0.2F, 0.2F, 1.0F}; // Red for sprinting
+        }
+        else if (hudState.chainsawState == "Recovery")
+        {
+            stateColor = glm::vec4{1.0F, 0.6F, 0.1F, 1.0F}; // Orange for recovery
+        }
+
+        std::string stateLabel = hudState.chainsawState;
+        if (hudState.chainsawOverheatBuffed && hudState.chainsawState == "Idle")
+        {
+            stateLabel = "Idle (BUFFED)";
+        }
+        m_ui.Label(stateLabel, stateColor);
+
+        // Charge bar during charging
+        if (hudState.chainsawState == "Charging")
+        {
+            m_ui.Label("Charging...", m_ui.Theme().colorAccent);
+            m_ui.ProgressBar(
+                "hud_chainsaw_charge",
+                hudState.chainsawCharge01,
+                std::to_string(static_cast<int>(hudState.chainsawCharge01 * 100.0F)) + "%"
+            );
+            if (hudState.chainsawOverheatBuffed)
+            {
+                m_ui.Label("CHARGE BONUS ACTIVE", glm::vec4{1.0F, 0.6F, 0.1F, 1.0F});
+            }
+        }
+
+        // Sprint info
+        if (hudState.chainsawState == "Sprinting")
+        {
+            m_ui.Label("SPRINTING!", glm::vec4{0.9F, 0.2F, 0.2F, 1.0F});
+            m_ui.Label("Speed: " + std::to_string(static_cast<int>(hudState.chainsawCurrentSpeed)) + " m/s", m_ui.Theme().colorText);
+
+            // Turn rate indicator
+            if (hudState.chainsawTurnBoostActive)
+            {
+                m_ui.Label("HIGH TURN RATE", glm::vec4{0.2F, 1.0F, 0.3F, 1.0F});
+            }
+            else
+            {
+                m_ui.Label("LOW TURN RATE", glm::vec4{0.8F, 0.5F, 0.2F, 1.0F});
+            }
+            m_ui.Label("Turn: " + std::to_string(static_cast<int>(hudState.chainsawTurnRate)) + " deg/s", m_ui.Theme().colorTextMuted);
+
+            if (hudState.chainsawOverheatBuffed)
+            {
+                m_ui.Label("SPEED BONUS ACTIVE!", glm::vec4{1.0F, 0.6F, 0.1F, 1.0F});
+            }
+        }
+
+        // Recovery countdown
+        if (hudState.chainsawState == "Recovery")
+        {
+            const float remaining = hudState.chainsawRecoveryDuration - hudState.chainsawRecoveryTimer;
+            m_ui.Label("Recovering: " + std::to_string(static_cast<int>(remaining * 10.0F) / 10.0F) + "s", m_ui.Theme().colorTextMuted);
+            const float progress = hudState.chainsawRecoveryTimer / std::max(0.01F, hudState.chainsawRecoveryDuration);
+            m_ui.ProgressBar("hud_chainsaw_recovery", progress, "");
+        }
+
+        // Overheat bar (always visible)
+        glm::vec4 overheatColor = m_ui.Theme().colorTextMuted;
+        if (hudState.chainsawOverheatBuffed)
+        {
+            overheatColor = glm::vec4{1.0F, 0.3F, 0.1F, 1.0F}; // Red-orange highlight
+        }
+        else if (hudState.chainsawOverheat01 > 0.7F)
+        {
+            overheatColor = glm::vec4{1.0F, 0.6F, 0.1F, 1.0F}; // Warning orange
+        }
+        m_ui.Label("Heat: " + std::to_string(static_cast<int>(hudState.chainsawOverheat01 * 100.0F)) + "%", overheatColor);
+        m_ui.ProgressBar("hud_chainsaw_heat", hudState.chainsawOverheat01, "");
 
         m_ui.EndPanel();
     }

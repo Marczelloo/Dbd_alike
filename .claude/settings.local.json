@@ -9,7 +9,10 @@
       "mcp__blender-mcp__execute_blender_code",
       "mcp__blender-mcp__get_viewport_screenshot",
       "mcp__blender-mcp__get_scene_info",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "mcp__blender-mcp__get_object_info",
+      "mcp__zai-mcp-server__analyze_image",
+      "Bash(git add:*)"
     ]
   }
 }
