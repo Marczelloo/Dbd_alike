@@ -3,6 +3,6 @@
   "cosmetic_id": "default",
   "display_name": "Dwight",
   "id": "survivor_dwight",
-  "model_path": "assets/meshes/survivor_male_blocky.glb",
-  "model_yaw_degrees": 0.0
+  "model_path": "assets/meshes/survivor_dwight.glb",
+  "model_yaw_degrees": 180.0
 }
