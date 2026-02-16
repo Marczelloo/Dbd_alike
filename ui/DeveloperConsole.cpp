@@ -2707,6 +2707,58 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogSuccess("Chainsaw state reset to Idle");
         });
 
+        // Nurse blink power debug commands
+        RegisterCommand("blink_debug on|off", "Toggle nurse blink debug overlay", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: blink_debug on|off");
+                return;
+            }
+            bool enabled = false;
+            if (!ParseBoolToken(tokens[1], enabled))
+            {
+                LogError("Expected on|off");
+                return;
+            }
+            context.gameplay->SetBlinkDebug(enabled);
+            LogSuccess(std::string("blink_debug ") + (enabled ? "enabled" : "disabled"));
+        });
+
+        RegisterCommand("blink_charges <0-2>", "Set blink charges for testing", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() != 2)
+            {
+                LogError("Usage: blink_charges <0-2>");
+                return;
+            }
+            try
+            {
+                const int charges = std::stoi(tokens[1]);
+                context.gameplay->SetBlinkCharges(charges);
+                LogSuccess("Blink charges set to " + std::to_string(charges));
+            }
+            catch (...)
+            {
+                LogError("Invalid value. Usage: blink_charges <0-2>");
+            }
+        });
+
+        RegisterCommand("blink_reset", "Reset blink state to Idle", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            context.gameplay->ResetBlinkState();
+            LogSuccess("Blink state reset to Idle");
+        });
+
+        RegisterCommand("blink_dump", "Print current blink state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            LogInfo(context.gameplay->GetBlinkDumpInfo());
+        });
+
         RegisterCommand("locker_spawn", "Spawn a locker at killer position", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.gameplay == nullptr)
             {
@@ -2838,6 +2890,178 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                 context.toggleFullscreen();
                 LogSuccess("Fullscreen toggled");
             }
+        });
+
+        // Animation/Locomotion commands
+        RegisterCommand("anim_list", "List all animation clips", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            const auto clips = context.gameplay->GetAnimationClipList();
+            if (clips.empty())
+            {
+                LogWarning("No animation clips loaded. Load a model with animations first.");
+                return;
+            }
+            AddLog("Animation clips:", ConsoleColors::Category);
+            for (const std::string& clipName : clips)
+            {
+                AddLog("  • " + clipName, ConsoleColors::Info);
+            }
+        });
+
+        RegisterCommand("anim_play <clip>", "Force play an animation clip", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: anim_play <clip_name>");
+                return;
+            }
+            context.gameplay->ForcePlayAnimationClip(tokens[1]);
+            LogSuccess("Playing clip: " + tokens[1]);
+        });
+
+        RegisterCommand("anim_state auto|idle|walk|run", "Force locomotion state", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: anim_state auto|idle|walk|run");
+                return;
+            }
+            const std::string state = tokens[1];
+            if (state == "auto")
+            {
+                context.gameplay->SetAnimationAutoMode(true);
+                LogSuccess("Animation mode: auto (speed-based)");
+            }
+            else
+            {
+                context.gameplay->SetAnimationAutoMode(false);
+                context.gameplay->ForceAnimationState(state);
+                LogSuccess("Animation state forced: " + state);
+            }
+        });
+
+        RegisterCommand("anim_scale <value>", "Set global animation playback scale", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: anim_scale <value> (e.g., 0.5 = half speed, 2.0 = double speed)");
+                return;
+            }
+            try
+            {
+                const float scale = std::stof(tokens[1]);
+                if (scale <= 0.0F)
+                {
+                    LogError("Scale must be positive");
+                    return;
+                }
+                context.gameplay->SetGlobalAnimationScale(scale);
+                LogSuccess("Animation scale: " + std::to_string(scale));
+            }
+            catch (...)
+            {
+                LogError("Invalid value. Usage: anim_scale <value>");
+            }
+        });
+
+        RegisterCommand("anim_info", "Print current animation state", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            const std::string info = context.gameplay->GetAnimationInfo();
+            AddLog("Animation: " + info, ConsoleColors::Info);
+        });
+
+        RegisterCommand("anim_debug on|off", "Toggle verbose animation logging", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: anim_debug on|off");
+                return;
+            }
+            const std::string state = tokens[1];
+            if (state == "on" || state == "1" || state == "true")
+            {
+                context.gameplay->SetAnimationDebug(true);
+                LogSuccess("Animation debug: ON");
+            }
+            else if (state == "off" || state == "0" || state == "false")
+            {
+                context.gameplay->SetAnimationDebug(false);
+                LogSuccess("Animation debug: OFF");
+            }
+            else
+            {
+                LogError("Usage: anim_debug on|off");
+            }
+        });
+
+        RegisterCommand("list_survivor_models", "List all survivor character definitions", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            const auto ids = context.gameplay->ListSurvivorCharacters();
+            if (ids.empty())
+            {
+                AddLog("No survivor characters defined", ConsoleColors::Warning);
+                return;
+            }
+            AddLog("Survivor characters:", ConsoleColors::Category);
+            for (const std::string& id : ids)
+            {
+                AddLog("  • " + id, ConsoleColors::Info);
+            }
+        });
+
+        RegisterCommand("set_survivor_model <id>", "Switch survivor character model", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr || tokens.size() < 2)
+            {
+                LogError("Usage: set_survivor_model <character_id>");
+                LogInfo("Use 'list_survivor_models' to see available IDs");
+                return;
+            }
+            const std::string characterId = tokens[1];
+            if (context.gameplay->SetSelectedSurvivorCharacter(characterId))
+            {
+                LogSuccess("Survivor model set to: " + characterId);
+            }
+            else
+            {
+                LogError("Failed to set survivor model: " + characterId);
+            }
+        });
+
+        RegisterCommand("reload_survivor_model", "Force reload current survivor model and animations", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            // Clear animation clips to force reload
+            context.gameplay->GetAnimationSystem().ClearClips();
+            // Re-select current character to trigger reload
+            const auto ids = context.gameplay->ListSurvivorCharacters();
+            if (!ids.empty())
+            {
+                const std::string current = ids.front();  // Just use first available
+                context.gameplay->SetSelectedSurvivorCharacter(current);
+                LogSuccess("Survivor model reloaded (animations cleared)");
+            }
+            else
+            {
+                LogWarning("No survivor characters available to reload");
+            }
+        });
+
+        RegisterCommand("anim_reload", "Reload animations from current model", [this](const std::vector<std::string>&, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                return;
+            }
+            // Clear and reinitialize animation system
+            context.gameplay->GetAnimationSystem().ClearClips();
+            context.gameplay->GetAnimationSystem().InitializeStateMachine();
+            LogSuccess("Animation clips cleared, state machine reinitialized");
         });
     }
 

@@ -2,7 +2,26 @@
 
 ## Current Status
 
-As of 2026-02-12, the following refactoring has been completed:
+### Completed (2026-02-16)
+- **Locomotion Animation System - Safety & Debug Improvements**
+  - Added bounds checking in animation extraction to prevent buffer overflows
+  - Added validation for times/values array size matching in channels
+  - Fixed static callback issue in EnsureSurvivorCharacterMeshLoaded (was capturing stale `this` pointer)
+  - Added logging for discovered animation names when loading glTF files
+  - Added clip validity check in animation callback
+
+- **New Console Commands for Model/Animation Testing**
+  - `anim_debug on|off` - Toggle verbose animation logging
+  - `anim_reload` - Clear animation clips and reinitialize state machine
+  - `list_survivor_models` - List all survivor character definitions
+  - `set_survivor_model <id>` - Switch survivor character model at runtime
+  - `reload_survivor_model` - Force reload current survivor model and animations
+
+- **Files Modified**
+  - `engine/assets/MeshLibrary.cpp` - Added bounds checking, validation, logging
+  - `game/gameplay/GameplaySystems.cpp` - Fixed callback, added clip validity check
+  - `ui/DeveloperConsole.cpp` - Added new console commands
+  - `README.md` - Documented new console commands
 
 ### Completed (2026-02-12)
 - **Scratch Marks (Phase 2 Refactor)**
@@ -419,3 +438,86 @@ Solid vertex shader now uses `uniform mat4 uModel`:
 - `game/gameplay/GameplaySystems.hpp` — GpuMeshId fields, upload flag, renderer pointer
 - `game/gameplay/GameplaySystems.cpp` — Lazy GPU upload, swap-to-empty cleanup, DrawGrid reduction
 - `game/maps/TileGenerator.cpp` — Removed GridPlane "grass" from benchmark Zone 16
+
+## Update (2026-02-16): Locomotion Animation System
+
+### New Feature: Skeletal Animation for Survivor Models
+
+**Purpose**: Play skeletal animations from glTF files with speed-based state machine (Idle/Walk/Run) and moonwalk prevention.
+
+**Architecture**:
+- **AnimationClip** (`engine/animation/AnimationClip.hpp/cpp`)
+  - Keyframe data: TranslationChannel, RotationChannel, ScaleChannel
+  - Sampling with LERP/SLERP interpolation
+  - Loaded from glTF animations via MeshLibrary
+
+- **AnimationPlayer** (`engine/animation/AnimationPlayer.hpp/cpp`)
+  - Single clip playback with time, looping, playback speed
+  - Sample methods for joint transforms
+
+- **AnimationBlender** (`engine/animation/AnimationBlender.hpp/cpp`)
+  - Crossfade transitions between clips
+  - Blended transform computation
+
+- **AnimationStateMachine** (`engine/animation/AnimationStateMachine.hpp/cpp`)
+  - LocomotionState enum: Idle, Walk, Run
+  - Speed-based state selection (idleEpsilon, runThreshold)
+  - Playback speed scaling: `timeScale = speed / refSpeed` (prevents moonwalk)
+  - Blend time configuration per transition
+
+- **AnimationSystem** (`engine/animation/AnimationSystem.hpp/cpp`)
+  - Clip registry and lookup
+  - Profile load/save (config/animation.json)
+  - State machine integration
+
+**Config File**: `config/animation.json`
+```json
+{
+  "asset_version": 1,
+  "idle_epsilon": 0.1,
+  "run_threshold": 3.5,
+  "blend_idle_walk": 0.12,
+  "blend_walk_run": 0.10,
+  "blend_run_idle": 0.15,
+  "global_anim_scale": 1.0,
+  "walk_speed_ref": 3.43,
+  "run_speed_ref": 4.6,
+  "min_walk_scale": 0.8,
+  "max_walk_scale": 1.2,
+  "min_run_scale": 0.8,
+  "max_run_scale": 1.2
+}
+```
+
+**Console Commands**:
+- `anim_list` — List loaded animation clips
+- `anim_play <clip>` — Force play a clip
+- `anim_state auto|idle|walk|run` — Force state (auto = speed-based)
+- `anim_scale <value>` — Set global playback scale
+- `anim_info` — Print current state
+
+**Settings UI**: Settings → Locomotion tab for live tuning
+
+**Files Created**:
+- `engine/animation/AnimationClip.hpp/cpp`
+- `engine/animation/AnimationPlayer.hpp/cpp`
+- `engine/animation/AnimationBlender.hpp/cpp`
+- `engine/animation/AnimationStateMachine.hpp/cpp`
+- `engine/animation/AnimationSystem.hpp/cpp`
+
+**Files Modified**:
+- `engine/assets/MeshLibrary.hpp/cpp` — Animation extraction from glTF
+- `game/gameplay/GameplaySystems.hpp/cpp` — AnimationSystem integration, HudState fields
+- `engine/core/App.hpp/cpp` — AnimationSettings, Load/Save/Apply methods, Locomotion tab
+- `ui/DeveloperConsole.cpp` — Animation console commands
+- `CMakeLists.txt` — New animation source files
+
+**Expected Animation Clip Names** (from survivor glTF):
+- `surv_idle` — Idle animation
+- `surv_walk` — Walk animation
+- `surv_run` — Run animation
+
+**Moonwalk Prevention**:
+- Walk timeScale = `clamp(speed / walkSpeedRef, minWalkScale, maxWalkScale)`
+- Run timeScale = `clamp(speed / runSpeedRef, minRunScale, maxRunScale)`
+- Default: walk at 3.43 m/s → 1.0x speed, run at 4.6 m/s → 1.0x speed

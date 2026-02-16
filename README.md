@@ -933,6 +933,36 @@ Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
 - `bloodlust_set <0|1|2|3>` - Set bloodlust tier directly
 - `bloodlust_dump` - Print bloodlust state and speed info
 
+### Animation / Locomotion System
+The locomotion animation system provides skeletal animation playback for survivor models with:
+- **State Machine**: Idle/Walk/Run based on movement speed
+- **Speed Scaling**: Animation playback speed matches movement speed (prevents moonwalk effect)
+- **Smooth Blending**: Crossfade transitions between states
+- **Config File**: `config/animation.json` for tuning thresholds and blend times
+
+### Console Commands (Animation)
+- `anim_list` - List all loaded animation clips
+- `anim_play <clip_name>` - Force play a specific animation clip
+- `anim_state auto|idle|walk|run` - Force locomotion state (auto = speed-based)
+- `anim_scale <value>` - Set global animation playback scale (0.5 = half speed, 2.0 = double)
+- `anim_info` - Print current animation state, clip, playback speed
+- `anim_debug on|off` - Toggle verbose animation logging
+- `anim_reload` - Clear animation clips and reinitialize state machine
+
+### Console Commands (Model Testing)
+- `list_survivor_models` - List all survivor character definitions
+- `set_survivor_model <id>` - Switch survivor character model at runtime
+- `reload_survivor_model` - Force reload current survivor model and animations
+
+### Settings UI
+Settings → Locomotion tab provides live tuning for:
+- State thresholds (idle epsilon, run threshold)
+- Blend times between states
+- Playback speed scaling parameters
+
+### Config Files
+- `config/animation.json` - Animation thresholds, blend times, speed references
+
 ### Status Effect System
 Status effects are unified modifiers that can be applied to both killers and survivors.
 

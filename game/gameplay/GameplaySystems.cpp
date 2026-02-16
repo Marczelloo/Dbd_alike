@@ -1074,6 +1074,22 @@ void GameplaySystems::Update(float deltaSeconds, const engine::platform::Input& 
             const float clampedDelta = glm::clamp(delta, -maxStep, maxStep);
             m_survivorVisualYawRadians = WrapAngleRadians(m_survivorVisualYawRadians + clampedDelta);
         }
+
+        // Update animation system based on survivor speed
+        if (m_animationSystem.GetStateMachine().IsAutoMode())
+        {
+            const auto survivorActorIt = m_world.Actors().find(m_survivor);
+            if (survivorActorIt != m_world.Actors().end())
+            {
+                const engine::scene::ActorComponent& survivorActor = survivorActorIt->second;
+                const float speed = glm::length(survivorActor.velocity);
+                m_animationSystem.Update(deltaSeconds, speed);
+            }
+        }
+        else
+        {
+            m_animationSystem.Update(deltaSeconds, 0.0F);
+        }
     }
 }
 
@@ -2081,6 +2097,12 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     // Chainsaw sprint power debug visualization
     RenderChainsawDebug(renderer);
 
+    // Nurse blink power preview (always visible when charging)
+    RenderBlinkPreview(renderer);
+
+    // Nurse blink power debug visualization (extra info when debug enabled)
+    RenderBlinkDebug(renderer);
+
     // Report dynamic object culling stats to profiler.
     auto& profStats = engine::core::Profiler::Instance().StatsMut();
     profStats.dynamicObjectsDrawn = dynamicDrawn;
@@ -2370,6 +2392,67 @@ HudState GameplaySystems::BuildHudState() const
         else
         {
             hud.chainsawTurnRate = m_chainsawConfig.turnRateDegreesPerSec;
+        }
+    }
+
+    // Nurse blink power HUD fields
+    if (hudPowerDef != nullptr && hudPowerDef->id == "nurse_blink")
+    {
+        auto blinkStateToText = [](NurseBlinkState state) -> std::string {
+            switch (state)
+            {
+                case NurseBlinkState::Idle: return "Idle";
+                case NurseBlinkState::ChargingBlink: return "Charging";
+                case NurseBlinkState::BlinkTravel: return "Traveling";
+                case NurseBlinkState::ChainWindow: return "Chain Window";
+                case NurseBlinkState::BlinkAttackWindup: return "Attacking";
+                case NurseBlinkState::Fatigue: return "Fatigue";
+                default: return "Unknown";
+            }
+        };
+        hud.blinkState = blinkStateToText(m_killerPowerState.blinkState);
+        hud.blinkCharges = m_killerPowerState.blinkCharges;
+        hud.blinkMaxCharges = m_killerPowerState.blinkMaxCharges;
+        hud.blinkCharge01 = m_killerPowerState.blinkCharge01;
+        hud.blinksUsedThisChain = m_killerPowerState.blinksUsedThisChain;
+        hud.blinkDebugEnabled = m_blinkDebugEnabled;
+
+        // Charge regeneration progress (when not at max)
+        if (m_killerPowerState.blinkCharges < m_killerPowerState.blinkMaxCharges)
+        {
+            hud.blinkChargeRegen01 = m_killerPowerState.blinkChargeRegenTimer / std::max(0.01F, m_blinkConfig.chargeRegenSeconds);
+        }
+        else
+        {
+            hud.blinkChargeRegen01 = 1.0F;
+        }
+
+        // Current blink distance based on charge
+        hud.blinkDistanceMeters = m_blinkConfig.minBlinkDistance +
+            m_killerPowerState.blinkCharge01 * (m_blinkConfig.maxBlinkDistance - m_blinkConfig.minBlinkDistance);
+
+        // Chain window progress
+        if (m_killerPowerState.blinkState == NurseBlinkState::ChainWindow)
+        {
+            hud.blinkChainWindow01 = m_killerPowerState.blinkChainWindowTimer / std::max(0.01F, m_blinkConfig.chainWindowSeconds);
+        }
+        else
+        {
+            hud.blinkChainWindow01 = 0.0F;
+        }
+
+        // Fatigue progress
+        if (m_killerPowerState.blinkState == NurseBlinkState::Fatigue)
+        {
+            const float fatigueDuration = m_blinkConfig.fatigueBaseSeconds +
+                (static_cast<float>(m_killerPowerState.blinksUsedThisChain) * m_blinkConfig.fatiguePerBlinkUsedSeconds);
+            hud.blinkFatigue01 = m_killerPowerState.blinkFatigueTimer / std::max(0.01F, fatigueDuration);
+            hud.blinkFatigueDuration = fatigueDuration;
+        }
+        else
+        {
+            hud.blinkFatigue01 = 0.0F;
+            hud.blinkFatigueDuration = 0.0F;
         }
     }
 
@@ -2814,6 +2897,19 @@ HudState GameplaySystems::BuildHudState() const
         hud.survivorExposed = m_statusEffectManager.IsExposed(m_survivor);
         hud.survivorExhausted = m_statusEffectManager.IsExhausted(m_survivor);
     }
+
+    // Animation debug info
+    hud.animState = engine::animation::LocomotionStateToString(m_animationSystem.CurrentState());
+    hud.animPlaybackSpeed = m_animationSystem.CurrentPlaybackSpeed();
+    hud.animBlending = m_animationSystem.GetStateMachine().IsBlending();
+    hud.animBlendWeight = m_animationSystem.GetStateMachine().BlendWeight();
+    hud.animAutoMode = m_animationSystem.GetStateMachine().IsAutoMode();
+    const auto* currentClip = m_animationSystem.GetStateMachine().GetBlender().GetCurrentClip();
+    if (currentClip != nullptr)
+    {
+        hud.animClip = currentClip->name;
+    }
+    hud.animClipList = m_animationSystem.ListClips();
 
     return hud;
 }
@@ -3579,6 +3675,12 @@ GameplaySystems::Snapshot GameplaySystems::BuildSnapshot() const
     snapshot.killerBlindTimer = m_killerPowerState.killerBlindTimer;
     snapshot.killerBlindStyleWhite = static_cast<std::uint8_t>(m_tuning.flashlightBlindStyle == 0 ? 1 : 0);
     snapshot.carriedTrapCount = static_cast<std::uint8_t>(glm::clamp(m_killerPowerState.trapperCarriedTraps, 0, 255));
+    // Nurse blink state
+    snapshot.blinkState = static_cast<std::uint8_t>(m_killerPowerState.blinkState);
+    snapshot.blinkCharges = static_cast<std::uint8_t>(glm::clamp(m_killerPowerState.blinkCharges, 0, 255));
+    snapshot.blinkCharge01 = m_killerPowerState.blinkCharge01;
+    snapshot.blinkChargeRegenTimer = m_killerPowerState.blinkChargeRegenTimer;
+    snapshot.blinkTargetPosition = m_killerPowerState.blinkTargetPosition;
 
     auto fillActor = [&](engine::scene::Entity entity, ActorSnapshot& outActor) {
         const auto transformIt = m_world.Transforms().find(entity);
@@ -3711,6 +3813,12 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
     m_killerPowerState.killerBlindTimer = snapshot.killerBlindTimer;
     m_tuning.flashlightBlindStyle = snapshot.killerBlindStyleWhite != 0U ? 0 : 1;
     m_killerPowerState.trapperCarriedTraps = static_cast<int>(snapshot.carriedTrapCount);
+    // Nurse blink state
+    m_killerPowerState.blinkState = static_cast<NurseBlinkState>(glm::clamp(static_cast<int>(snapshot.blinkState), 0, static_cast<int>(NurseBlinkState::Fatigue)));
+    m_killerPowerState.blinkCharges = static_cast<int>(snapshot.blinkCharges);
+    m_killerPowerState.blinkCharge01 = snapshot.blinkCharge01;
+    m_killerPowerState.blinkChargeRegenTimer = snapshot.blinkChargeRegenTimer;
+    m_killerPowerState.blinkTargetPosition = snapshot.blinkTargetPosition;
 
     m_chase.isChasing = snapshot.chaseActive;
     m_chase.distance = snapshot.chaseDistance;
@@ -5403,6 +5511,17 @@ bool GameplaySystems::ResolveKillerAttackHit(float range, float halfAngleRadians
 
 void GameplaySystems::UpdateKillerAttack(const RoleCommand& killerCommand, float fixedDt)
 {
+    // Block attacks during nurse blink fatigue (except blink attack windup handles its own attack)
+    if (m_killerLoadout.powerId == "nurse_blink" &&
+        m_killerPowerState.blinkState == NurseBlinkState::Fatigue)
+    {
+        m_previousAttackHeld = false;
+        m_killerAttackState = KillerAttackState::Idle;
+        m_killerAttackStateTimer = 0.0F;
+        m_killerLungeChargeSeconds = 0.0F;
+        return;
+    }
+
     if (m_killerLoadout.powerId == "wraith_cloak" &&
         (m_killerPowerState.wraithCloaked || m_killerPowerState.wraithCloakTransition))
     {
@@ -8623,16 +8742,51 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
         return false;
     }
 
-    static engine::assets::MeshLibrary fallbackMeshLibrary;
-    engine::assets::MeshLibrary& meshLibrary = (m_meshLibrary != nullptr) ? *m_meshLibrary : fallbackMeshLibrary;
+    // Use member mesh library or create a temporary one for this load
+    engine::assets::MeshLibrary* meshLibrary = m_meshLibrary;
+    engine::assets::MeshLibrary tempMeshLibrary;
+
+    // If no member mesh library, use temp one (callback won't persist, safer)
+    if (meshLibrary == nullptr)
+    {
+        meshLibrary = &tempMeshLibrary;
+    }
+
+    // Always set up animation callback for this load (safe because it's set fresh each time)
+    meshLibrary->SetAnimationLoadedCallback([this](const std::string& clipName, std::unique_ptr<engine::animation::AnimationClip> clip) {
+        if (clip == nullptr)
+        {
+            std::cout << "[ANIMATION] Warning: null clip received for " << clipName << "\n";
+            return;
+        }
+        if (!clip->Valid())
+        {
+            std::cout << "[ANIMATION] Warning: invalid clip '" << clipName << "' (duration=" << clip->duration << ")\n";
+            return;
+        }
+        std::cout << "[ANIMATION] Loaded clip: " << clipName
+                  << " (duration: " << clip->duration << "s, "
+                  << clip->rotations.size() << " rot channels, "
+                  << clip->translations.size() << " pos channels)\n";
+        m_animationSystem.AddClip(std::move(clip));
+    });
+
     const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
     std::string error;
-    const engine::assets::MeshData* meshData = meshLibrary.LoadMesh(meshPath, &error);
+    const engine::assets::MeshData* meshData = meshLibrary->LoadMesh(meshPath, &error);
     if (meshData == nullptr || !meshData->loaded)
     {
         std::cout << "[SURVIVOR_MODEL] Failed to upload mesh for " << characterId
                   << " from " << meshPath.string() << ": " << error << "\n";
         return false;
+    }
+
+    // Log any animations found in this mesh
+    if (!meshData->animationNames.empty())
+    {
+        std::cout << "[SURVIVOR_MODEL] Found " << meshData->animationNames.size() << " animations in " << characterId << "\n";
+        // Initialize state machine with loaded clips
+        m_animationSystem.InitializeStateMachine();
     }
 
     const engine::render::MaterialParams material{};
@@ -10084,6 +10238,13 @@ void GameplaySystems::UpdateKillerPowerSystem(const RoleCommand& killerCommand, 
     {
         m_trapPreviewActive = false;
         UpdateChainsawSprintPowerSystem(killerCommand, fixedDt);
+        return;
+    }
+
+    if (powerDef->id == "nurse_blink")
+    {
+        m_trapPreviewActive = false;
+        UpdateNurseBlinkPowerSystem(killerCommand, fixedDt);
         return;
     }
 
@@ -12064,6 +12225,787 @@ void GameplaySystems::ResetChainsawState()
     m_killerPowerState.chainsawRecoveryWasCollision = false;
     m_killerPowerState.chainsawRecoveryWasHit = false;
     ItemPowerLog("ChainsawSprint: State reset to Idle");
+}
+
+// ============================================================================
+// Nurse Blink Power System Implementation
+// ============================================================================
+
+void GameplaySystems::LoadNurseBlinkConfig()
+{
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "nurse_blink")
+    {
+        ItemPowerLog("NurseBlink: Using default config (power not equipped)");
+        return;
+    }
+
+    const auto readParam = [&powerDef](const std::string& key, float fallback) -> float {
+        if (powerDef == nullptr)
+        {
+            return fallback;
+        }
+        const auto it = powerDef->params.find(key);
+        return it != powerDef->params.end() ? it->second : fallback;
+    };
+
+    m_blinkConfig.maxCharges = static_cast<int>(readParam("max_charges", 2.0F));
+    m_blinkConfig.chargeRegenSeconds = readParam("charge_regen_seconds", 3.0F);
+    m_blinkConfig.minBlinkDistance = readParam("min_blink_distance", 2.0F);
+    m_blinkConfig.maxBlinkDistance = readParam("max_blink_distance", 20.0F);
+    m_blinkConfig.chargeTimeToMax = readParam("charge_time_to_max", 2.0F);
+    m_blinkConfig.chargeMoveSpeedMultiplier = readParam("charge_move_speed_multiplier", 0.5F);
+    m_blinkConfig.blinkTravelTime = readParam("blink_travel_time", 0.15F);
+    m_blinkConfig.chainWindowSeconds = readParam("chain_window_seconds", 1.5F);
+    m_blinkConfig.fatigueBaseSeconds = readParam("fatigue_base_seconds", 2.0F);
+    m_blinkConfig.fatiguePerBlinkUsedSeconds = readParam("fatigue_per_blink_used_seconds", 0.5F);
+    m_blinkConfig.fatigueMoveSpeedMultiplier = readParam("fatigue_move_speed_multiplier", 0.5F);
+    m_blinkConfig.blinkAttackRange = readParam("blink_attack_range", 4.5F);
+    m_blinkConfig.blinkAttackAngleDegrees = readParam("blink_attack_angle_degrees", 90.0F);
+    m_blinkConfig.blinkAttackWindupSeconds = readParam("blink_attack_windup_seconds", 0.2F);
+    m_blinkConfig.blinkAttackLungeMultiplier = readParam("blink_attack_lunge_multiplier", 2.0F);
+    m_blinkConfig.endpointSlideAttempts = static_cast<int>(readParam("endpoint_slide_attempts", 8.0F));
+    m_blinkConfig.endpointSlideStep = readParam("endpoint_slide_step", 0.3F);
+
+    // Sync max charges to runtime state
+    m_killerPowerState.blinkMaxCharges = m_blinkConfig.maxCharges;
+    m_killerPowerState.blinkCharges = glm::min(m_killerPowerState.blinkCharges, m_blinkConfig.maxCharges);
+
+    ItemPowerLog("NurseBlink: Config loaded from power definition");
+}
+
+bool GameplaySystems::ResolveBlinkEndpoint(const glm::vec3& start, const glm::vec3& requested, glm::vec3& out)
+{
+    const float radius = m_tuning.killerCapsuleRadius;
+    const float height = m_tuning.killerCapsuleHeight;
+    const glm::vec3 direction = glm::normalize(requested - start);
+    const float requestedDistance = glm::length(requested - start);
+
+    // Get the Y level we expect to be at (from start position)
+    const float expectedGroundY = start.y;
+
+    // Helper to check if a point is inside any solid box
+    const auto isPointInSolid = [this](const glm::vec3& point) -> bool {
+        for (const auto& solid : m_physics.Solids())
+        {
+            const glm::vec3 min = solid.center - solid.halfExtents;
+            const glm::vec3 max = solid.center + solid.halfExtents;
+
+            if (point.x >= min.x && point.x <= max.x &&
+                point.y >= min.y && point.y <= max.y &&
+                point.z >= min.z && point.z <= max.z)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Helper to check if capsule intersects any solid
+    const auto capsuleIntersectsSolid = [this, radius, height, &isPointInSolid](const glm::vec3& groundPos) -> bool {
+        // Check several points within the capsule volume
+        const float halfHeight = height * 0.5F;
+
+        // Check center and corners of capsule
+        const glm::vec3 checkPoints[] = {
+            groundPos + glm::vec3(0.0F, halfHeight, 0.0F),  // Center
+            groundPos + glm::vec3(radius * 0.7F, halfHeight, 0.0F),
+            groundPos + glm::vec3(-radius * 0.7F, halfHeight, 0.0F),
+            groundPos + glm::vec3(0.0F, halfHeight, radius * 0.7F),
+            groundPos + glm::vec3(0.0F, halfHeight, -radius * 0.7F),
+            groundPos + glm::vec3(0.0F, 0.1F, 0.0F),  // Near feet
+            groundPos + glm::vec3(0.0F, height - 0.1F, 0.0F),  // Near head
+        };
+
+        for (const auto& point : checkPoints)
+        {
+            if (isPointInSolid(point))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Helper to find valid ground at a position
+    // Returns ground position if valid, nullopt otherwise
+    const auto findValidGround = [this, &expectedGroundY, &isPointInSolid](const glm::vec3& pos) -> std::optional<glm::vec3> {
+        // Raycast from above to find ground
+        const glm::vec3 rayStart = pos + glm::vec3(0.0F, 5.0F, 0.0F);
+        const glm::vec3 rayEnd = pos - glm::vec3(0.0F, 5.0F, 0.0F);
+        const auto hit = m_physics.RaycastNearest(rayStart, rayEnd);
+
+        if (!hit.has_value())
+        {
+            return std::nullopt;  // No ground found
+        }
+
+        // Check if ground normal is valid (pointing up, not the underside of something)
+        const float upDot = glm::dot(hit->normal, glm::vec3(0.0F, 1.0F, 0.0F));
+        if (upDot < 0.7F)  // Allow some slope but reject steep/underside surfaces
+        {
+            return std::nullopt;
+        }
+
+        // Check if ground level is reasonable (not too far from expected level)
+        const float groundY = hit->position.y;
+        if (std::abs(groundY - expectedGroundY) > 3.0F)
+        {
+            return std::nullopt;  // Ground too far from expected level (might be under map or on roof)
+        }
+
+        // Make sure we're not inside a solid at the ground position
+        const glm::vec3 groundPos = glm::vec3(pos.x, groundY, pos.z);
+        if (isPointInSolid(groundPos + glm::vec3(0.0F, 0.1F, 0.0F)))
+        {
+            return std::nullopt;
+        }
+
+        return groundPos;
+    };
+
+    // Helper to check if a position is fully valid
+    const auto isValidPosition = [&capsuleIntersectsSolid](const glm::vec3& groundPos) -> bool {
+        return !capsuleIntersectsSolid(groundPos);
+    };
+
+    // Sample positions along the blink path from far to near
+    const int numSamples = 50;
+    const float stepSize = requestedDistance / static_cast<float>(numSamples);
+
+    glm::vec3 bestValidPos = start;
+    float bestDistance = 0.0F;
+
+    // Try positions along the direct path
+    for (int i = numSamples; i >= 1; --i)
+    {
+        const float testDistance = static_cast<float>(i) * stepSize;
+        const glm::vec3 testPos = start + direction * testDistance;
+
+        const auto groundPos = findValidGround(testPos);
+        if (!groundPos.has_value())
+        {
+            continue;
+        }
+
+        if (isValidPosition(*groundPos))
+        {
+            bestValidPos = *groundPos;
+            bestDistance = testDistance;
+            break;
+        }
+    }
+
+    // If we found a valid position along the path, use it
+    if (bestDistance >= m_blinkConfig.minBlinkDistance)
+    {
+        out = bestValidPos;
+        return true;
+    }
+
+    // Try perpendicular offsets at various distances
+    const glm::vec3 perpendicular = glm::vec3(-direction.z, 0.0F, direction.x);
+    const float perpendicularOffsets[] = {-2.0F, -1.5F, -1.0F, -0.5F, 0.5F, 1.0F, 1.5F, 2.0F};
+
+    for (int i = numSamples; i >= 1; --i)
+    {
+        const float testDistance = static_cast<float>(i) * stepSize;
+
+        for (float perpOffset : perpendicularOffsets)
+        {
+            const glm::vec3 testPos = start + direction * testDistance + perpendicular * perpOffset;
+            const auto groundPos = findValidGround(testPos);
+
+            if (groundPos.has_value() && isValidPosition(*groundPos))
+            {
+                if (testDistance >= m_blinkConfig.minBlinkDistance)
+                {
+                    out = *groundPos;
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Try minimum distance along path
+    const glm::vec3 minDistPos = start + direction * m_blinkConfig.minBlinkDistance;
+    const auto groundPos = findValidGround(minDistPos);
+    if (groundPos.has_value() && isValidPosition(*groundPos))
+    {
+        out = *groundPos;
+        return true;
+    }
+
+    // Last resort: use start position (no teleport)
+    out = start;
+    ItemPowerLog("NurseBlink: No valid endpoint found, staying in place");
+    return false;
+}
+
+void GameplaySystems::UpdateNurseBlinkPowerSystem(const RoleCommand& killerCommand, float fixedDt)
+{
+    if (m_killer == 0)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "nurse_blink")
+    {
+        return;
+    }
+
+    // Load config on first use
+    static bool configLoaded = false;
+    if (!configLoaded)
+    {
+        LoadNurseBlinkConfig();
+        configLoaded = true;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    auto killerActorIt = m_world.Actors().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end() || killerActorIt == m_world.Actors().end())
+    {
+        return;
+    }
+
+    glm::vec3& killerPos = killerTransformIt->second.position;
+    glm::vec3& killerForward = killerTransformIt->second.forward;
+    glm::vec3& killerVelocity = killerActorIt->second.velocity;
+
+    const bool canUsePower = m_killerAttackState == KillerAttackState::Idle &&
+                             killerActorIt->second.stunTimer <= 0.0F &&
+                             m_survivorState != SurvivorHealthState::Carried;
+
+    // Reset requires release flag when RMB not held
+    if (!killerCommand.useAltHeld)
+    {
+        m_killerPowerState.blinkRequiresRelease = false;
+    }
+
+    // Helper to enter fatigue state
+    const auto enterFatigue = [this]() {
+        m_killerPowerState.blinkState = NurseBlinkState::Fatigue;
+        const float fatigueDuration = m_blinkConfig.fatigueBaseSeconds +
+            (static_cast<float>(m_killerPowerState.blinksUsedThisChain) * m_blinkConfig.fatiguePerBlinkUsedSeconds);
+        m_killerPowerState.blinkFatigueTimer = 0.0F;
+        m_killerPowerState.blinkChainWindowTimer = 0.0F;
+        m_killerPowerState.blinkChargeTimer = 0.0F;
+        m_killerPowerState.blinkCharge01 = 0.0F;
+        m_killerPowerState.blinkAttackInProgress = false;
+        m_killerPowerState.blinkIsChainCharge = false;
+        m_killerPowerState.blinkChainChargeRemaining = 0.0F;
+        ItemPowerLog("NurseBlink: Entering fatigue (" + std::to_string(fatigueDuration) + "s) after " +
+                     std::to_string(m_killerPowerState.blinksUsedThisChain) + " blink(s)");
+    };
+
+    // Charge regeneration (only when not in active blink sequence)
+    if (m_killerPowerState.blinkState == NurseBlinkState::Idle ||
+        m_killerPowerState.blinkState == NurseBlinkState::Fatigue)
+    {
+        if (m_killerPowerState.blinkCharges < m_killerPowerState.blinkMaxCharges)
+        {
+            m_killerPowerState.blinkChargeRegenTimer += fixedDt;
+            if (m_killerPowerState.blinkChargeRegenTimer >= m_blinkConfig.chargeRegenSeconds)
+            {
+                m_killerPowerState.blinkChargeRegenTimer = 0.0F;
+                ++m_killerPowerState.blinkCharges;
+                ItemPowerLog("NurseBlink: Charge regenerated (" + std::to_string(m_killerPowerState.blinkCharges) +
+                             "/" + std::to_string(m_killerPowerState.blinkMaxCharges) + ")");
+            }
+        }
+    }
+
+    // State machine
+    switch (m_killerPowerState.blinkState)
+    {
+        case NurseBlinkState::Idle:
+        {
+            // Can start charging if RMB held, has charges, and can use power
+            if (killerCommand.useAltHeld &&
+                !m_killerPowerState.blinkRequiresRelease &&
+                m_killerPowerState.blinkCharges > 0 &&
+                canUsePower)
+            {
+                m_killerPowerState.blinkState = NurseBlinkState::ChargingBlink;
+                m_killerPowerState.blinkChargeTimer = 0.0F;
+                m_killerPowerState.blinkCharge01 = 0.0F;
+                m_killerPowerState.blinkStartPosition = killerPos;
+                m_killerPowerState.blinkIsChainCharge = false;  // Not a chain charge
+                m_killerPowerState.blinkChainChargeRemaining = 0.0F;
+                ItemPowerLog("NurseBlink: Started charging");
+            }
+            break;
+        }
+
+        case NurseBlinkState::ChargingBlink:
+        {
+            // If this is a chain charge, check if time has expired
+            if (m_killerPowerState.blinkIsChainCharge)
+            {
+                m_killerPowerState.blinkChainChargeRemaining -= fixedDt;
+                if (m_killerPowerState.blinkChainChargeRemaining <= 0.0F)
+                {
+                    // Chain window expired while charging - enter fatigue
+                    ItemPowerLog("NurseBlink: Chain window expired while charging");
+                    enterFatigue();
+                    break;
+                }
+            }
+
+            // Check for release FIRST - this is the primary action
+            if (killerCommand.useAltReleased && canUsePower && !m_killerPowerState.blinkRequiresRelease)
+            {
+                // Calculate blink distance based on charge
+                const float blinkDistance = m_blinkConfig.minBlinkDistance +
+                    m_killerPowerState.blinkCharge01 * (m_blinkConfig.maxBlinkDistance - m_blinkConfig.minBlinkDistance);
+
+                // Use horizontal forward only (no flying)
+                const glm::vec3 forwardXZ = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+                const glm::vec3 requestedTarget = killerPos + forwardXZ * blinkDistance;
+
+                // Resolve endpoint (always returns valid position, even if fallback)
+                glm::vec3 resolvedTarget;
+                (void)ResolveBlinkEndpoint(killerPos, requestedTarget, resolvedTarget);
+
+                // Store blink info
+                m_killerPowerState.blinkStartPosition = killerPos;
+                m_killerPowerState.blinkTargetPosition = resolvedTarget;
+                m_killerPowerState.blinkTravelDirection = glm::normalize(resolvedTarget - killerPos);
+                m_killerPowerState.blinkTravelTimer = 0.0F;
+
+                // Consume a charge
+                --m_killerPowerState.blinkCharges;
+                ++m_killerPowerState.blinksUsedThisChain;
+
+                m_killerPowerState.blinkState = NurseBlinkState::BlinkTravel;
+                m_killerPowerState.blinkRequiresRelease = true;
+                m_killerPowerState.blinkIsChainCharge = false;  // Clear chain charge flag
+
+                ItemPowerLog("NurseBlink: Teleporting " + std::to_string(glm::length(resolvedTarget - killerPos)) +
+                             "m, charges remaining: " + std::to_string(m_killerPowerState.blinkCharges));
+                break;
+            }
+
+            // Cancel conditions (after release check, so we don't cancel on release)
+            // But if this is a chain charge and player releases without blinking, they still get fatigue
+            if (!canUsePower || m_killerPowerState.blinkRequiresRelease)
+            {
+                if (m_killerPowerState.blinkIsChainCharge)
+                {
+                    // Cancelling a chain charge still gives fatigue
+                    ItemPowerLog("NurseBlink: Chain charge cancelled, entering fatigue");
+                    enterFatigue();
+                }
+                else
+                {
+                    m_killerPowerState.blinkState = NurseBlinkState::Idle;
+                    m_killerPowerState.blinkChargeTimer = 0.0F;
+                    m_killerPowerState.blinkCharge01 = 0.0F;
+                    m_killerPowerState.blinkIsChainCharge = false;
+                    ItemPowerLog("NurseBlink: Charge cancelled");
+                }
+                break;
+            }
+
+            // Charge progress (only while still holding)
+            if (killerCommand.useAltHeld)
+            {
+                m_killerPowerState.blinkChargeTimer += fixedDt;
+                m_killerPowerState.blinkCharge01 = glm::clamp(
+                    m_killerPowerState.blinkChargeTimer / std::max(0.01F, m_blinkConfig.chargeTimeToMax),
+                    0.0F, 1.0F
+                );
+
+                // Apply movement slowdown while charging
+                killerVelocity *= m_blinkConfig.chargeMoveSpeedMultiplier;
+            }
+            break;
+        }
+
+        case NurseBlinkState::BlinkTravel:
+        {
+            m_killerPowerState.blinkTravelTimer += fixedDt;
+            const float travelProgress = glm::clamp(
+                m_killerPowerState.blinkTravelTimer / std::max(0.01F, m_blinkConfig.blinkTravelTime),
+                0.0F, 1.0F
+            );
+
+            // Interpolate position during travel
+            killerPos = glm::mix(
+                m_killerPowerState.blinkStartPosition,
+                m_killerPowerState.blinkTargetPosition,
+                travelProgress
+            );
+
+            // No velocity during travel (instant teleport feel)
+            killerVelocity = glm::vec3(0.0F);
+
+            // Travel complete
+            if (travelProgress >= 1.0F)
+            {
+                killerPos = m_killerPowerState.blinkTargetPosition;
+                m_killerPowerState.blinkChainWindowTimer = 0.0F;
+                m_killerPowerState.blinkState = NurseBlinkState::ChainWindow;
+                ItemPowerLog("NurseBlink: Travel complete, chain window started");
+            }
+            break;
+        }
+
+        case NurseBlinkState::ChainWindow:
+        {
+            m_killerPowerState.blinkChainWindowTimer += fixedDt;
+            const float chainProgress = m_killerPowerState.blinkChainWindowTimer /
+                std::max(0.01F, m_blinkConfig.chainWindowSeconds);
+
+            // No movement during chain window (decision time)
+            killerVelocity = glm::vec3(0.0F);
+
+            // Chain blink: start charging if RMB held and has charges
+            if (killerCommand.useAltHeld &&
+                !m_killerPowerState.blinkRequiresRelease &&
+                m_killerPowerState.blinkCharges > 0 &&
+                canUsePower)
+            {
+                m_killerPowerState.blinkState = NurseBlinkState::ChargingBlink;
+                m_killerPowerState.blinkChargeTimer = 0.0F;
+                m_killerPowerState.blinkCharge01 = 0.0F;
+                m_killerPowerState.blinkStartPosition = killerPos;
+                // Mark this as a chain charge with remaining time
+                m_killerPowerState.blinkIsChainCharge = true;
+                m_killerPowerState.blinkChainChargeRemaining = m_blinkConfig.chainWindowSeconds - m_killerPowerState.blinkChainWindowTimer;
+                ItemPowerLog("NurseBlink: Chain blink started (remaining time: " +
+                             std::to_string(m_killerPowerState.blinkChainChargeRemaining) + "s)");
+                break;
+            }
+
+            // Blink attack: if attack pressed
+            if (killerCommand.attackPressed && canUsePower)
+            {
+                m_killerPowerState.blinkState = NurseBlinkState::BlinkAttackWindup;
+                m_killerPowerState.blinkAttackWindupTimer = 0.0F;
+                m_killerPowerState.blinkAttackInProgress = true;
+                ItemPowerLog("NurseBlink: Blink attack initiated");
+                break;
+            }
+
+            // Chain window expired
+            if (chainProgress >= 1.0F)
+            {
+                enterFatigue();
+            }
+            break;
+        }
+
+        case NurseBlinkState::BlinkAttackWindup:
+        {
+            m_killerPowerState.blinkAttackWindupTimer += fixedDt;
+
+            // Lunge forward during windup
+            const float lungeSpeed = m_tuning.killerMoveSpeed * m_blinkConfig.blinkAttackLungeMultiplier;
+            const glm::vec3 forwardXZ = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+            killerVelocity = forwardXZ * lungeSpeed;
+
+            // Check for survivor hit
+            if (m_survivor != 0)
+            {
+                auto survivorTransformIt = m_world.Transforms().find(m_survivor);
+                if (survivorTransformIt != m_world.Transforms().end())
+                {
+                    const glm::vec3 survivorPos = survivorTransformIt->second.position;
+                    const float distXZ = DistanceXZ(killerPos, survivorPos);
+
+                    if (distXZ <= m_blinkConfig.blinkAttackRange)
+                    {
+                        // Check angle
+                        const glm::vec3 toSurvivorXZ = glm::normalize(glm::vec3(
+                            survivorPos.x - killerPos.x,
+                            0.0F,
+                            survivorPos.z - killerPos.z
+                        ));
+                        const glm::vec3 killerForwardXZ = glm::normalize(glm::vec3(
+                            killerForward.x, 0.0F,
+                            killerForward.z
+                        ));
+                        const float dot = glm::dot(killerForwardXZ, toSurvivorXZ);
+                        const float angleRad = glm::radians(m_blinkConfig.blinkAttackAngleDegrees * 0.5F);
+
+                        if (dot >= glm::cos(angleRad))
+                        {
+                            // Hit!
+                            if (m_survivorState != SurvivorHealthState::Downed &&
+                                m_survivorState != SurvivorHealthState::Dead &&
+                                m_survivorState != SurvivorHealthState::Hooked &&
+                                m_survivorState != SurvivorHealthState::Carried)
+                            {
+                                SetSurvivorState(SurvivorHealthState::Injured, "blink_attack", false);
+
+                                // Blood FX
+                                const engine::fx::FxNetMode netMode = m_networkAuthorityMode
+                                    ? engine::fx::FxNetMode::ServerBroadcast
+                                    : engine::fx::FxNetMode::Local;
+                                SpawnGameplayFx("fx_blood_splatter_large", survivorPos, killerForward, netMode);
+                                AddRuntimeMessage("BLINK ATTACK!", 2.0F);
+                                ItemPowerLog("NurseBlink: Blink attack hit survivor!");
+                            }
+
+                            enterFatigue();
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Windup complete
+            if (m_killerPowerState.blinkAttackWindupTimer >= m_blinkConfig.blinkAttackWindupSeconds)
+            {
+                enterFatigue();
+            }
+            break;
+        }
+
+        case NurseBlinkState::Fatigue:
+        {
+            // Apply movement penalty during fatigue
+            killerVelocity *= m_blinkConfig.fatigueMoveSpeedMultiplier;
+
+            const float fatigueDuration = m_blinkConfig.fatigueBaseSeconds +
+                (static_cast<float>(m_killerPowerState.blinksUsedThisChain) * m_blinkConfig.fatiguePerBlinkUsedSeconds);
+
+            m_killerPowerState.blinkFatigueTimer += fixedDt;
+
+            if (m_killerPowerState.blinkFatigueTimer >= fatigueDuration)
+            {
+                m_killerPowerState.blinkState = NurseBlinkState::Idle;
+                m_killerPowerState.blinksUsedThisChain = 0;
+                m_killerPowerState.blinkFatigueTimer = 0.0F;
+                // Reset requiresRelease so player can immediately start charging again
+                m_killerPowerState.blinkRequiresRelease = false;
+                ItemPowerLog("NurseBlink: Fatigue ended, returning to Idle");
+            }
+            break;
+        }
+    }
+}
+
+void GameplaySystems::RenderBlinkPreview(engine::render::Renderer& renderer)
+{
+    // Always show blink preview when charging (not just in debug mode)
+    if (m_killer == 0 || m_killerPowerState.blinkState != NurseBlinkState::ChargingBlink)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "nurse_blink")
+    {
+        return;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+
+    const glm::vec3& killerPos = killerTransformIt->second.position;
+    const glm::vec3& killerForward = killerTransformIt->second.forward;
+
+    // Calculate preview position
+    const glm::vec3 forwardXZ = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+    const float previewDistance = m_blinkConfig.minBlinkDistance +
+        m_killerPowerState.blinkCharge01 * (m_blinkConfig.maxBlinkDistance - m_blinkConfig.minBlinkDistance);
+    const glm::vec3 requestedTarget = killerPos + forwardXZ * previewDistance;
+
+    // Resolve the actual endpoint (always returns valid position)
+    glm::vec3 resolvedTarget;
+    (void)ResolveBlinkEndpoint(killerPos, requestedTarget, resolvedTarget);
+
+    // Draw direction line from killer to target (cyan, pulsing)
+    const float pulseIntensity = 0.7F + 0.3F * std::sin(m_killerPowerState.blinkChargeTimer * 8.0F);
+    const glm::vec3 lineColor = glm::vec3(0.2F, 0.8F * pulseIntensity, 1.0F);
+
+    renderer.DrawLine(killerPos + glm::vec3(0.0F, 0.5F, 0.0F),
+                      resolvedTarget + glm::vec3(0.0F, 0.5F, 0.0F),
+                      lineColor);
+
+    // Draw target circle on ground (cyan, pulsing)
+    renderer.DrawCircle(resolvedTarget, 0.6F, 16, lineColor);
+
+    // Draw a vertical line at target position
+    renderer.DrawLine(resolvedTarget + glm::vec3(0.0F, 0.0F, 0.0F),
+                      resolvedTarget + glm::vec3(0.0F, 2.0F, 0.0F),
+                      lineColor);
+}
+
+void GameplaySystems::RenderBlinkDebug(engine::render::Renderer& renderer)
+{
+    if (!m_blinkDebugEnabled || m_killer == 0)
+    {
+        return;
+    }
+
+    const loadout::PowerDefinition* powerDef = m_loadoutCatalog.FindPower(m_killerLoadout.powerId);
+    if (powerDef == nullptr || powerDef->id != "nurse_blink")
+    {
+        return;
+    }
+
+    auto killerTransformIt = m_world.Transforms().find(m_killer);
+    if (killerTransformIt == m_world.Transforms().end())
+    {
+        return;
+    }
+
+    const glm::vec3& killerPos = killerTransformIt->second.position;
+    const glm::vec3& killerForward = killerTransformIt->second.forward;
+
+    // Debug-only: show max range circle
+    const glm::vec3 forwardXZ = glm::normalize(glm::vec3(killerForward.x, 0.0F, killerForward.z));
+    const glm::vec3 maxRangePos = killerPos + forwardXZ * m_blinkConfig.maxBlinkDistance;
+    renderer.DrawCircle(maxRangePos, 0.3F, 8, glm::vec3(0.5F, 0.5F, 0.5F)); // Gray = max range
+
+    // Debug: show min range circle
+    const glm::vec3 minRangePos = killerPos + forwardXZ * m_blinkConfig.minBlinkDistance;
+    renderer.DrawCircle(minRangePos, 0.3F, 8, glm::vec3(0.3F, 0.3F, 0.3F)); // Dark gray = min range
+
+    // Draw blink attack range (orange circle) - during chain window
+    if (m_killerPowerState.blinkState == NurseBlinkState::ChainWindow ||
+        m_killerPowerState.blinkState == NurseBlinkState::BlinkAttackWindup)
+    {
+        renderer.DrawCircle(killerPos, m_blinkConfig.blinkAttackRange, 24, glm::vec3(1.0F, 0.6F, 0.2F));
+    }
+
+    // Draw target position if traveling
+    if (m_killerPowerState.blinkState == NurseBlinkState::BlinkTravel)
+    {
+        renderer.DrawCircle(m_killerPowerState.blinkTargetPosition, 0.5F, 12, glm::vec3(0.2F, 1.0F, 0.2F));
+    }
+}
+
+void GameplaySystems::SetBlinkCharges(int charges)
+{
+    m_killerPowerState.blinkCharges = glm::clamp(charges, 0, m_blinkConfig.maxCharges);
+    ItemPowerLog("NurseBlink: Charges set to " + std::to_string(m_killerPowerState.blinkCharges));
+}
+
+void GameplaySystems::ResetBlinkState()
+{
+    m_killerPowerState.blinkState = NurseBlinkState::Idle;
+    m_killerPowerState.blinkChargeTimer = 0.0F;
+    m_killerPowerState.blinkCharge01 = 0.0F;
+    m_killerPowerState.blinkTravelTimer = 0.0F;
+    m_killerPowerState.blinkChainWindowTimer = 0.0F;
+    m_killerPowerState.blinkFatigueTimer = 0.0F;
+    m_killerPowerState.blinkAttackWindupTimer = 0.0F;
+    m_killerPowerState.blinksUsedThisChain = 0;
+    m_killerPowerState.blinkAttackInProgress = false;
+    m_killerPowerState.blinkRequiresRelease = false;
+    ItemPowerLog("NurseBlink: State reset to Idle");
+}
+
+std::string GameplaySystems::GetBlinkDumpInfo() const
+{
+    std::ostringstream oss;
+    oss << "=== Nurse Blink State ===\n";
+
+    auto stateToText = [](NurseBlinkState state) -> std::string {
+        switch (state)
+        {
+            case NurseBlinkState::Idle: return "Idle";
+            case NurseBlinkState::ChargingBlink: return "ChargingBlink";
+            case NurseBlinkState::BlinkTravel: return "BlinkTravel";
+            case NurseBlinkState::ChainWindow: return "ChainWindow";
+            case NurseBlinkState::BlinkAttackWindup: return "BlinkAttackWindup";
+            case NurseBlinkState::Fatigue: return "Fatigue";
+            default: return "Unknown";
+        }
+    };
+
+    oss << "State: " << stateToText(m_killerPowerState.blinkState) << "\n";
+    oss << "Charges: " << m_killerPowerState.blinkCharges << "/" << m_killerPowerState.blinkMaxCharges << "\n";
+    oss << "Charge01: " << m_killerPowerState.blinkCharge01 << "\n";
+    oss << "ChargeRegenTimer: " << m_killerPowerState.blinkChargeRegenTimer << "\n";
+    oss << "BlinksUsedThisChain: " << m_killerPowerState.blinksUsedThisChain << "\n";
+    oss << "TravelTimer: " << m_killerPowerState.blinkTravelTimer << "\n";
+    oss << "ChainWindowTimer: " << m_killerPowerState.blinkChainWindowTimer << "\n";
+    oss << "FatigueTimer: " << m_killerPowerState.blinkFatigueTimer << "\n";
+    oss << "StartPosition: " << m_killerPowerState.blinkStartPosition.x << ", "
+        << m_killerPowerState.blinkStartPosition.y << ", " << m_killerPowerState.blinkStartPosition.z << "\n";
+    oss << "TargetPosition: " << m_killerPowerState.blinkTargetPosition.x << ", "
+        << m_killerPowerState.blinkTargetPosition.y << ", " << m_killerPowerState.blinkTargetPosition.z << "\n";
+    oss << "RequiresRelease: " << (m_killerPowerState.blinkRequiresRelease ? "true" : "false") << "\n";
+
+    return oss.str();
+}
+
+std::string GameplaySystems::GetBlinkStateString() const
+{
+    switch (m_killerPowerState.blinkState)
+    {
+        case NurseBlinkState::Idle: return "Idle";
+        case NurseBlinkState::ChargingBlink: return "Charging";
+        case NurseBlinkState::BlinkTravel: return "Traveling";
+        case NurseBlinkState::ChainWindow: return "ChainWindow";
+        case NurseBlinkState::BlinkAttackWindup: return "Attacking";
+        case NurseBlinkState::Fatigue: return "Fatigue";
+        default: return "Unknown";
+    }
+}
+
+void GameplaySystems::ForceAnimationState(const std::string& stateName)
+{
+    const auto state = engine::animation::ParseLocomotionState(stateName);
+    if (state.has_value())
+    {
+        m_animationSystem.ForceState(state.value());
+    }
+}
+
+void GameplaySystems::SetAnimationAutoMode(bool autoMode)
+{
+    m_animationSystem.SetAutoMode(autoMode);
+}
+
+std::string GameplaySystems::GetAnimationInfo() const
+{
+    return m_animationSystem.GetDebugInfo();
+}
+
+std::vector<std::string> GameplaySystems::GetAnimationClipList() const
+{
+    return m_animationSystem.ListClips();
+}
+
+void GameplaySystems::ForcePlayAnimationClip(const std::string& clipName)
+{
+    const auto* clip = m_animationSystem.GetClip(clipName);
+    if (clip != nullptr)
+    {
+        m_animationSystem.GetStateMachineMut().GetBlenderMut().CrossfadeTo(clip, 0.2F);
+    }
+}
+
+void GameplaySystems::SetGlobalAnimationScale(float scale)
+{
+    auto profile = m_animationSystem.GetProfile();
+    profile.globalAnimScale = std::max(0.1F, scale);
+    m_animationSystem.SetProfile(profile);
+}
+
+void GameplaySystems::LoadAnimationConfig()
+{
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "animation.json";
+
+    if (!m_animationSystem.LoadProfile(path))
+    {
+        // Save default profile if it didn't exist
+        m_animationSystem.SaveProfile(path);
+    }
+
+    m_animationSystem.InitializeStateMachine();
 }
 
 } // namespace game::gameplay

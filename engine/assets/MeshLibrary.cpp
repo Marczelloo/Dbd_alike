@@ -1,4 +1,5 @@
 #include "engine/assets/MeshLibrary.hpp"
+#include "engine/animation/AnimationClip.hpp"
 
 #include <algorithm>
 #include <array>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -837,7 +839,7 @@ const MeshData* MeshLibrary::LoadMesh(const std::filesystem::path& absolutePath,
     }
     else if (ext == ".gltf" || ext == ".glb")
     {
-        loaded = LoadGltf(absolutePath);
+        loaded = LoadGltf(absolutePath, m_animationCallback ? &m_animationCallback : nullptr);
     }
     else
     {
@@ -1009,7 +1011,7 @@ MeshData MeshLibrary::LoadObj(const std::filesystem::path& absolutePath)
     return out;
 }
 
-MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
+MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath, AnimationLoadedCallback* animationCallback)
 {
     MeshData out;
 
@@ -1532,6 +1534,201 @@ MeshData MeshLibrary::LoadGltf(const std::filesystem::path& absolutePath)
     out.boundsMax = boundsMax - center;
     out.loaded = true;
     out.error = warn;
+
+    // Extract animations if callback is set
+    if (animationCallback != nullptr && *animationCallback != nullptr && !model.animations.empty())
+    {
+        for (const tinygltf::Animation& anim : model.animations)
+        {
+            auto clip = std::make_unique<engine::animation::AnimationClip>();
+            clip->name = anim.name.empty() ? "animation_" + std::to_string(&anim - &model.animations[0]) : anim.name;
+
+            float maxTime = 0.0F;
+
+            for (const tinygltf::AnimationChannel& channel : anim.channels)
+            {
+                if (channel.target_node < 0 || channel.target_node >= static_cast<int>(model.nodes.size()))
+                {
+                    continue;
+                }
+                if (channel.sampler < 0 || channel.sampler >= static_cast<int>(anim.samplers.size()))
+                {
+                    continue;
+                }
+
+                const tinygltf::AnimationSampler& sampler = anim.samplers[static_cast<std::size_t>(channel.sampler)];
+                if (sampler.input < 0 || sampler.input >= static_cast<int>(model.accessors.size()))
+                {
+                    continue;
+                }
+                if (sampler.output < 0 || sampler.output >= static_cast<int>(model.accessors.size()))
+                {
+                    continue;
+                }
+
+                const tinygltf::Accessor& inputAccessor = model.accessors[static_cast<std::size_t>(sampler.input)];
+                const tinygltf::Accessor& outputAccessor = model.accessors[static_cast<std::size_t>(sampler.output)];
+
+                // Read keyframe times
+                std::vector<float> times;
+                if (inputAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && inputAccessor.type == TINYGLTF_TYPE_SCALAR)
+                {
+                    const tinygltf::BufferView* view = (inputAccessor.bufferView >= 0 && inputAccessor.bufferView < static_cast<int>(model.bufferViews.size()))
+                        ? &model.bufferViews[static_cast<std::size_t>(inputAccessor.bufferView)] : nullptr;
+                    if (view != nullptr && view->buffer >= 0 && view->buffer < static_cast<int>(model.buffers.size()))
+                    {
+                        const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view->buffer)];
+                        const std::size_t stride = static_cast<std::size_t>(inputAccessor.ByteStride(*view) > 0 ? inputAccessor.ByteStride(*view) : sizeof(float));
+                        const std::size_t baseOffset = static_cast<std::size_t>(view->byteOffset + inputAccessor.byteOffset);
+
+                        times.reserve(inputAccessor.count);
+                        for (std::size_t i = 0; i < inputAccessor.count; ++i)
+                        {
+                            const std::size_t offset = baseOffset + i * stride;
+                            if (offset + sizeof(float) <= buffer.data.size())
+                            {
+                                float t = 0.0F;
+                                std::memcpy(&t, buffer.data.data() + offset, sizeof(float));
+                                times.push_back(t);
+                                maxTime = std::max(maxTime, t);
+                            }
+                        }
+                    }
+                }
+
+                if (times.empty())
+                {
+                    continue;
+                }
+
+                const int jointIndex = channel.target_node;
+
+                // Read keyframe values based on path
+                if (channel.target_path == "translation")
+                {
+                    engine::animation::TranslationChannel ch;
+                    ch.jointIndex = jointIndex;
+                    ch.times = times;
+
+                    std::vector<glm::vec3> values;
+                    if (ReadAccessorVec3Float(model, outputAccessor, &values, nullptr))
+                    {
+                        // Validate times and values arrays match
+                        if (values.size() != times.size())
+                        {
+                            std::cout << "[ANIMATION] Warning: translation channel times/values count mismatch ("
+                                      << times.size() << " vs " << values.size() << ") for joint " << jointIndex << "\n";
+                            continue;
+                        }
+                        ch.values = std::move(values);
+                        clip->translations.push_back(std::move(ch));
+                    }
+                }
+                else if (channel.target_path == "rotation")
+                {
+                    engine::animation::RotationChannel ch;
+                    ch.jointIndex = jointIndex;
+                    ch.times = times;
+
+                    // Read vec4 (quaternion)
+                    if (outputAccessor.type == TINYGLTF_TYPE_VEC4 && outputAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+                    {
+                        const tinygltf::BufferView* view = (outputAccessor.bufferView >= 0 && outputAccessor.bufferView < static_cast<int>(model.bufferViews.size()))
+                            ? &model.bufferViews[static_cast<std::size_t>(outputAccessor.bufferView)] : nullptr;
+                        if (view != nullptr && view->buffer >= 0 && view->buffer < static_cast<int>(model.buffers.size()))
+                        {
+                            const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view->buffer)];
+                            const std::size_t stride = static_cast<std::size_t>(outputAccessor.ByteStride(*view) > 0 ? outputAccessor.ByteStride(*view) : sizeof(float) * 4);
+                            const std::size_t baseOffset = static_cast<std::size_t>(view->byteOffset + outputAccessor.byteOffset);
+
+                            ch.values.reserve(outputAccessor.count);
+                            for (std::size_t i = 0; i < outputAccessor.count; ++i)
+                            {
+                                const std::size_t offset = baseOffset + i * stride;
+                                const std::size_t requiredSize = offset + sizeof(float) * 4;
+                                if (requiredSize > buffer.data.size())
+                                {
+                                    // Bounds check failed - skip this keyframe
+                                    std::cout << "[ANIMATION] Warning: buffer overflow prevented at offset " << offset
+                                              << " (buffer size: " << buffer.data.size() << ", required: " << requiredSize << ")\n";
+                                    continue;
+                                }
+                                float x = 0.0F, y = 0.0F, z = 0.0F, w = 0.0F;
+                                std::memcpy(&x, buffer.data.data() + offset, sizeof(float));
+                                std::memcpy(&y, buffer.data.data() + offset + sizeof(float), sizeof(float));
+                                std::memcpy(&z, buffer.data.data() + offset + sizeof(float) * 2, sizeof(float));
+                                std::memcpy(&w, buffer.data.data() + offset + sizeof(float) * 3, sizeof(float));
+                                // glTF uses (x, y, z, w), glm uses (w, x, y, z)
+                                glm::quat q{w, x, y, z};
+                                if (glm::length(q) > 1.0e-6F)
+                                {
+                                    q = glm::normalize(q);
+                                }
+                                ch.values.push_back(q);
+                            }
+                        }
+                    }
+                    if (!ch.values.empty())
+                    {
+                        // Validate times and values arrays match
+                        if (ch.values.size() != times.size())
+                        {
+                            std::cout << "[ANIMATION] Warning: rotation channel times/values count mismatch ("
+                                      << times.size() << " vs " << ch.values.size() << ") for joint " << jointIndex << "\n";
+                            ch.values.clear();
+                        }
+                        else
+                        {
+                            clip->rotations.push_back(std::move(ch));
+                        }
+                    }
+                }
+                else if (channel.target_path == "scale")
+                {
+                    engine::animation::ScaleChannel ch;
+                    ch.jointIndex = jointIndex;
+                    ch.times = times;
+
+                    std::vector<glm::vec3> values;
+                    if (ReadAccessorVec3Float(model, outputAccessor, &values, nullptr))
+                    {
+                        // Validate times and values arrays match
+                        if (values.size() != times.size())
+                        {
+                            std::cout << "[ANIMATION] Warning: scale channel times/values count mismatch ("
+                                      << times.size() << " vs " << values.size() << ") for joint " << jointIndex << "\n";
+                            continue;
+                        }
+                        ch.values = std::move(values);
+                        clip->scales.push_back(std::move(ch));
+                    }
+                }
+            }
+
+            clip->duration = maxTime;
+
+            if (clip->Valid())
+            {
+                out.animationNames.push_back(clip->name);
+                (*animationCallback)(clip->name, std::move(clip));
+            }
+            else
+            {
+                std::cout << "[ANIMATION] Warning: clip '" << clip->name << "' is invalid (duration=" << clip->duration << ")\n";
+            }
+        }
+    }
+
+    // Log discovered animation names
+    if (!out.animationNames.empty())
+    {
+        std::cout << "[GLTF] Animations found in " << absolutePath.filename().string() << ":\n";
+        for (const auto& name : out.animationNames)
+        {
+            std::cout << "  - " << name << "\n";
+        }
+    }
+
     return out;
 }
 } // namespace engine::assets
