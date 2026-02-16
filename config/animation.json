@@ -1,0 +1,15 @@
+{
+  "asset_version": 1,
+  "idle_epsilon": 0.1,
+  "run_threshold": 3.5,
+  "blend_idle_walk": 0.12,
+  "blend_walk_run": 0.1,
+  "blend_run_idle": 0.15,
+  "global_anim_scale": 1.0,
+  "walk_speed_ref": 3.43,
+  "run_speed_ref": 4.6,
+  "min_walk_scale": 0.8,
+  "max_walk_scale": 1.2,
+  "min_run_scale": 0.8,
+  "max_run_scale": 1.2
+}

@@ -10,9 +10,11 @@
 #include <vector>
 
 #include <glm/mat4x4.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include "engine/animation/AnimationSystem.hpp"
 #include "engine/core/EventBus.hpp"
 #include "engine/fx/FxSystem.hpp"
 #include "engine/platform/ActionBindings.hpp"
@@ -244,6 +246,19 @@ struct HudState
     bool chainsawOverheatBuffed = false;      // True when heat >= 100%
     float chainsawTurnRate = 0.0F;            // Current turn rate (deg/sec)
 
+    // Nurse blink power HUD fields
+    std::string blinkState = "Idle";
+    int blinkCharges = 2;
+    int blinkMaxCharges = 2;
+    float blinkCharge01 = 0.0F;
+    float blinkChainWindow01 = 0.0F;
+    float blinkFatigue01 = 0.0F;
+    int blinksUsedThisChain = 0;
+    bool blinkDebugEnabled = false;
+    float blinkChargeRegen01 = 0.0F;
+    float blinkDistanceMeters = 0.0F;
+    float blinkFatigueDuration = 0.0F;
+
     // Perks debug info
     struct ActivePerkDebug
     {
@@ -284,6 +299,15 @@ struct HudState
     bool killerUndetectable = false;
     bool survivorExposed = false;
     bool survivorExhausted = false;
+
+    // Animation/Locomotion debug info
+    std::string animState = "Idle";
+    std::string animClip = "";
+    float animPlaybackSpeed = 1.0F;
+    float animBlendWeight = 1.0F;
+    bool animBlending = false;
+    bool animAutoMode = true;
+    std::vector<std::string> animClipList;
 };
 
 class GameplaySystems
@@ -536,6 +560,12 @@ public:
         float killerBlindTimer = 0.0F;
         std::uint8_t killerBlindStyleWhite = 1;
         std::uint8_t carriedTrapCount = 0;
+        // Nurse blink power state
+        std::uint8_t blinkState = 0;
+        std::uint8_t blinkCharges = 2;
+        float blinkCharge01 = 0.0F;
+        float blinkChargeRegenTimer = 0.0F;
+        glm::vec3 blinkTargetPosition{0.0F};
         std::vector<PalletSnapshot> pallets;
         std::vector<TrapSnapshot> traps;
         std::vector<GroundItemSnapshot> groundItems;
@@ -650,6 +680,9 @@ public:
 
     bool SetSelectedSurvivorCharacter(const std::string& characterId);
     bool SetSelectedKillerCharacter(const std::string& characterId);
+    bool ReloadSelectedSurvivorCharacter(bool reloadAnimations = true);
+    bool ReloadSelectedSurvivorAnimations();
+    [[nodiscard]] const std::string& SelectedSurvivorCharacterId() const { return m_selectedSurvivorCharacterId; }
     [[nodiscard]] std::vector<std::string> ListSurvivorCharacters() const;
     [[nodiscard]] std::vector<std::string> ListKillerCharacters() const;
 
@@ -695,6 +728,15 @@ public:
         float survivorHitRadius,
         float chargeSlowdownMultiplier
     );
+
+    // Nurse blink power debug and control
+    void SetBlinkDebug(bool enabled) { m_blinkDebugEnabled = enabled; }
+    [[nodiscard]] bool BlinkDebugEnabled() const { return m_blinkDebugEnabled; }
+    void SetBlinkCharges(int charges);
+    void ResetBlinkState();
+    [[nodiscard]] int GetBlinkChargesCount() const { return m_killerPowerState.blinkCharges; }
+    [[nodiscard]] std::string GetBlinkStateString() const;
+    std::string GetBlinkDumpInfo() const;
 
     // Phase B2/B3: Scratch Marks and Blood Pools debug control
     void SetScratchDebug(bool enabled);
@@ -750,6 +792,19 @@ public:
     [[nodiscard]] bool IsSurvivorExhausted() const;
     [[nodiscard]] std::string StatusEffectDump() const;
 
+    // Animation System
+    [[nodiscard]] engine::animation::AnimationSystem& GetAnimationSystem() { return m_animationSystem; }
+    [[nodiscard]] const engine::animation::AnimationSystem& GetAnimationSystem() const { return m_animationSystem; }
+    void SetAnimationDebug(bool enabled) { m_animationDebugEnabled = enabled; }
+    [[nodiscard]] bool AnimationDebugEnabled() const { return m_animationDebugEnabled; }
+    void ForceAnimationState(const std::string& stateName);
+    void SetAnimationAutoMode(bool autoMode);
+    [[nodiscard]] std::string GetAnimationInfo() const;
+    [[nodiscard]] std::vector<std::string> GetAnimationClipList() const;
+    void ForcePlayAnimationClip(const std::string& clipName);
+    void SetGlobalAnimationScale(float scale);
+    void LoadAnimationConfig();
+
 private:
     enum class InteractionType
     {
@@ -799,6 +854,16 @@ private:
         Sprinting,
         Recovery
         // REMOVED: Overheated - now overheat grants buffs instead of locking
+    };
+
+    enum class NurseBlinkState
+    {
+        Idle,               // Normal state
+        ChargingBlink,      // Holding power, charging distance
+        BlinkTravel,        // Teleporting (phasing through walls)
+        ChainWindow,        // Post-blink decision window
+        BlinkAttackWindup,  // Initiating blink attack
+        Fatigue             // Recovery with movement penalty
     };
 
     enum class SkillCheckMode
@@ -988,6 +1053,16 @@ private:
         float* outMaxAbsXZ
     );
     [[nodiscard]] bool EnsureSurvivorCharacterMeshLoaded(const std::string& characterId);
+    [[nodiscard]] bool ReloadSurvivorCharacterAnimations(const std::string& characterId);
+    [[nodiscard]] bool LoadSurvivorAnimationRig(const std::string& characterId);
+    [[nodiscard]] bool BuildAnimatedSurvivorGeometry(
+        const std::string& characterId,
+        engine::render::MeshGeometry* outGeometry,
+        float* outMinY,
+        float* outMaxY,
+        float* outMaxAbsXZ
+    ) const;
+    void RefreshAnimatedSurvivorMeshIfNeeded(const std::string& characterId);
     void ResetItemAndPowerRuntimeState();
     void UpdateSurvivorItemSystem(const RoleCommand& survivorCommand, float fixedDt);
     void UpdateKillerPowerSystem(const RoleCommand& killerCommand, float fixedDt);
@@ -997,6 +1072,11 @@ private:
     void UpdateChainsawSprintPowerSystem(const RoleCommand& killerCommand, float fixedDt);
     void LoadChainsawSprintConfig();
     void RenderChainsawDebug(engine::render::Renderer& renderer);
+    void UpdateNurseBlinkPowerSystem(const RoleCommand& killerCommand, float fixedDt);
+    void LoadNurseBlinkConfig();
+    void RenderBlinkPreview(engine::render::Renderer& renderer);
+    void RenderBlinkDebug(engine::render::Renderer& renderer);
+    [[nodiscard]] bool ResolveBlinkEndpoint(const glm::vec3& start, const glm::vec3& requested, glm::vec3& out);
     void UpdateProjectiles(float fixedDt);
     engine::scene::Entity SpawnHatchetProjectile(const glm::vec3& origin, const glm::vec3& direction, float charge01);
     engine::scene::Entity SpawnLocker(const glm::vec3& position, const glm::vec3& forward);
@@ -1110,7 +1190,31 @@ private:
         bool boundsLoadFailed = false;
         bool gpuUploadAttempted = false;
     };
+
+    struct SurvivorAnimationRig
+    {
+        bool loaded = false;
+        bool runtimeUploadLogged = false;
+        int meshNodeIndex = -1;
+        int skinIndex = -1;
+        std::vector<int> sceneRoots;
+        std::vector<int> nodeParents;
+        std::vector<glm::vec3> restTranslations;
+        std::vector<glm::quat> restRotations;
+        std::vector<glm::vec3> restScales;
+        std::vector<int> skinJoints;
+        std::vector<glm::mat4> inverseBindMatrices;
+        std::vector<glm::vec3> basePositions;
+        std::vector<glm::vec3> baseNormals;
+        std::vector<glm::vec3> baseColors;
+        std::vector<glm::vec2> baseUvs;
+        std::vector<glm::uvec4> jointIndices;
+        std::vector<glm::vec4> jointWeights;
+        std::vector<std::uint32_t> indices;
+    };
+
     std::unordered_map<std::string, SurvivorVisualMesh> m_survivorVisualMeshes;
+    std::unordered_map<std::string, SurvivorAnimationRig> m_survivorAnimationRigs;
     float m_survivorCapsuleOverrideRadius = -1.0F;
     float m_survivorCapsuleOverrideHeight = -1.0F;
     float m_survivorVisualYawRadians = 0.0F;
@@ -1328,6 +1432,26 @@ private:
         // New recovery tracking
         bool chainsawRecoveryWasCollision = false;  // Track recovery type
         bool chainsawRecoveryWasHit = false;        // Track if recovery from hit
+
+        // Nurse blink power state
+        NurseBlinkState blinkState = NurseBlinkState::Idle;
+        int blinkCharges = 2;
+        int blinkMaxCharges = 2;
+        float blinkChargeRegenTimer = 0.0F;
+        float blinkChargeTimer = 0.0F;
+        float blinkCharge01 = 0.0F;
+        int blinksUsedThisChain = 0;
+        float blinkTravelTimer = 0.0F;
+        float blinkChainWindowTimer = 0.0F;
+        float blinkChainChargeRemaining = 0.0F;  // Time left before fatigue when charging during chain window
+        float blinkFatigueTimer = 0.0F;
+        float blinkAttackWindupTimer = 0.0F;
+        glm::vec3 blinkStartPosition{0.0F};
+        glm::vec3 blinkTargetPosition{0.0F};
+        glm::vec3 blinkTravelDirection{0.0F};
+        bool blinkAttackInProgress = false;
+        bool blinkRequiresRelease = false;
+        bool blinkIsChainCharge = false;  // True if this charge started during chain window
     };
 
     SurvivorItemRuntimeState m_survivorItemState{};
@@ -1431,6 +1555,27 @@ private:
         float chargeSlowdownMultiplier = 0.3F;   // Movement speed while charging (0.3 = 30% speed)
     };
 
+    struct NurseBlinkConfig
+    {
+        int maxCharges = 2;
+        float chargeRegenSeconds = 3.0F;
+        float minBlinkDistance = 2.0F;
+        float maxBlinkDistance = 20.0F;
+        float chargeTimeToMax = 2.0F;
+        float chargeMoveSpeedMultiplier = 0.5F;
+        float blinkTravelTime = 0.15F;
+        float chainWindowSeconds = 1.5F;
+        float fatigueBaseSeconds = 2.0F;
+        float fatiguePerBlinkUsedSeconds = 0.5F;
+        float fatigueMoveSpeedMultiplier = 0.5F;
+        float blinkAttackRange = 4.5F;
+        float blinkAttackAngleDegrees = 90.0F;
+        float blinkAttackWindupSeconds = 0.2F;
+        float blinkAttackLungeMultiplier = 2.0F;
+        int endpointSlideAttempts = 8;
+        float endpointSlideStep = 0.3F;
+    };
+
     void UpdateScratchMarks(float fixedDt, const glm::vec3& survivorPos, const glm::vec3& survivorForward, bool survivorSprinting);
     void UpdateBloodPools(float fixedDt, const glm::vec3& survivorPos, bool survivorInjuredOrDowned, bool survivorMoving);
     void RenderScratchMarks(engine::render::Renderer& renderer, bool localIsKiller) const;
@@ -1459,6 +1604,9 @@ private:
     ChainsawSprintConfig m_chainsawConfig{};
     bool m_chainsawDebugEnabled = false;
 
+    NurseBlinkConfig m_blinkConfig{};
+    bool m_blinkDebugEnabled = false;
+
     KillerLookLight m_killerLookLight{};
     bool m_killerLookLightDebug = false;
     std::size_t m_mapSpotLightCount = 0;
@@ -1482,6 +1630,11 @@ private:
     std::vector<HighPolyMesh> m_highPolyMeshes;
     bool m_highPolyMeshesGenerated = false;
     bool m_highPolyMeshesUploaded = false;
+
+    // Animation system for locomotion (survivor)
+    engine::animation::AnimationSystem m_animationSystem;
+    bool m_animationDebugEnabled = false;
+    std::string m_animationCharacterId;
 };
 
 } // namespace game::gameplay

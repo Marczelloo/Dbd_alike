@@ -147,6 +147,23 @@ public:
         float chainsawChargeSlowdownMultiplier = 0.3F;
     };
 
+    struct AnimationSettings
+    {
+        int assetVersion = 1;
+        float idleEpsilon = 0.1F;
+        float runThreshold = 3.5F;
+        float blendIdleWalk = 0.12F;
+        float blendWalkRun = 0.10F;
+        float blendRunIdle = 0.15F;
+        float globalAnimScale = 1.0F;
+        float walkSpeedRef = 3.43F;
+        float runSpeedRef = 4.6F;
+        float minWalkScale = 0.8F;
+        float maxWalkScale = 1.2F;
+        float minRunScale = 0.8F;
+        float maxRunScale = 1.2F;
+    };
+
 private:
     enum class AppMode
     {
@@ -318,6 +335,10 @@ private:
     void ApplyPowersSettings(const PowersTuning& tuning, bool fromServer);
     void SendPowersTuningToClient();
 
+    [[nodiscard]] bool LoadAnimationConfig();
+    [[nodiscard]] bool SaveAnimationConfig() const;
+    void ApplyAnimationSettings(const AnimationSettings& settings);
+
     platform::WindowSettings m_windowSettings{};
 
     platform::Window m_window;
@@ -370,7 +391,7 @@ private:
     bool m_settingsMenuOpen = false;
     bool m_settingsOpenedFromPause = false;
     int m_settingsTabIndex = 0;
-    std::array<float, 5> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+    std::array<float, 7> m_settingsTabScroll{0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
     float m_mainMenuScrollY = 0.0F;
     bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
@@ -409,6 +430,8 @@ private:
     game::gameplay::GameplaySystems::GameplayTuning m_gameplayEditing{};
     PowersTuning m_powersApplied{};
     PowersTuning m_powersEditing{};
+    AnimationSettings m_animationApplied{};
+    AnimationSettings m_animationEditing{};
     bool m_serverGameplayValues = false;
     bool m_graphicsAutoConfirmPending = false;
     double m_graphicsAutoConfirmDeadline = 0.0;
@@ -426,6 +449,7 @@ private:
     std::string m_audioStatus;
     std::string m_gameplayStatus;
     std::string m_powersStatus;
+    std::string m_animationStatus;
 
     int m_menuRoleIndex = 0;
     int m_menuMapIndex = 0;

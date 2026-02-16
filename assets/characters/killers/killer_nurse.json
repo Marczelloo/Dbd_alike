@@ -1,0 +1,8 @@
+{
+  "asset_version": 1,
+  "id": "killer_nurse",
+  "display_name": "The Nurse",
+  "model_path": "assets/meshes/killer_nurse.glb",
+  "cosmetic_id": "default",
+  "power_id": "nurse_blink"
+}

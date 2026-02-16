@@ -1,4 +1,4 @@
-#include "ui/DeveloperConsole.hpp"
+﻿#include "ui/DeveloperConsole.hpp"
 
 #include <algorithm>
 #include <array>
@@ -730,9 +730,9 @@ struct DeveloperConsole::Impl
     }
 
     void LogCommand(const std::string& text) { AddLog(text, ConsoleColors::Command, true, 0); }
-    void LogSuccess(const std::string& text) { AddLog("✓ " + text, ConsoleColors::Success, false, 0); }
-    void LogError(const std::string& text) { AddLog("✗ " + text, ConsoleColors::Error, false, 0); }
-    void LogWarning(const std::string& text) { AddLog("⚠ " + text, ConsoleColors::Warning, false, 0); }
+    void LogSuccess(const std::string& text) { AddLog("âś“ " + text, ConsoleColors::Success, false, 0); }
+    void LogError(const std::string& text) { AddLog("âś— " + text, ConsoleColors::Error, false, 0); }
+    void LogWarning(const std::string& text) { AddLog("âš  " + text, ConsoleColors::Warning, false, 0); }
     void LogInfo(const std::string& text) { AddLog(text, ConsoleColors::Info, false, 0); }
     void LogCategory(const std::string& text) { AddLog(text, ConsoleColors::Category, false, 0); }
     void LogValue(const std::string& label, const std::string& value)
@@ -754,10 +754,10 @@ struct DeveloperConsole::Impl
             std::sort(commands.begin(), commands.end(), [](const CommandInfo& a, const CommandInfo& b) {
                 return a.usage < b.usage;
             });
-            AddLog("▸ " + category, ConsoleColors::Category);
+            AddLog("â–¸ " + category, ConsoleColors::Category);
             for (const CommandInfo& info : commands)
             {
-                AddLog("  • " + info.usage + " — " + info.description, ConsoleColors::Info, false, 1);
+                AddLog("  - " + info.usage + " â€” " + info.description, ConsoleColors::Info, false, 1);
             }
         }
     }
@@ -872,7 +872,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             AddLog("FX assets:", ConsoleColors::Category);
             for (const std::string& assetId : assets)
             {
-                AddLog("  • " + assetId, ConsoleColors::Info);
+                AddLog("  - " + assetId, ConsoleColors::Info);
             }
         });
 
@@ -906,7 +906,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
         });
 
-        // ─── Profiler commands ───
+        // â”€â”€â”€ Profiler commands â”€â”€â”€
         RegisterCommand("perf", "Toggle performance profiler overlay", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.profilerToggle) {
                 context.profilerToggle();
@@ -2907,7 +2907,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             AddLog("Animation clips:", ConsoleColors::Category);
             for (const std::string& clipName : clips)
             {
-                AddLog("  • " + clipName, ConsoleColors::Info);
+                AddLog("  - " + clipName, ConsoleColors::Info);
             }
         });
 
@@ -3010,7 +3010,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             AddLog("Survivor characters:", ConsoleColors::Category);
             for (const std::string& id : ids)
             {
-                AddLog("  • " + id, ConsoleColors::Info);
+                AddLog("  - " + id, ConsoleColors::Info);
             }
         });
 
@@ -3021,10 +3021,24 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                 LogInfo("Use 'list_survivor_models' to see available IDs");
                 return;
             }
-            const std::string characterId = tokens[1];
+            std::string characterId = tokens[1];
+            if (characterId == "male")
+            {
+                characterId = "survivor_male_blocky";
+            }
+            else if (characterId == "female")
+            {
+                characterId = "survivor_female_blocky";
+            }
+            else if (characterId == "dwight")
+            {
+                characterId = "survivor_dwight";
+            }
             if (context.gameplay->SetSelectedSurvivorCharacter(characterId))
             {
                 LogSuccess("Survivor model set to: " + characterId);
+                const auto clips = context.gameplay->GetAnimationClipList();
+                AddLog("Animation clips loaded: " + std::to_string(clips.size()), ConsoleColors::Info);
             }
             else
             {
@@ -3037,19 +3051,15 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             {
                 return;
             }
-            // Clear animation clips to force reload
-            context.gameplay->GetAnimationSystem().ClearClips();
-            // Re-select current character to trigger reload
-            const auto ids = context.gameplay->ListSurvivorCharacters();
-            if (!ids.empty())
+            if (context.gameplay->ReloadSelectedSurvivorCharacter(true))
             {
-                const std::string current = ids.front();  // Just use first available
-                context.gameplay->SetSelectedSurvivorCharacter(current);
-                LogSuccess("Survivor model reloaded (animations cleared)");
+                const auto clips = context.gameplay->GetAnimationClipList();
+                LogSuccess("Survivor model reloaded: " + context.gameplay->SelectedSurvivorCharacterId());
+                AddLog("Animation clips loaded: " + std::to_string(clips.size()), ConsoleColors::Info);
             }
             else
             {
-                LogWarning("No survivor characters available to reload");
+                LogError("Failed to reload survivor model");
             }
         });
 
@@ -3058,16 +3068,20 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             {
                 return;
             }
-            // Clear and reinitialize animation system
-            context.gameplay->GetAnimationSystem().ClearClips();
-            context.gameplay->GetAnimationSystem().InitializeStateMachine();
-            LogSuccess("Animation clips cleared, state machine reinitialized");
+            if (context.gameplay->ReloadSelectedSurvivorAnimations())
+            {
+                const auto clips = context.gameplay->GetAnimationClipList();
+                LogSuccess("Animations reloaded for " + context.gameplay->SelectedSurvivorCharacterId());
+                AddLog("Animation clips loaded: " + std::to_string(clips.size()), ConsoleColors::Info);
+                return;
+            }
+            LogError("Failed to reload animations from current survivor model");
         });
     }
 
     void ExecuteCommand(const std::string& commandLine, const ConsoleContext& context)
     {
-        LogCommand("» " + commandLine);
+        LogCommand("Â» " + commandLine);
 
         std::vector<std::string> tokens = Tokenize(commandLine);
         if (tokens.empty())
@@ -3184,7 +3198,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                             AddLog("Possible matches:", ConsoleColors::Info);
                             for (const std::string& candidate : candidates)
                             {
-                                AddLog("  • " + candidate, ConsoleColors::Value);
+                                AddLog("  - " + candidate, ConsoleColors::Value);
                             }
                         }
                     }
@@ -3221,7 +3235,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
                             AddLog("Valid options (TAB to cycle):", glm::vec4{0.45F, 0.85F, 0.45F, 1.0F});
                             for (const std::string& opt : options)
                             {
-                                AddLog("  • " + opt, glm::vec4{0.9F, 0.9F, 0.7F, 1.0F});
+                                AddLog("  - " + opt, glm::vec4{0.9F, 0.9F, 0.7F, 1.0F});
                             }
 
                             completionCycleIndex = 0;
@@ -3813,7 +3827,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
 
                         ImGui::SameLine(0.0F, 6.0F);
                         ImGui::PushStyleColor(ImGuiCol_Text, descColor);
-                        ImGui::TextUnformatted(" — ");
+                        ImGui::TextUnformatted(" â€” ");
                         ImGui::SameLine(0.0F, 0.0F);
                         ImGui::TextUnformatted(hint.description.c_str());
                         ImGui::PopStyleColor();
@@ -3903,3 +3917,4 @@ bool DeveloperConsole::WantsKeyboardCapture() const
 #endif
 }
 } // namespace ui
+

@@ -309,6 +309,7 @@ bool App::Run()
     (void)LoadGameplayConfig();
     (void)LoadPowersConfig();
     ApplyPowersSettings(m_powersApplied, false);
+    (void)LoadAnimationConfig();
     (void)LoadHudLayoutConfig();
 
     m_windowSettings.width = m_graphicsApplied.width;
@@ -3982,6 +3983,113 @@ void App::SendPowersTuningToClient()
     m_network.SendReliable(payload.data(), payload.size());
 }
 
+bool App::LoadAnimationConfig()
+{
+    m_animationApplied = AnimationSettings{};
+    m_animationEditing = AnimationSettings{};
+
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "animation.json";
+    if (!std::filesystem::exists(path))
+    {
+        return SaveAnimationConfig();
+    }
+
+    std::ifstream stream(path);
+    if (!stream.is_open())
+    {
+        m_animationStatus = "Failed to open animation config.";
+        return false;
+    }
+
+    json root;
+    try
+    {
+        stream >> root;
+    }
+    catch (const std::exception&)
+    {
+        m_animationStatus = "Invalid animation config. Using defaults.";
+        return SaveAnimationConfig();
+    }
+
+    auto readFloat = [&](const char* key, float& target) {
+        if (root.contains(key) && root[key].is_number())
+        {
+            target = root[key].get<float>();
+        }
+    };
+
+    readFloat("idle_epsilon", m_animationApplied.idleEpsilon);
+    readFloat("run_threshold", m_animationApplied.runThreshold);
+    readFloat("blend_idle_walk", m_animationApplied.blendIdleWalk);
+    readFloat("blend_walk_run", m_animationApplied.blendWalkRun);
+    readFloat("blend_run_idle", m_animationApplied.blendRunIdle);
+    readFloat("global_anim_scale", m_animationApplied.globalAnimScale);
+    readFloat("walk_speed_ref", m_animationApplied.walkSpeedRef);
+    readFloat("run_speed_ref", m_animationApplied.runSpeedRef);
+    readFloat("min_walk_scale", m_animationApplied.minWalkScale);
+    readFloat("max_walk_scale", m_animationApplied.maxWalkScale);
+    readFloat("min_run_scale", m_animationApplied.minRunScale);
+    readFloat("max_run_scale", m_animationApplied.maxRunScale);
+
+    m_animationEditing = m_animationApplied;
+    ApplyAnimationSettings(m_animationApplied);
+    return true;
+}
+
+bool App::SaveAnimationConfig() const
+{
+    std::filesystem::create_directories("config");
+    const std::filesystem::path path = std::filesystem::path("config") / "animation.json";
+
+    json root;
+    root["asset_version"] = m_animationApplied.assetVersion;
+    root["idle_epsilon"] = m_animationApplied.idleEpsilon;
+    root["run_threshold"] = m_animationApplied.runThreshold;
+    root["blend_idle_walk"] = m_animationApplied.blendIdleWalk;
+    root["blend_walk_run"] = m_animationApplied.blendWalkRun;
+    root["blend_run_idle"] = m_animationApplied.blendRunIdle;
+    root["global_anim_scale"] = m_animationApplied.globalAnimScale;
+    root["walk_speed_ref"] = m_animationApplied.walkSpeedRef;
+    root["run_speed_ref"] = m_animationApplied.runSpeedRef;
+    root["min_walk_scale"] = m_animationApplied.minWalkScale;
+    root["max_walk_scale"] = m_animationApplied.maxWalkScale;
+    root["min_run_scale"] = m_animationApplied.minRunScale;
+    root["max_run_scale"] = m_animationApplied.maxRunScale;
+
+    std::ofstream stream(path);
+    if (!stream.is_open())
+    {
+        return false;
+    }
+    stream << root.dump(2) << "\n";
+    return true;
+}
+
+void App::ApplyAnimationSettings(const AnimationSettings& settings)
+{
+    m_animationApplied = settings;
+
+    // Apply to animation system via GameplaySystems
+    engine::animation::LocomotionProfile profile;
+    profile.idleEpsilon = settings.idleEpsilon;
+    profile.runThreshold = settings.runThreshold;
+    profile.blendIdleWalk = settings.blendIdleWalk;
+    profile.blendWalkRun = settings.blendWalkRun;
+    profile.blendRunIdle = settings.blendRunIdle;
+    profile.globalAnimScale = settings.globalAnimScale;
+    profile.walkSpeedRef = settings.walkSpeedRef;
+    profile.runSpeedRef = settings.runSpeedRef;
+    profile.minWalkScale = settings.minWalkScale;
+    profile.maxWalkScale = settings.maxWalkScale;
+    profile.minRunScale = settings.minRunScale;
+    profile.maxRunScale = settings.maxRunScale;
+
+    m_gameplay.GetAnimationSystem().SetProfile(profile);
+    m_gameplay.GetAnimationSystem().InitializeStateMachine();
+}
+
 bool App::LoadGameplayConfig()
 {
     m_gameplayApplied = game::gameplay::GameplaySystems::GameplayTuning{};
@@ -5245,10 +5353,17 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     
     // Apply default selections for PLAY button (defaults only - lobby handles custom selections)
     auto applyMenuGameplaySelections = [&]() {
-        // Use first available character as default
+        // Keep currently selected survivor when valid; otherwise prefer Dwight if available.
         if (!survivorCharacters.empty())
         {
-            m_gameplay.SetSelectedSurvivorCharacter(survivorCharacters.front());
+            std::string survivorId = m_gameplay.SelectedSurvivorCharacterId();
+            if (std::find(survivorCharacters.begin(), survivorCharacters.end(), survivorId) == survivorCharacters.end())
+            {
+                const auto dwightIt =
+                    std::find(survivorCharacters.begin(), survivorCharacters.end(), std::string{"survivor_dwight"});
+                survivorId = (dwightIt != survivorCharacters.end()) ? *dwightIt : survivorCharacters.front();
+            }
+            m_gameplay.SetSelectedSurvivorCharacter(survivorId);
         }
         if (!killerCharacters.empty())
         {
@@ -5679,8 +5794,8 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
     }
 
     const float scale = m_ui.Scale();
-    const float panelW = std::min(980.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 20.0F);
-    const float panelH = std::min(760.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 20.0F);
+    const float panelW = std::min(1320.0F * scale, static_cast<float>(m_ui.ScreenWidth()) - 20.0F);
+    const float panelH = std::min(820.0F * scale, static_cast<float>(m_ui.ScreenHeight()) - 20.0F);
     const engine::ui::UiRect panel{
         (static_cast<float>(m_ui.ScreenWidth()) - panelW) * 0.5F,
         (static_cast<float>(m_ui.ScreenHeight()) - panelH) * 0.5F,
@@ -5697,29 +5812,41 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
     m_ui.PopLayout();
     m_ui.Label("Tabs + scroll region. Use drag scrollbar on the right in long sections.", m_ui.Theme().colorTextMuted);
 
-    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, 4);
+    constexpr int kSettingsTabCount = 7;
+    m_settingsTabIndex = glm::clamp(m_settingsTabIndex, 0, kSettingsTabCount - 1);
     m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
     {
         const glm::vec4 tabColor = m_ui.Theme().colorAccent;
-        if (m_ui.Button("tab_controls", "Controls", true, m_settingsTabIndex == 0 ? &tabColor : nullptr, 200.0F))
+        const float tabGap = 8.0F;
+        const float availableTabsWidth = std::max(0.0F, panelW - tabGap * static_cast<float>(kSettingsTabCount - 1));
+        const float tabWidth = glm::min(180.0F * scale, availableTabsWidth / static_cast<float>(kSettingsTabCount));
+        if (m_ui.Button("tab_controls", "Controls", true, m_settingsTabIndex == 0 ? &tabColor : nullptr, tabWidth))
         {
             m_settingsTabIndex = 0;
         }
-        if (m_ui.Button("tab_graphics", "Graphics", true, m_settingsTabIndex == 1 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_graphics", "Graphics", true, m_settingsTabIndex == 1 ? &tabColor : nullptr, tabWidth))
         {
             m_settingsTabIndex = 1;
         }
-        if (m_ui.Button("tab_audio", "Audio", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_audio", "Audio", true, m_settingsTabIndex == 2 ? &tabColor : nullptr, tabWidth))
         {
             m_settingsTabIndex = 2;
         }
-        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 3 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_gameplay", "Gameplay", true, m_settingsTabIndex == 3 ? &tabColor : nullptr, tabWidth))
         {
             m_settingsTabIndex = 3;
         }
-        if (m_ui.Button("tab_powers", "Powers", true, m_settingsTabIndex == 4 ? &tabColor : nullptr, 200.0F))
+        if (m_ui.Button("tab_hitboxes", "Hitboxes", true, m_settingsTabIndex == 4 ? &tabColor : nullptr, tabWidth))
         {
             m_settingsTabIndex = 4;
+        }
+        if (m_ui.Button("tab_powers", "Powers", true, m_settingsTabIndex == 5 ? &tabColor : nullptr, tabWidth))
+        {
+            m_settingsTabIndex = 5;
+        }
+        if (m_ui.Button("tab_animation", "Locomotion", true, m_settingsTabIndex == 6 ? &tabColor : nullptr, tabWidth))
+        {
+            m_settingsTabIndex = 6;
         }
     }
     m_ui.PopLayout();
@@ -6083,6 +6210,163 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         {
             m_ui.Label("Read-only on clients. Host values are authoritative.", m_ui.Theme().colorDanger);
         }
+
+        auto& t = m_gameplayEditing;
+        auto& a = m_animationEditing;
+        static int s_lastVisitedTab = -1;
+        static std::array<std::string, 4> s_hitboxInputs;
+        auto formatFloat = [](float value) {
+            char buffer[32]{};
+            std::snprintf(buffer, sizeof(buffer), "%.3f", value);
+            return std::string{buffer};
+        };
+        auto tryParseClamped = [](const std::string& text, float minValue, float maxValue, float* outValue) {
+            if (outValue == nullptr)
+            {
+                return false;
+            }
+            try
+            {
+                std::size_t parsedChars = 0;
+                const float parsed = std::stof(text, &parsedChars);
+                if (parsedChars != text.size())
+                {
+                    return false;
+                }
+                *outValue = glm::clamp(parsed, minValue, maxValue);
+                return true;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+        if (s_lastVisitedTab != m_settingsTabIndex)
+        {
+            s_hitboxInputs[0] = formatFloat(t.survivorCapsuleRadius);
+            s_hitboxInputs[1] = formatFloat(t.survivorCapsuleHeight);
+            s_hitboxInputs[2] = formatFloat(t.killerCapsuleRadius);
+            s_hitboxInputs[3] = formatFloat(t.killerCapsuleHeight);
+            s_lastVisitedTab = m_settingsTabIndex;
+        }
+
+        m_ui.Label("Hitbox Actions", m_ui.Theme().colorAccent);
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("apply_hitbox_btn", "Apply Hitboxes", allowEdit, &m_ui.Theme().colorSuccess, 180.0F))
+        {
+            (void)tryParseClamped(s_hitboxInputs[0], 0.2F, 1.2F, &t.survivorCapsuleRadius);
+            (void)tryParseClamped(s_hitboxInputs[1], 0.9F, 3.0F, &t.survivorCapsuleHeight);
+            (void)tryParseClamped(s_hitboxInputs[2], 0.2F, 1.2F, &t.killerCapsuleRadius);
+            (void)tryParseClamped(s_hitboxInputs[3], 0.9F, 3.0F, &t.killerCapsuleHeight);
+            ApplyGameplaySettings(m_gameplayEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendGameplayTuningToClient();
+            }
+            m_gameplayStatus = "Hitbox tuning applied.";
+            s_hitboxInputs[0] = formatFloat(t.survivorCapsuleRadius);
+            s_hitboxInputs[1] = formatFloat(t.survivorCapsuleHeight);
+            s_hitboxInputs[2] = formatFloat(t.killerCapsuleRadius);
+            s_hitboxInputs[3] = formatFloat(t.killerCapsuleHeight);
+        }
+        if (m_ui.Button("save_hitbox_btn", "Save Gameplay File", allowEdit, nullptr, 190.0F))
+        {
+            const auto previousApplied = m_gameplayApplied;
+            m_gameplayApplied = m_gameplayEditing;
+            const bool saved = SaveGameplayConfig();
+            m_gameplayApplied = previousApplied;
+            m_gameplayStatus = saved ? "Saved hitbox tuning to config/gameplay_tuning.json." : "Failed to save gameplay tuning file.";
+        }
+        if (m_ui.Button("reset_hitbox_defaults_btn", "Reset Hitboxes Defaults", allowEdit, &m_ui.Theme().colorDanger, 220.0F))
+        {
+            const game::gameplay::GameplaySystems::GameplayTuning defaults{};
+            t.survivorCapsuleRadius = defaults.survivorCapsuleRadius;
+            t.survivorCapsuleHeight = defaults.survivorCapsuleHeight;
+            t.killerCapsuleRadius = defaults.killerCapsuleRadius;
+            t.killerCapsuleHeight = defaults.killerCapsuleHeight;
+            s_hitboxInputs[0] = formatFloat(t.survivorCapsuleRadius);
+            s_hitboxInputs[1] = formatFloat(t.survivorCapsuleHeight);
+            s_hitboxInputs[2] = formatFloat(t.killerCapsuleRadius);
+            s_hitboxInputs[3] = formatFloat(t.killerCapsuleHeight);
+            ApplyGameplaySettings(m_gameplayEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendGameplayTuningToClient();
+            }
+            m_gameplayStatus = "Hitboxes reset to defaults.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("Capsule Hitboxes", m_ui.Theme().colorAccent);
+        bool hitboxFieldChanged = false;
+        if (m_ui.InputText("hb_surv_radius_input", "Survivor Radius", &s_hitboxInputs[0], 24))
+        {
+            if (tryParseClamped(s_hitboxInputs[0], 0.2F, 1.2F, &t.survivorCapsuleRadius))
+            {
+                hitboxFieldChanged = true;
+            }
+        }
+        if (m_ui.InputText("hb_surv_height_input", "Survivor Height", &s_hitboxInputs[1], 24))
+        {
+            if (tryParseClamped(s_hitboxInputs[1], 0.9F, 3.0F, &t.survivorCapsuleHeight))
+            {
+                hitboxFieldChanged = true;
+            }
+        }
+        if (m_ui.InputText("hb_killer_radius_input", "Killer Radius", &s_hitboxInputs[2], 24))
+        {
+            if (tryParseClamped(s_hitboxInputs[2], 0.2F, 1.2F, &t.killerCapsuleRadius))
+            {
+                hitboxFieldChanged = true;
+            }
+        }
+        if (m_ui.InputText("hb_killer_height_input", "Killer Height", &s_hitboxInputs[3], 24))
+        {
+            if (tryParseClamped(s_hitboxInputs[3], 0.9F, 3.0F, &t.killerCapsuleHeight))
+            {
+                hitboxFieldChanged = true;
+            }
+        }
+        if (hitboxFieldChanged && allowEdit)
+        {
+            ApplyGameplaySettings(m_gameplayEditing, false);
+            if (m_multiplayerMode == MultiplayerMode::Host)
+            {
+                SendGameplayTuningToClient();
+            }
+            m_gameplayStatus = "Hitbox tuning applied.";
+        }
+        m_ui.Label(
+            "Type numeric values, then click Apply Hitboxes. Values are clamped to safe gameplay ranges.",
+            m_ui.Theme().colorTextMuted);
+
+        m_ui.Label("Quick Animation", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("hb_anim_global_scale", "Global Anim Scale", &a.globalAnimScale, 0.1F, 3.0F, "%.2f");
+        m_ui.SliderFloat("hb_anim_idle_eps", "Idle Epsilon", &a.idleEpsilon, 0.01F, 1.0F, "%.2f");
+        m_ui.SliderFloat("hb_anim_run_threshold", "Run Threshold", &a.runThreshold, 2.0F, 6.0F, "%.2f");
+        if (m_ui.Button("hb_anim_apply_btn", "Apply Animation", true, &m_ui.Theme().colorSuccess, 180.0F))
+        {
+            ApplyAnimationSettings(m_animationEditing);
+            m_animationStatus = "Animation settings applied.";
+        }
+        m_ui.Label("For full animation tuning, use the Locomotion tab.", m_ui.Theme().colorTextMuted);
+
+        if (!m_gameplayStatus.empty())
+        {
+            m_ui.Label(m_gameplayStatus, m_ui.Theme().colorTextMuted);
+        }
+        if (!m_animationStatus.empty())
+        {
+            m_ui.Label(m_animationStatus, m_ui.Theme().colorTextMuted);
+        }
+    }
+    else if (m_settingsTabIndex == 5)
+    {
+        const bool allowEdit = m_multiplayerMode != MultiplayerMode::Client;
+        if (!allowEdit)
+        {
+            m_ui.Label("Read-only on clients. Host values are authoritative.", m_ui.Theme().colorDanger);
+        }
         auto& p = m_powersEditing;
 
         m_ui.Label("Config Actions", m_ui.Theme().colorAccent);
@@ -6191,6 +6475,67 @@ void App::DrawSettingsUiCustom(bool* closeSettings)
         if (!m_powersStatus.empty())
         {
             m_ui.Label(m_powersStatus, m_ui.Theme().colorTextMuted);
+        }
+    }
+    else if (m_settingsTabIndex == 6)
+    {
+        auto& a = m_animationEditing;
+
+        m_ui.Label("Config Actions", m_ui.Theme().colorAccent);
+        m_ui.PushLayout(engine::ui::UiSystem::LayoutAxis::Horizontal, 8.0F, 0.0F);
+        if (m_ui.Button("apply_anim_btn", "Apply", true, &m_ui.Theme().colorSuccess, 165.0F))
+        {
+            ApplyAnimationSettings(m_animationEditing);
+            m_animationStatus = "Animation settings applied.";
+        }
+        if (m_ui.Button("save_anim_btn", "Save To File", true, nullptr, 165.0F))
+        {
+            m_animationApplied = m_animationEditing;
+            const bool saved = SaveAnimationConfig();
+            m_animationStatus = saved ? "Saved to config/animation.json." : "Failed to save animation file.";
+        }
+        if (m_ui.Button("load_anim_btn", "Load From File", true, nullptr, 165.0F))
+        {
+            if (LoadAnimationConfig())
+            {
+                m_animationEditing = m_animationApplied;
+                m_animationStatus = "Loaded from file and applied.";
+            }
+            else
+            {
+                m_animationStatus = "Failed to load config/animation.json.";
+            }
+        }
+        if (m_ui.Button("defaults_anim_btn", "Set Defaults", true, &m_ui.Theme().colorDanger, 165.0F))
+        {
+            m_animationEditing = AnimationSettings{};
+            ApplyAnimationSettings(m_animationEditing);
+            m_animationStatus = "Defaults applied. Use Save To File to persist.";
+        }
+        m_ui.PopLayout();
+
+        m_ui.Label("State Thresholds", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("anim_idle_epsilon", "Idle Epsilon (m/s)", &a.idleEpsilon, 0.01F, 1.0F, "%.2f");
+        m_ui.SliderFloat("anim_run_threshold", "Run Threshold (m/s)", &a.runThreshold, 2.0F, 6.0F, "%.2f");
+
+        m_ui.Label("Blend Times", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("anim_blend_idle_walk", "Idle <-> Walk (s)", &a.blendIdleWalk, 0.05F, 0.5F, "%.2f");
+        m_ui.SliderFloat("anim_blend_walk_run", "Walk <-> Run (s)", &a.blendWalkRun, 0.05F, 0.5F, "%.2f");
+        m_ui.SliderFloat("anim_blend_run_idle", "Run <-> Idle (s)", &a.blendRunIdle, 0.05F, 0.5F, "%.2f");
+
+        m_ui.Label("Playback Speed", m_ui.Theme().colorAccent);
+        m_ui.SliderFloat("anim_global_scale", "Global Scale", &a.globalAnimScale, 0.1F, 3.0F, "%.2f");
+        m_ui.SliderFloat("anim_walk_ref", "Walk Speed Ref (m/s)", &a.walkSpeedRef, 1.0F, 6.0F, "%.2f");
+        m_ui.SliderFloat("anim_run_ref", "Run Speed Ref (m/s)", &a.runSpeedRef, 2.0F, 8.0F, "%.2f");
+        m_ui.SliderFloat("anim_min_walk", "Min Walk Scale", &a.minWalkScale, 0.3F, 1.0F, "%.2f");
+        m_ui.SliderFloat("anim_max_walk", "Max Walk Scale", &a.maxWalkScale, 1.0F, 2.0F, "%.2f");
+        m_ui.SliderFloat("anim_min_run", "Min Run Scale", &a.minRunScale, 0.3F, 1.0F, "%.2f");
+        m_ui.SliderFloat("anim_max_run", "Max Run Scale", &a.maxRunScale, 1.0F, 2.0F, "%.2f");
+
+        m_ui.Label("Console Commands: anim_list, anim_play <clip>, anim_state auto|idle|walk|run, anim_scale <value>, anim_info", m_ui.Theme().colorTextMuted);
+        if (!m_animationStatus.empty())
+        {
+            m_ui.Label(m_animationStatus, m_ui.Theme().colorTextMuted);
         }
     }
 
@@ -6842,6 +7187,106 @@ void App::DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fp
         }
         m_ui.Label("Heat: " + std::to_string(static_cast<int>(hudState.chainsawOverheat01 * 100.0F)) + "%", overheatColor);
         m_ui.ProgressBar("hud_chainsaw_heat", hudState.chainsawOverheat01, "");
+
+        m_ui.EndPanel();
+    }
+
+    // Nurse blink power HUD panel
+    if (hudState.roleName == "Killer" && hudState.killerPowerId == "nurse_blink")
+    {
+        float panelHeight = 100.0F * scale;
+        if (hudState.blinkState == "Charging")
+        {
+            panelHeight = 180.0F * scale;
+        }
+        else if (hudState.blinkState == "ChainWindow")
+        {
+            panelHeight = 160.0F * scale;
+        }
+        else if (hudState.blinkState == "Fatigue")
+        {
+            panelHeight = 130.0F * scale;
+        }
+
+        const engine::ui::UiRect blinkPanel{
+            20.0F * scale,
+            200.0F * scale,
+            240.0F * scale,
+            panelHeight,
+        };
+        m_ui.BeginPanel("hud_blink_power", blinkPanel, true);
+
+        // Title
+        glm::vec4 stateColor = m_ui.Theme().colorText;
+        if (hudState.blinkState == "Charging")
+        {
+            stateColor = glm::vec4{0.2F, 0.8F, 1.0F, 1.0F}; // Cyan
+        }
+        else if (hudState.blinkState == "Traveling")
+        {
+            stateColor = glm::vec4{0.2F, 1.0F, 0.4F, 1.0F}; // Green
+        }
+        else if (hudState.blinkState == "ChainWindow")
+        {
+            stateColor = glm::vec4{1.0F, 0.8F, 0.2F, 1.0F}; // Yellow
+        }
+        else if (hudState.blinkState == "Fatigue")
+        {
+            stateColor = glm::vec4{0.6F, 0.3F, 0.3F, 1.0F}; // Dark red
+        }
+
+        m_ui.Label("Nurse Blink", m_ui.Theme().colorAccent);
+        m_ui.Label(hudState.blinkState, stateColor);
+
+        // Charge indicators (dots)
+        std::string chargesText = "Charges: ";
+        for (int i = 0; i < hudState.blinkMaxCharges; ++i)
+        {
+            if (i < hudState.blinkCharges)
+            {
+                chargesText += "●";
+            }
+            else
+            {
+                chargesText += "○";
+            }
+        }
+        m_ui.Label(chargesText, m_ui.Theme().colorText);
+
+        // Charge progress bar (while charging)
+        if (hudState.blinkState == "Charging")
+        {
+            m_ui.Label("Distance: " + std::to_string(static_cast<int>(hudState.blinkDistanceMeters)) + "m", m_ui.Theme().colorText);
+            m_ui.ProgressBar(
+                "hud_blink_charge",
+                hudState.blinkCharge01,
+                std::to_string(static_cast<int>(hudState.blinkCharge01 * 100.0F)) + "%"
+            );
+            m_ui.Label("Release to blink!", glm::vec4{0.2F, 1.0F, 0.4F, 1.0F});
+        }
+
+        // Chain window progress
+        if (hudState.blinkState == "ChainWindow")
+        {
+            const float remaining = (1.0F - hudState.blinkChainWindow01) * 1.5F; // chain window duration
+            m_ui.Label("Chain window: " + std::to_string(static_cast<int>(remaining * 10.0F) / 10.0F) + "s", m_ui.Theme().colorText);
+            m_ui.ProgressBar("hud_blink_chain", hudState.blinkChainWindow01, "");
+            m_ui.Label("RMB: Chain | LMB: Attack", m_ui.Theme().colorTextMuted);
+        }
+
+        // Fatigue progress
+        if (hudState.blinkState == "Fatigue")
+        {
+            const float remaining = hudState.blinkFatigueDuration * (1.0F - hudState.blinkFatigue01);
+            m_ui.Label("Fatigue: " + std::to_string(static_cast<int>(remaining * 10.0F) / 10.0F) + "s", m_ui.Theme().colorTextMuted);
+            m_ui.ProgressBar("hud_blink_fatigue", hudState.blinkFatigue01, "");
+        }
+
+        // Charge regeneration progress (when not at max and not charging)
+        if (hudState.blinkState == "Idle" && hudState.blinkCharges < hudState.blinkMaxCharges)
+        {
+            m_ui.ProgressBar("hud_blink_regen", hudState.blinkChargeRegen01, "Regenerating...");
+        }
 
         m_ui.EndPanel();
     }

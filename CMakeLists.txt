@@ -70,6 +70,11 @@ find_package(OpenGL REQUIRED)
 set(ENGINE_SOURCES
     src/main.cpp
     external/glad/src/glad.c
+    engine/animation/AnimationClip.cpp
+    engine/animation/AnimationPlayer.cpp
+    engine/animation/AnimationBlender.cpp
+    engine/animation/AnimationStateMachine.cpp
+    engine/animation/AnimationSystem.cpp
     engine/audio/AudioSystem.cpp
     engine/core/App.cpp
     engine/core/EventBus.cpp

@@ -1,0 +1,25 @@
+{
+  "asset_version": 1,
+  "id": "nurse_blink",
+  "display_name": "Spencer's Last Breath",
+  "description": "Phase through walls. Chain blinks for mobility at the cost of fatigue.",
+  "params": {
+    "max_charges": 2.0,
+    "charge_regen_seconds": 3.0,
+    "min_blink_distance": 2.0,
+    "max_blink_distance": 20.0,
+    "charge_time_to_max": 2.0,
+    "charge_move_speed_multiplier": 0.5,
+    "blink_travel_time": 0.15,
+    "chain_window_seconds": 1.5,
+    "fatigue_base_seconds": 2.0,
+    "fatigue_per_blink_used_seconds": 0.5,
+    "fatigue_move_speed_multiplier": 0.5,
+    "blink_attack_range": 4.5,
+    "blink_attack_angle_degrees": 90.0,
+    "blink_attack_windup_seconds": 0.2,
+    "blink_attack_lunge_multiplier": 2.0,
+    "endpoint_slide_attempts": 8.0,
+    "endpoint_slide_step": 0.3
+  }
+}

@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -20,7 +23,12 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#define TINYGLTF_NO_STB_IMAGE_WRITE
+#include <tiny_gltf.h>
 
 #include "engine/platform/Input.hpp"
 #include "engine/render/Renderer.hpp"
@@ -175,6 +183,456 @@ glm::vec2 MoveTowardsVector(const glm::vec2& current, const glm::vec2& target, f
     }
 
     return current + (delta / distance) * maxDelta;
+}
+
+std::string ToLowerCopy(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+bool ContainsToken(const std::string& clipName, const std::string& token)
+{
+    return clipName.find(token) != std::string::npos;
+}
+
+std::string PickLocomotionClip(
+    const std::vector<std::string>& clipNames,
+    const std::vector<std::string>& orderedTokens,
+    const std::string& preferredClip
+)
+{
+    if (!preferredClip.empty())
+    {
+        const auto preferredIt = std::find(clipNames.begin(), clipNames.end(), preferredClip);
+        if (preferredIt != clipNames.end())
+        {
+            return preferredClip;
+        }
+    }
+
+    for (const std::string& token : orderedTokens)
+    {
+        for (const std::string& candidate : clipNames)
+        {
+            if (ContainsToken(ToLowerCopy(candidate), token))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    return preferredClip;
+}
+
+bool ReadAccessorScalarsAsIndicesTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<std::uint32_t>* outIndices
+)
+{
+    if (outIndices == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_SCALAR)
+    {
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    if (componentSize <= 0)
+    {
+        return false;
+    }
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : static_cast<std::size_t>(componentSize);
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outIndices->clear();
+    outIndices->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + static_cast<std::size_t>(componentSize) > buffer.data.size())
+        {
+            return false;
+        }
+
+        std::uint32_t value = 0;
+        switch (accessor.componentType)
+        {
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+            {
+                std::uint8_t v = 0;
+                std::memcpy(&v, buffer.data.data() + offset, sizeof(v));
+                value = v;
+                break;
+            }
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+            {
+                std::uint16_t v = 0;
+                std::memcpy(&v, buffer.data.data() + offset, sizeof(v));
+                value = v;
+                break;
+            }
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+            {
+                std::uint32_t v = 0;
+                std::memcpy(&v, buffer.data.data() + offset, sizeof(v));
+                value = v;
+                break;
+            }
+            default:
+                return false;
+        }
+        outIndices->push_back(value);
+    }
+    return true;
+}
+
+bool ReadAccessorVec3FloatTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::vec3>* outValues
+)
+{
+    if (outValues == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC3 || accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+    {
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const std::size_t elementSize = sizeof(float) * 3U;
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : elementSize;
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + elementSize > buffer.data.size())
+        {
+            return false;
+        }
+        glm::vec3 value{0.0F};
+        std::memcpy(&value.x, buffer.data.data() + offset, sizeof(float));
+        std::memcpy(&value.y, buffer.data.data() + offset + sizeof(float), sizeof(float));
+        std::memcpy(&value.z, buffer.data.data() + offset + sizeof(float) * 2U, sizeof(float));
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+bool ReadAccessorVec2FloatTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::vec2>* outValues
+)
+{
+    if (outValues == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC2 || accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+    {
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const std::size_t elementSize = sizeof(float) * 2U;
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : elementSize;
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + elementSize > buffer.data.size())
+        {
+            return false;
+        }
+        glm::vec2 value{0.0F};
+        std::memcpy(&value.x, buffer.data.data() + offset, sizeof(float));
+        std::memcpy(&value.y, buffer.data.data() + offset + sizeof(float), sizeof(float));
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+bool ReadAccessorVec4UIntTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::uvec4>* outValues
+)
+{
+    if (outValues == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC4)
+    {
+        return false;
+    }
+
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    if (componentSize <= 0)
+    {
+        return false;
+    }
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : static_cast<std::size_t>(componentSize * 4);
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + static_cast<std::size_t>(componentSize * 4) > buffer.data.size())
+        {
+            return false;
+        }
+        glm::uvec4 value{0U};
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::size_t at = offset + static_cast<std::size_t>(c * componentSize);
+            switch (accessor.componentType)
+            {
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                {
+                    std::uint8_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = static_cast<std::uint32_t>(v);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                {
+                    std::uint16_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = static_cast<std::uint32_t>(v);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+                {
+                    std::uint32_t v = 0;
+                    std::memcpy(&v, buffer.data.data() + at, sizeof(v));
+                    value[static_cast<std::size_t>(c)] = v;
+                    break;
+                }
+                default:
+                    return false;
+            }
+        }
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+float ReadComponentAsFloatTiny(const std::uint8_t* src, int componentType, bool normalized)
+{
+    switch (componentType)
+    {
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
+        {
+            float v = 0.0F;
+            std::memcpy(&v, src, sizeof(v));
+            return v;
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+        {
+            std::uint8_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            return normalized ? static_cast<float>(v) / 255.0F : static_cast<float>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_BYTE:
+        {
+            std::int8_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return glm::max(-1.0F, static_cast<float>(v) / 127.0F);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+        {
+            std::uint16_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            return normalized ? static_cast<float>(v) / 65535.0F : static_cast<float>(v);
+        }
+        case TINYGLTF_COMPONENT_TYPE_SHORT:
+        {
+            std::int16_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return glm::max(-1.0F, static_cast<float>(v) / 32767.0F);
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+        {
+            std::uint32_t v = 0;
+            std::memcpy(&v, src, sizeof(v));
+            if (!normalized)
+            {
+                return static_cast<float>(v);
+            }
+            return static_cast<float>(v) / 4294967295.0F;
+        }
+        default:
+            return 0.0F;
+    }
+}
+
+bool ReadAccessorVec4FloatTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::vec4>* outValues
+)
+{
+    if (outValues == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_VEC4)
+    {
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    if (componentSize <= 0)
+    {
+        return false;
+    }
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : static_cast<std::size_t>(componentSize * 4);
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + static_cast<std::size_t>(componentSize * 4) > buffer.data.size())
+        {
+            return false;
+        }
+        glm::vec4 value{0.0F};
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::size_t at = offset + static_cast<std::size_t>(c * componentSize);
+            value[static_cast<std::size_t>(c)] = ReadComponentAsFloatTiny(buffer.data.data() + at, accessor.componentType, accessor.normalized);
+        }
+        outValues->push_back(value);
+    }
+    return true;
+}
+
+bool ReadAccessorMat4FloatTiny(
+    const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor,
+    std::vector<glm::mat4>* outValues
+)
+{
+    if (outValues == nullptr || accessor.bufferView < 0 || accessor.bufferView >= static_cast<int>(model.bufferViews.size()))
+    {
+        return false;
+    }
+    if (accessor.type != TINYGLTF_TYPE_MAT4 || accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+    {
+        return false;
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size()))
+    {
+        return false;
+    }
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
+    const std::size_t elementSize = sizeof(float) * 16U;
+    const std::size_t stride = accessor.ByteStride(view) > 0 ? static_cast<std::size_t>(accessor.ByteStride(view)) : elementSize;
+    const std::size_t baseOffset = static_cast<std::size_t>(view.byteOffset + accessor.byteOffset);
+    if (baseOffset >= buffer.data.size())
+    {
+        return false;
+    }
+
+    outValues->clear();
+    outValues->reserve(accessor.count);
+    for (std::size_t i = 0; i < accessor.count; ++i)
+    {
+        const std::size_t offset = baseOffset + i * stride;
+        if (offset + elementSize > buffer.data.size())
+        {
+            return false;
+        }
+        glm::mat4 mat{1.0F};
+        for (int c = 0; c < 4; ++c)
+        {
+            for (int r = 0; r < 4; ++r)
+            {
+                float v = 0.0F;
+                std::memcpy(&v, buffer.data.data() + offset + static_cast<std::size_t>((c * 4 + r) * sizeof(float)), sizeof(float));
+                mat[c][r] = v;
+            }
+        }
+        outValues->push_back(mat);
+    }
+    return true;
 }
 
 // High-poly mesh generation helpers for GPU stress testing
@@ -459,6 +917,24 @@ void GameplaySystems::Initialize(engine::core::EventBus& eventBus)
     // Initialize perk system active states
     m_perkSystem.InitializeActiveStates();
     InitializeLoadoutCatalog();
+    m_animationSystem.GetStateMachineMut().SetStateChangeCallback([this](engine::animation::LocomotionState from, engine::animation::LocomotionState to) {
+        if (!m_animationDebugEnabled)
+        {
+            return;
+        }
+        std::cout << "[ANIMATION] State change: "
+                  << engine::animation::LocomotionStateToString(from)
+                  << " -> "
+                  << engine::animation::LocomotionStateToString(to)
+                  << "\n";
+    });
+    m_animationSystem.SetClipLoadedCallback([this](const std::string& clipName) {
+        if (!m_animationDebugEnabled)
+        {
+            return;
+        }
+        std::cout << "[ANIMATION] Clip registered in animation system: " << clipName << "\n";
+    });
 
     BuildSceneFromMap(MapType::Test, m_generationSeed);
     AddRuntimeMessage("Press ~ for Console", 4.0F);
@@ -1105,6 +1581,7 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     if (!m_selectedSurvivorCharacterId.empty())
     {
         (void)EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
+        RefreshAnimatedSurvivorMeshIfNeeded(m_selectedSurvivorCharacterId);
     }
 
     const glm::mat4 viewProjection = BuildViewProjection(aspectRatio);
@@ -3519,6 +3996,9 @@ void GameplaySystems::ApplyGameplayTuning(const GameplayTuning& tuning)
     m_tuning.serverTickRate = (m_tuning.serverTickRate <= 30) ? 30 : 60;
     m_tuning.interpolationBufferMs = glm::clamp(m_tuning.interpolationBufferMs, 50, 1000);
 
+    // Keep survivor capsule auto-fit in sync with the latest gameplay tuning caps.
+    RefreshSurvivorModelCapsuleOverride();
+
     m_terrorRadiusMeters = m_tuning.terrorRadiusMeters;
     m_terrorRadiusChaseMeters = m_tuning.terrorRadiusChaseMeters;
     m_killerShortRange = m_tuning.shortAttackRange;
@@ -3785,6 +4265,7 @@ void GameplaySystems::ApplySnapshot(const Snapshot& snapshot, float blendAlpha)
     if (!snapshot.survivorCharacterId.empty() && snapshot.survivorCharacterId != m_selectedSurvivorCharacterId)
     {
         m_selectedSurvivorCharacterId = snapshot.survivorCharacterId;
+        m_animationCharacterId.clear();
         survivorCharacterChanged = true;
     }
     if (!snapshot.killerCharacterId.empty())
@@ -8728,6 +9209,10 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
 
     if (cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
     {
+        if (characterId == m_selectedSurvivorCharacterId && m_animationCharacterId != characterId)
+        {
+            (void)ReloadSurvivorCharacterAnimations(characterId);
+        }
         return true;
     }
     if (m_rendererPtr == nullptr || cached.gpuUploadAttempted)
@@ -8742,51 +9227,23 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
         return false;
     }
 
-    // Use member mesh library or create a temporary one for this load
+    // Use member mesh library or create a temporary one for this load.
     engine::assets::MeshLibrary* meshLibrary = m_meshLibrary;
     engine::assets::MeshLibrary tempMeshLibrary;
-
-    // If no member mesh library, use temp one (callback won't persist, safer)
     if (meshLibrary == nullptr)
     {
         meshLibrary = &tempMeshLibrary;
     }
-
-    // Always set up animation callback for this load (safe because it's set fresh each time)
-    meshLibrary->SetAnimationLoadedCallback([this](const std::string& clipName, std::unique_ptr<engine::animation::AnimationClip> clip) {
-        if (clip == nullptr)
-        {
-            std::cout << "[ANIMATION] Warning: null clip received for " << clipName << "\n";
-            return;
-        }
-        if (!clip->Valid())
-        {
-            std::cout << "[ANIMATION] Warning: invalid clip '" << clipName << "' (duration=" << clip->duration << ")\n";
-            return;
-        }
-        std::cout << "[ANIMATION] Loaded clip: " << clipName
-                  << " (duration: " << clip->duration << "s, "
-                  << clip->rotations.size() << " rot channels, "
-                  << clip->translations.size() << " pos channels)\n";
-        m_animationSystem.AddClip(std::move(clip));
-    });
 
     const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
     std::string error;
     const engine::assets::MeshData* meshData = meshLibrary->LoadMesh(meshPath, &error);
     if (meshData == nullptr || !meshData->loaded)
     {
+        cached.gpuUploadAttempted = false;
         std::cout << "[SURVIVOR_MODEL] Failed to upload mesh for " << characterId
                   << " from " << meshPath.string() << ": " << error << "\n";
         return false;
-    }
-
-    // Log any animations found in this mesh
-    if (!meshData->animationNames.empty())
-    {
-        std::cout << "[SURVIVOR_MODEL] Found " << meshData->animationNames.size() << " animations in " << characterId << "\n";
-        // Initialize state machine with loaded clips
-        m_animationSystem.InitializeStateMachine();
     }
 
     const engine::render::MaterialParams material{};
@@ -8797,7 +9254,837 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
     const float absZ = std::max(std::abs(meshData->boundsMin.z), std::abs(meshData->boundsMax.z));
     cached.maxAbsXZ = std::max(absX, absZ);
     cached.boundsLoaded = true;
-    return cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh;
+    if (cached.gpuMesh == engine::render::Renderer::kInvalidGpuMesh)
+    {
+        cached.gpuUploadAttempted = false;
+        return false;
+    }
+
+    std::cout << "[SURVIVOR_MODEL] Uploaded mesh for " << characterId
+              << " from " << meshPath.string()
+              << " (" << meshData->geometry.positions.size() << " verts)\n";
+
+    if (characterId == m_selectedSurvivorCharacterId && m_animationCharacterId != characterId)
+    {
+        (void)ReloadSurvivorCharacterAnimations(characterId);
+    }
+
+    return true;
+}
+
+bool GameplaySystems::ReloadSurvivorCharacterAnimations(const std::string& characterId)
+{
+    if (characterId.empty())
+    {
+        return false;
+    }
+
+    const loadout::SurvivorCharacterDefinition* survivorDef = m_loadoutCatalog.FindSurvivor(characterId);
+    if (survivorDef == nullptr || survivorDef->modelPath.empty())
+    {
+        std::cout << "[ANIMATION] Failed to reload: survivor '" << characterId
+                  << "' has no model path\n";
+        return false;
+    }
+
+    const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
+    std::cout << "[ANIMATION] Reloading survivor clips for " << characterId
+              << " from " << meshPath.string() << "\n";
+
+    m_animationSystem.ClearClips();
+    m_animationCharacterId.clear();
+    m_survivorAnimationRigs.erase(characterId);
+
+    try
+    {
+        std::size_t loadedClipCount = 0;
+        std::vector<std::unique_ptr<engine::animation::AnimationClip>> pendingClips;
+        engine::assets::MeshLibrary animationLibrary;
+        animationLibrary.SetAnimationLoadedCallback([&loadedClipCount, &pendingClips, characterId](const std::string& clipName, std::unique_ptr<engine::animation::AnimationClip> clip) {
+            if (clip == nullptr)
+            {
+                std::cout << "[ANIMATION] Warning: null clip received for '" << clipName
+                          << "' (" << characterId << ")\n";
+                return;
+            }
+            if (!clip->Valid())
+            {
+                std::cout << "[ANIMATION] Warning: invalid clip '" << clip->name << "' for "
+                          << characterId << " (duration=" << clip->duration << ")\n";
+                return;
+            }
+
+            ++loadedClipCount;
+            std::cout << "[ANIMATION] Parsed clip " << clip->name
+                      << " for " << characterId
+                      << " (duration=" << clip->duration << "s, rot=" << clip->rotations.size()
+                      << ", pos=" << clip->translations.size() << ", scale=" << clip->scales.size() << ")\n";
+            pendingClips.push_back(std::move(clip));
+        });
+
+        std::string error;
+        const engine::assets::MeshData* meshData = animationLibrary.LoadMesh(meshPath, &error);
+        if (meshData == nullptr || !meshData->loaded)
+        {
+            std::cout << "[ANIMATION] Failed to parse clips for " << characterId
+                      << " from " << meshPath.string() << ": " << error << "\n";
+            m_animationSystem.InitializeStateMachine();
+            m_animationCharacterId = characterId;
+            return false;
+        }
+
+        for (auto& clip : pendingClips)
+        {
+            if (clip == nullptr)
+            {
+                continue;
+            }
+            m_animationSystem.AddClip(std::move(clip));
+        }
+
+        const std::vector<std::string> loadedClips = m_animationSystem.ListClips();
+        auto profile = m_animationSystem.GetProfile();
+        profile.idleClipName = PickLocomotionClip(loadedClips, {"idle", "stand"}, profile.idleClipName);
+        profile.walkClipName = PickLocomotionClip(loadedClips, {"walk"}, profile.walkClipName);
+        profile.runClipName = PickLocomotionClip(loadedClips, {"run", "sprint", "jog"}, profile.runClipName);
+        m_animationSystem.SetProfile(profile);
+        m_animationSystem.InitializeStateMachine();
+        m_animationCharacterId = characterId;
+
+        std::cout << "[ANIMATION] Bound locomotion clips for " << characterId
+                  << " idle='" << profile.idleClipName
+                  << "' walk='" << profile.walkClipName
+                  << "' run='" << profile.runClipName
+                  << "' total=" << loadedClipCount << "\n";
+
+        if (loadedClips.empty())
+        {
+            std::cout << "[ANIMATION] Warning: no clips loaded for " << characterId << "\n";
+        }
+        else if (m_animationDebugEnabled)
+        {
+            std::cout << "[ANIMATION] Clip list for " << characterId << ":\n";
+            for (const std::string& clipName : loadedClips)
+            {
+                std::cout << "  - " << clipName << "\n";
+            }
+        }
+
+        const bool rigLoaded = LoadSurvivorAnimationRig(characterId);
+        if (!rigLoaded)
+        {
+            std::cout << "[ANIMATION] Warning: animation rig was not loaded for " << characterId
+                      << " (clips are available but mesh skinning will stay static)\n";
+        }
+
+        return loadedClipCount > 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "[ANIMATION] Exception while reloading clips for " << characterId
+                  << ": " << e.what() << "\n";
+    }
+    catch (...)
+    {
+        std::cout << "[ANIMATION] Unknown exception while reloading clips for "
+                  << characterId << "\n";
+    }
+
+    m_animationSystem.InitializeStateMachine();
+    m_animationCharacterId = characterId;
+    return false;
+}
+
+bool GameplaySystems::LoadSurvivorAnimationRig(const std::string& characterId)
+{
+    auto existing = m_survivorAnimationRigs.find(characterId);
+    if (existing != m_survivorAnimationRigs.end() && existing->second.loaded)
+    {
+        return true;
+    }
+
+    const loadout::SurvivorCharacterDefinition* survivorDef = m_loadoutCatalog.FindSurvivor(characterId);
+    if (survivorDef == nullptr || survivorDef->modelPath.empty())
+    {
+        return false;
+    }
+
+    const std::filesystem::path meshPath = ResolveAssetPathFromCwd(survivorDef->modelPath);
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model model;
+    std::string warn;
+    std::string err;
+    const std::string extension = ToLowerCopy(meshPath.extension().string());
+    const bool loaded = (extension == ".glb")
+        ? loader.LoadBinaryFromFile(&model, &err, &warn, meshPath.string())
+        : loader.LoadASCIIFromFile(&model, &err, &warn, meshPath.string());
+    if (!loaded)
+    {
+        std::cout << "[ANIMATION] Failed to load rig from " << meshPath.string() << ": " << err << "\n";
+        return false;
+    }
+    if (!warn.empty() && m_animationDebugEnabled)
+    {
+        std::cout << "[ANIMATION] Rig load warning for " << characterId << ": " << warn << "\n";
+    }
+
+    SurvivorAnimationRig rig;
+    if (model.nodes.empty() || model.meshes.empty())
+    {
+        return false;
+    }
+
+    if (!model.scenes.empty())
+    {
+        const int sceneIndex = (model.defaultScene >= 0 && model.defaultScene < static_cast<int>(model.scenes.size()))
+            ? model.defaultScene
+            : 0;
+        const tinygltf::Scene& scene = model.scenes[static_cast<std::size_t>(sceneIndex)];
+        rig.sceneRoots = scene.nodes;
+    }
+    if (rig.sceneRoots.empty())
+    {
+        rig.sceneRoots.reserve(model.nodes.size());
+        for (int i = 0; i < static_cast<int>(model.nodes.size()); ++i)
+        {
+            rig.sceneRoots.push_back(i);
+        }
+    }
+
+    rig.nodeParents.assign(model.nodes.size(), -1);
+    for (int nodeIndex = 0; nodeIndex < static_cast<int>(model.nodes.size()); ++nodeIndex)
+    {
+        const tinygltf::Node& node = model.nodes[static_cast<std::size_t>(nodeIndex)];
+        for (const int childIndex : node.children)
+        {
+            if (childIndex >= 0 && childIndex < static_cast<int>(rig.nodeParents.size()))
+            {
+                rig.nodeParents[static_cast<std::size_t>(childIndex)] = nodeIndex;
+            }
+        }
+    }
+
+    int meshNodeIndex = -1;
+    int skinIndex = -1;
+    int meshIndex = -1;
+    std::vector<int> stack = rig.sceneRoots;
+    while (!stack.empty())
+    {
+        const int nodeIndex = stack.back();
+        stack.pop_back();
+        if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size()))
+        {
+            continue;
+        }
+        const tinygltf::Node& node = model.nodes[static_cast<std::size_t>(nodeIndex)];
+        if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size()))
+        {
+            if (meshNodeIndex < 0 || (skinIndex < 0 && node.skin >= 0))
+            {
+                meshNodeIndex = nodeIndex;
+                meshIndex = node.mesh;
+                skinIndex = node.skin;
+            }
+        }
+        for (const int child : node.children)
+        {
+            stack.push_back(child);
+        }
+    }
+
+    if (meshNodeIndex < 0 || meshIndex < 0 || meshIndex >= static_cast<int>(model.meshes.size()))
+    {
+        return false;
+    }
+
+    const tinygltf::Mesh& mesh = model.meshes[static_cast<std::size_t>(meshIndex)];
+    rig.basePositions.clear();
+    rig.baseNormals.clear();
+    rig.baseColors.clear();
+    rig.baseUvs.clear();
+    rig.jointIndices.clear();
+    rig.jointWeights.clear();
+    rig.indices.clear();
+
+    int combinedPrimitives = 0;
+    for (const tinygltf::Primitive& primitive : mesh.primitives)
+    {
+        const int mode = primitive.mode == -1 ? TINYGLTF_MODE_TRIANGLES : primitive.mode;
+        const bool trianglesMode =
+            mode == TINYGLTF_MODE_TRIANGLES ||
+            mode == TINYGLTF_MODE_TRIANGLE_STRIP ||
+            mode == TINYGLTF_MODE_TRIANGLE_FAN;
+        if (!trianglesMode)
+        {
+            continue;
+        }
+
+        const auto posIt = primitive.attributes.find("POSITION");
+        if (posIt == primitive.attributes.end())
+        {
+            continue;
+        }
+        const int positionAccessorIndex = posIt->second;
+        if (positionAccessorIndex < 0 || positionAccessorIndex >= static_cast<int>(model.accessors.size()))
+        {
+            continue;
+        }
+
+        std::vector<glm::vec3> primitivePositions;
+        if (!ReadAccessorVec3FloatTiny(
+                model,
+                model.accessors[static_cast<std::size_t>(positionAccessorIndex)],
+                &primitivePositions) ||
+            primitivePositions.empty())
+        {
+            continue;
+        }
+
+        std::vector<glm::vec3> primitiveNormals;
+        if (const auto normalIt = primitive.attributes.find("NORMAL"); normalIt != primitive.attributes.end())
+        {
+            const int normalAccessorIndex = normalIt->second;
+            if (normalAccessorIndex >= 0 && normalAccessorIndex < static_cast<int>(model.accessors.size()))
+            {
+                (void)ReadAccessorVec3FloatTiny(
+                    model,
+                    model.accessors[static_cast<std::size_t>(normalAccessorIndex)],
+                    &primitiveNormals);
+            }
+        }
+
+        std::vector<glm::vec2> primitiveUvs;
+        if (const auto uvIt = primitive.attributes.find("TEXCOORD_0"); uvIt != primitive.attributes.end())
+        {
+            const int uvAccessorIndex = uvIt->second;
+            if (uvAccessorIndex >= 0 && uvAccessorIndex < static_cast<int>(model.accessors.size()))
+            {
+                (void)ReadAccessorVec2FloatTiny(
+                    model,
+                    model.accessors[static_cast<std::size_t>(uvAccessorIndex)],
+                    &primitiveUvs);
+            }
+        }
+
+        std::vector<glm::uvec4> primitiveJointIndices;
+        if (const auto jointsIt = primitive.attributes.find("JOINTS_0"); jointsIt != primitive.attributes.end())
+        {
+            const int jointsAccessorIndex = jointsIt->second;
+            if (jointsAccessorIndex >= 0 && jointsAccessorIndex < static_cast<int>(model.accessors.size()))
+            {
+                (void)ReadAccessorVec4UIntTiny(
+                    model,
+                    model.accessors[static_cast<std::size_t>(jointsAccessorIndex)],
+                    &primitiveJointIndices);
+            }
+        }
+
+        std::vector<glm::vec4> primitiveJointWeights;
+        if (const auto weightsIt = primitive.attributes.find("WEIGHTS_0"); weightsIt != primitive.attributes.end())
+        {
+            const int weightsAccessorIndex = weightsIt->second;
+            if (weightsAccessorIndex >= 0 && weightsAccessorIndex < static_cast<int>(model.accessors.size()))
+            {
+                (void)ReadAccessorVec4FloatTiny(
+                    model,
+                    model.accessors[static_cast<std::size_t>(weightsAccessorIndex)],
+                    &primitiveJointWeights);
+            }
+        }
+
+        glm::vec3 primitiveBaseColor{1.0F, 1.0F, 1.0F};
+        if (primitive.material >= 0 && primitive.material < static_cast<int>(model.materials.size()))
+        {
+            const tinygltf::Material& material = model.materials[static_cast<std::size_t>(primitive.material)];
+            const auto& pbr = material.pbrMetallicRoughness;
+            if (pbr.baseColorFactor.size() == 4U)
+            {
+                primitiveBaseColor = glm::clamp(
+                    glm::vec3{
+                        static_cast<float>(pbr.baseColorFactor[0]),
+                        static_cast<float>(pbr.baseColorFactor[1]),
+                        static_cast<float>(pbr.baseColorFactor[2]),
+                    },
+                    glm::vec3{0.0F},
+                    glm::vec3{1.0F});
+            }
+        }
+
+        std::vector<std::uint32_t> primitiveIndices;
+        if (primitive.indices >= 0 && primitive.indices < static_cast<int>(model.accessors.size()))
+        {
+            if (!ReadAccessorScalarsAsIndicesTiny(
+                    model,
+                    model.accessors[static_cast<std::size_t>(primitive.indices)],
+                    &primitiveIndices))
+            {
+                continue;
+            }
+        }
+        else
+        {
+            primitiveIndices.reserve(primitivePositions.size());
+            for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(primitivePositions.size()); ++i)
+            {
+                primitiveIndices.push_back(i);
+            }
+        }
+        if (primitiveIndices.size() < 3)
+        {
+            continue;
+        }
+
+        const std::uint32_t baseVertex = static_cast<std::uint32_t>(rig.basePositions.size());
+        rig.basePositions.insert(rig.basePositions.end(), primitivePositions.begin(), primitivePositions.end());
+        for (std::size_t i = 0; i < primitivePositions.size(); ++i)
+        {
+            rig.baseNormals.push_back(
+                (i < primitiveNormals.size()) ? primitiveNormals[i] : glm::vec3{0.0F, 1.0F, 0.0F});
+            rig.baseUvs.push_back((i < primitiveUvs.size()) ? primitiveUvs[i] : glm::vec2{0.0F});
+            rig.jointIndices.push_back((i < primitiveJointIndices.size()) ? primitiveJointIndices[i] : glm::uvec4{0U});
+            rig.jointWeights.push_back((i < primitiveJointWeights.size()) ? primitiveJointWeights[i] : glm::vec4{0.0F});
+            rig.baseColors.push_back(primitiveBaseColor);
+        }
+
+        const std::size_t indicesBefore = rig.indices.size();
+        auto appendTriangle = [&](std::uint32_t ia, std::uint32_t ib, std::uint32_t ic) {
+            if (ia >= primitivePositions.size() || ib >= primitivePositions.size() || ic >= primitivePositions.size())
+            {
+                return;
+            }
+            rig.indices.push_back(baseVertex + ia);
+            rig.indices.push_back(baseVertex + ib);
+            rig.indices.push_back(baseVertex + ic);
+        };
+
+        if (mode == TINYGLTF_MODE_TRIANGLES)
+        {
+            for (std::size_t triStart = 0; triStart + 2 < primitiveIndices.size(); triStart += 3)
+            {
+                appendTriangle(
+                    primitiveIndices[triStart],
+                    primitiveIndices[triStart + 1],
+                    primitiveIndices[triStart + 2]);
+            }
+        }
+        else if (mode == TINYGLTF_MODE_TRIANGLE_STRIP)
+        {
+            for (std::size_t i = 2; i < primitiveIndices.size(); ++i)
+            {
+                const bool odd = (i % 2U) == 1U;
+                const std::uint32_t a = primitiveIndices[i - 2];
+                const std::uint32_t b = primitiveIndices[i - 1];
+                const std::uint32_t c = primitiveIndices[i];
+                appendTriangle(odd ? b : a, odd ? a : b, c);
+            }
+        }
+        else
+        {
+            const std::uint32_t root = primitiveIndices.front();
+            for (std::size_t i = 2; i < primitiveIndices.size(); ++i)
+            {
+                appendTriangle(root, primitiveIndices[i - 1], primitiveIndices[i]);
+            }
+        }
+
+        if (m_animationDebugEnabled)
+        {
+            const std::size_t emittedTris = (rig.indices.size() - indicesBefore) / 3U;
+            std::cout << "[ANIMATION] Rig primitive " << (combinedPrimitives + 1)
+                      << " for " << characterId
+                      << " (verts=" << primitivePositions.size()
+                      << ", tris=" << emittedTris
+                      << ", material=" << primitive.material
+                      << ", color=(" << primitiveBaseColor.r << ", " << primitiveBaseColor.g << ", " << primitiveBaseColor.b << "))\n";
+        }
+
+        ++combinedPrimitives;
+    }
+
+    if (combinedPrimitives == 0)
+    {
+        return false;
+    }
+
+    rig.meshNodeIndex = meshNodeIndex;
+    rig.skinIndex = skinIndex;
+
+    rig.restTranslations.assign(model.nodes.size(), glm::vec3{0.0F});
+    rig.restRotations.assign(model.nodes.size(), glm::quat{1.0F, 0.0F, 0.0F, 0.0F});
+    rig.restScales.assign(model.nodes.size(), glm::vec3{1.0F});
+    for (std::size_t i = 0; i < model.nodes.size(); ++i)
+    {
+        const tinygltf::Node& node = model.nodes[i];
+        glm::vec3 translation{0.0F};
+        glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
+        glm::vec3 scale{1.0F};
+        if (node.translation.size() == 3U)
+        {
+            translation = glm::vec3{
+                static_cast<float>(node.translation[0]),
+                static_cast<float>(node.translation[1]),
+                static_cast<float>(node.translation[2]),
+            };
+        }
+        if (node.rotation.size() == 4U)
+        {
+            rotation = glm::quat{
+                static_cast<float>(node.rotation[3]),
+                static_cast<float>(node.rotation[0]),
+                static_cast<float>(node.rotation[1]),
+                static_cast<float>(node.rotation[2]),
+            };
+            if (glm::length(rotation) > 1.0e-6F)
+            {
+                rotation = glm::normalize(rotation);
+            }
+        }
+        if (node.scale.size() == 3U)
+        {
+            scale = glm::vec3{
+                static_cast<float>(node.scale[0]),
+                static_cast<float>(node.scale[1]),
+                static_cast<float>(node.scale[2]),
+            };
+        }
+        rig.restTranslations[i] = translation;
+        rig.restRotations[i] = rotation;
+        rig.restScales[i] = scale;
+    }
+
+    if (skinIndex >= 0 && skinIndex < static_cast<int>(model.skins.size()))
+    {
+        const tinygltf::Skin& skin = model.skins[static_cast<std::size_t>(skinIndex)];
+        rig.skinJoints = skin.joints;
+        rig.inverseBindMatrices.assign(rig.skinJoints.size(), glm::mat4{1.0F});
+        if (skin.inverseBindMatrices >= 0 && skin.inverseBindMatrices < static_cast<int>(model.accessors.size()))
+        {
+            std::vector<glm::mat4> ibms;
+            if (ReadAccessorMat4FloatTiny(model, model.accessors[static_cast<std::size_t>(skin.inverseBindMatrices)], &ibms))
+            {
+                const std::size_t count = glm::min(ibms.size(), rig.inverseBindMatrices.size());
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    rig.inverseBindMatrices[i] = ibms[i];
+                }
+            }
+        }
+    }
+
+    rig.loaded = !rig.basePositions.empty() && !rig.indices.empty();
+    if (!rig.loaded)
+    {
+        return false;
+    }
+
+    m_survivorAnimationRigs[characterId] = std::move(rig);
+    std::cout << "[ANIMATION] Rig loaded for " << characterId
+              << " (verts=" << m_survivorAnimationRigs[characterId].basePositions.size()
+              << ", tris=" << (m_survivorAnimationRigs[characterId].indices.size() / 3U)
+              << ", primitives=" << combinedPrimitives
+              << ", joints=" << m_survivorAnimationRigs[characterId].skinJoints.size() << ")\n";
+    return true;
+}
+
+bool GameplaySystems::BuildAnimatedSurvivorGeometry(
+    const std::string& characterId,
+    engine::render::MeshGeometry* outGeometry,
+    float* outMinY,
+    float* outMaxY,
+    float* outMaxAbsXZ
+) const
+{
+    if (outGeometry == nullptr || characterId.empty())
+    {
+        return false;
+    }
+
+    const auto rigIt = m_survivorAnimationRigs.find(characterId);
+    if (rigIt == m_survivorAnimationRigs.end() || !rigIt->second.loaded)
+    {
+        return false;
+    }
+    const SurvivorAnimationRig& rig = rigIt->second;
+    if (rig.basePositions.empty() || rig.indices.empty())
+    {
+        return false;
+    }
+
+    const auto& blender = m_animationSystem.GetStateMachine().GetBlender();
+    const auto& sourcePlayer = blender.SourcePlayer();
+    const auto& targetPlayer = blender.TargetPlayer();
+    if (targetPlayer.GetClip() == nullptr)
+    {
+        return false;
+    }
+
+    const bool blending = blender.IsBlending() && sourcePlayer.GetClip() != nullptr;
+    const float blendWeight = glm::clamp(blender.BlendWeight(), 0.0F, 1.0F);
+
+    std::vector<glm::mat4> localTransforms(rig.restTranslations.size(), glm::mat4{1.0F});
+    auto samplePlayerNode = [](const engine::animation::AnimationPlayer& player,
+                               int nodeIndex,
+                               glm::vec3* outTranslation,
+                               glm::quat* outRotation,
+                               glm::vec3* outScale) {
+        if (player.GetClip() == nullptr)
+        {
+            return;
+        }
+        const engine::animation::AnimationClip* clip = player.GetClip();
+        if (clip->HasTranslation(nodeIndex))
+        {
+            player.SampleTranslation(nodeIndex, *outTranslation);
+        }
+        if (clip->HasRotation(nodeIndex))
+        {
+            player.SampleRotation(nodeIndex, *outRotation);
+        }
+        if (clip->HasScale(nodeIndex))
+        {
+            player.SampleScale(nodeIndex, *outScale);
+        }
+    };
+
+    for (int nodeIndex = 0; nodeIndex < static_cast<int>(rig.restTranslations.size()); ++nodeIndex)
+    {
+        glm::vec3 translation = rig.restTranslations[static_cast<std::size_t>(nodeIndex)];
+        glm::quat rotation = rig.restRotations[static_cast<std::size_t>(nodeIndex)];
+        glm::vec3 scale = rig.restScales[static_cast<std::size_t>(nodeIndex)];
+
+        if (blending)
+        {
+            glm::vec3 sourceTranslation = translation;
+            glm::quat sourceRotation = rotation;
+            glm::vec3 sourceScale = scale;
+            samplePlayerNode(sourcePlayer, nodeIndex, &sourceTranslation, &sourceRotation, &sourceScale);
+
+            glm::vec3 targetTranslation = translation;
+            glm::quat targetRotation = rotation;
+            glm::vec3 targetScale = scale;
+            samplePlayerNode(targetPlayer, nodeIndex, &targetTranslation, &targetRotation, &targetScale);
+
+            translation = glm::mix(sourceTranslation, targetTranslation, blendWeight);
+            if (glm::dot(sourceRotation, targetRotation) < 0.0F)
+            {
+                targetRotation = -targetRotation;
+            }
+            rotation = glm::normalize(glm::slerp(sourceRotation, targetRotation, blendWeight));
+            scale = glm::mix(sourceScale, targetScale, blendWeight);
+        }
+        else
+        {
+            samplePlayerNode(targetPlayer, nodeIndex, &translation, &rotation, &scale);
+        }
+
+        localTransforms[static_cast<std::size_t>(nodeIndex)] =
+            glm::translate(glm::mat4{1.0F}, translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4{1.0F}, scale);
+    }
+
+    std::vector<glm::mat4> worldTransforms(localTransforms.size(), glm::mat4{1.0F});
+    std::vector<std::uint8_t> solved(localTransforms.size(), 0U);
+    std::function<void(int)> computeWorld = [&](int nodeIndex) {
+        if (nodeIndex < 0 || nodeIndex >= static_cast<int>(localTransforms.size()))
+        {
+            return;
+        }
+        if (solved[static_cast<std::size_t>(nodeIndex)] != 0U)
+        {
+            return;
+        }
+        const int parent = (nodeIndex < static_cast<int>(rig.nodeParents.size()))
+            ? rig.nodeParents[static_cast<std::size_t>(nodeIndex)]
+            : -1;
+        if (parent >= 0)
+        {
+            computeWorld(parent);
+            worldTransforms[static_cast<std::size_t>(nodeIndex)] =
+                worldTransforms[static_cast<std::size_t>(parent)] * localTransforms[static_cast<std::size_t>(nodeIndex)];
+        }
+        else
+        {
+            worldTransforms[static_cast<std::size_t>(nodeIndex)] = localTransforms[static_cast<std::size_t>(nodeIndex)];
+        }
+        solved[static_cast<std::size_t>(nodeIndex)] = 1U;
+    };
+    for (int nodeIndex = 0; nodeIndex < static_cast<int>(localTransforms.size()); ++nodeIndex)
+    {
+        computeWorld(nodeIndex);
+    }
+
+    if (rig.meshNodeIndex < 0 || rig.meshNodeIndex >= static_cast<int>(worldTransforms.size()))
+    {
+        return false;
+    }
+    const glm::mat4 meshWorld = worldTransforms[static_cast<std::size_t>(rig.meshNodeIndex)];
+    const glm::mat4 invMeshWorld = glm::inverse(meshWorld);
+    const glm::mat3 normalWorld = glm::inverseTranspose(glm::mat3(meshWorld));
+
+    std::vector<glm::mat4> skinMatrices(rig.skinJoints.size(), glm::mat4{1.0F});
+    for (std::size_t i = 0; i < rig.skinJoints.size(); ++i)
+    {
+        const int jointNode = rig.skinJoints[i];
+        if (jointNode < 0 || jointNode >= static_cast<int>(worldTransforms.size()))
+        {
+            continue;
+        }
+        const glm::mat4 ibm = i < rig.inverseBindMatrices.size() ? rig.inverseBindMatrices[i] : glm::mat4{1.0F};
+        skinMatrices[i] = invMeshWorld * worldTransforms[static_cast<std::size_t>(jointNode)] * ibm;
+    }
+
+    outGeometry->positions.resize(rig.basePositions.size());
+    outGeometry->normals.resize(rig.basePositions.size(), glm::vec3{0.0F, 1.0F, 0.0F});
+    outGeometry->colors = rig.baseColors;
+    if (outGeometry->colors.size() != rig.basePositions.size())
+    {
+        outGeometry->colors.assign(rig.basePositions.size(), glm::vec3{1.0F, 1.0F, 1.0F});
+    }
+    outGeometry->uvs = rig.baseUvs;
+    if (outGeometry->uvs.size() != rig.basePositions.size())
+    {
+        outGeometry->uvs.assign(rig.basePositions.size(), glm::vec2{0.0F});
+    }
+    outGeometry->indices = rig.indices;
+
+    glm::vec3 boundsMin{std::numeric_limits<float>::max()};
+    glm::vec3 boundsMax{-std::numeric_limits<float>::max()};
+    const bool canSkin = !skinMatrices.empty() &&
+        rig.jointIndices.size() == rig.basePositions.size() &&
+        rig.jointWeights.size() == rig.basePositions.size();
+
+    for (std::size_t vertexIndex = 0; vertexIndex < rig.basePositions.size(); ++vertexIndex)
+    {
+        glm::vec3 skinnedPosition = rig.basePositions[vertexIndex];
+        glm::vec3 skinnedNormal = vertexIndex < rig.baseNormals.size() ? rig.baseNormals[vertexIndex] : glm::vec3{0.0F, 1.0F, 0.0F};
+
+        if (canSkin)
+        {
+            const glm::uvec4 joints = rig.jointIndices[vertexIndex];
+            const glm::vec4 weights = rig.jointWeights[vertexIndex];
+            glm::vec3 accumPosition{0.0F};
+            glm::vec3 accumNormal{0.0F};
+            float weightSum = 0.0F;
+            for (int k = 0; k < 4; ++k)
+            {
+                const float weight = weights[static_cast<std::size_t>(k)];
+                if (weight <= 1.0e-6F)
+                {
+                    continue;
+                }
+                const std::uint32_t jointIndex = joints[static_cast<std::size_t>(k)];
+                if (jointIndex >= skinMatrices.size())
+                {
+                    continue;
+                }
+                const glm::mat4& jointMat = skinMatrices[static_cast<std::size_t>(jointIndex)];
+                accumPosition += weight * glm::vec3(jointMat * glm::vec4(rig.basePositions[vertexIndex], 1.0F));
+                accumNormal += weight * glm::mat3(jointMat) * skinnedNormal;
+                weightSum += weight;
+            }
+            if (weightSum > 1.0e-6F)
+            {
+                skinnedPosition = accumPosition;
+                if (glm::length(accumNormal) > 1.0e-6F)
+                {
+                    skinnedNormal = glm::normalize(accumNormal);
+                }
+            }
+        }
+
+        const glm::vec3 worldPosition = glm::vec3(meshWorld * glm::vec4(skinnedPosition, 1.0F));
+        glm::vec3 worldNormal = normalWorld * skinnedNormal;
+        if (glm::length(worldNormal) > 1.0e-6F)
+        {
+            worldNormal = glm::normalize(worldNormal);
+        }
+        else
+        {
+            worldNormal = glm::vec3{0.0F, 1.0F, 0.0F};
+        }
+
+        outGeometry->positions[vertexIndex] = worldPosition;
+        outGeometry->normals[vertexIndex] = worldNormal;
+        boundsMin = glm::min(boundsMin, worldPosition);
+        boundsMax = glm::max(boundsMax, worldPosition);
+    }
+
+    const glm::vec3 center = (boundsMin + boundsMax) * 0.5F;
+    for (glm::vec3& pos : outGeometry->positions)
+    {
+        pos -= center;
+    }
+    const glm::vec3 centeredMin = boundsMin - center;
+    const glm::vec3 centeredMax = boundsMax - center;
+
+    if (outMinY != nullptr)
+    {
+        *outMinY = centeredMin.y;
+    }
+    if (outMaxY != nullptr)
+    {
+        *outMaxY = centeredMax.y;
+    }
+    if (outMaxAbsXZ != nullptr)
+    {
+        const float absX = std::max(std::abs(centeredMin.x), std::abs(centeredMax.x));
+        const float absZ = std::max(std::abs(centeredMin.z), std::abs(centeredMax.z));
+        *outMaxAbsXZ = std::max(absX, absZ);
+    }
+
+    return true;
+}
+
+void GameplaySystems::RefreshAnimatedSurvivorMeshIfNeeded(const std::string& characterId)
+{
+    if (m_rendererPtr == nullptr || characterId.empty())
+    {
+        return;
+    }
+    if (characterId != m_animationCharacterId)
+    {
+        return;
+    }
+    if (!LoadSurvivorAnimationRig(characterId))
+    {
+        return;
+    }
+
+    auto cacheIt = m_survivorVisualMeshes.find(characterId);
+    if (cacheIt == m_survivorVisualMeshes.end())
+    {
+        return;
+    }
+    SurvivorVisualMesh& cached = cacheIt->second;
+
+    engine::render::MeshGeometry animatedGeometry;
+    float minY = cached.boundsMinY;
+    float maxY = cached.boundsMaxY;
+    float maxAbsXZ = cached.maxAbsXZ;
+    if (!BuildAnimatedSurvivorGeometry(characterId, &animatedGeometry, &minY, &maxY, &maxAbsXZ))
+    {
+        return;
+    }
+
+    if (cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+    {
+        m_rendererPtr->FreeGpuMesh(cached.gpuMesh);
+    }
+    cached.gpuMesh = m_rendererPtr->UploadMesh(animatedGeometry, glm::vec3{1.0F, 1.0F, 1.0F});
+    cached.boundsMinY = minY;
+    cached.boundsMaxY = maxY;
+    cached.maxAbsXZ = maxAbsXZ;
+    cached.gpuUploadAttempted = cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh;
+
+    auto rigIt = m_survivorAnimationRigs.find(characterId);
+    if (rigIt != m_survivorAnimationRigs.end() &&
+        !rigIt->second.runtimeUploadLogged &&
+        cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+    {
+        const auto* currentClip = m_animationSystem.GetStateMachine().GetBlender().GetCurrentClip();
+        std::cout << "[ANIMATION] Runtime animated mesh upload active for " << characterId
+                  << " (clip=" << (currentClip != nullptr ? currentClip->name : std::string{"none"}) << ")\n";
+        rigIt->second.runtimeUploadLogged = true;
+    }
 }
 
 bool GameplaySystems::TryFallbackToAvailableSurvivorModel(const std::string& failedCharacterId)
@@ -8847,6 +10134,7 @@ bool GameplaySystems::TryFallbackToAvailableSurvivorModel(const std::string& fai
         }
 
         m_selectedSurvivorCharacterId = candidate;
+        m_animationCharacterId.clear();
         RefreshSurvivorModelCapsuleOverride();
         ApplyGameplayTuning(m_tuning);
         AddRuntimeMessage("Survivor model fallback: " + failedCharacterId + " -> " + candidate, 3.0F);
@@ -8900,10 +10188,23 @@ void GameplaySystems::RefreshSurvivorModelCapsuleOverride()
         return;
     }
 
-    const float height = std::max(0.9F, (cached.boundsMaxY - cached.boundsMinY) * 1.02F);
-    const float radius = std::max(0.2F, cached.maxAbsXZ * 1.05F);
+    const float tunedHeight = glm::clamp(m_tuning.survivorCapsuleHeight, 0.9F, 3.2F);
+    const float tunedRadius = glm::clamp(m_tuning.survivorCapsuleRadius, 0.2F, 1.2F);
+    const float modelHeight = std::max(0.9F, (cached.boundsMaxY - cached.boundsMinY) * 0.98F);
+    const float modelRadius = std::max(0.2F, cached.maxAbsXZ * 0.70F);
+
+    // Gameplay tuning values are authoritative for hitbox size.
+    const float height = tunedHeight;
+    const float radius = tunedRadius;
     m_survivorCapsuleOverrideHeight = height;
     m_survivorCapsuleOverrideRadius = radius;
+    if (m_animationDebugEnabled)
+    {
+        std::cout << "[SURVIVOR_MODEL] Capsule override for " << m_selectedSurvivorCharacterId
+                  << " radius=" << radius << " height=" << height
+                  << " (modelRadius=" << modelRadius << ", modelHeight=" << modelHeight
+                  << ", tunedRadius=" << tunedRadius << ", tunedHeight=" << tunedHeight << ")\n";
+    }
 }
 
 void GameplaySystems::InitializeLoadoutCatalog()
@@ -8915,10 +10216,16 @@ void GameplaySystems::InitializeLoadoutCatalog()
     }
 
     const std::vector<std::string> survivorIds = m_loadoutCatalog.ListSurvivorIds();
-    if (m_loadoutCatalog.FindSurvivor("survivor_male_blocky") != nullptr &&
-        (m_selectedSurvivorCharacterId.empty() || m_selectedSurvivorCharacterId == "survivor_dwight"))
+    if (m_selectedSurvivorCharacterId.empty())
     {
-        m_selectedSurvivorCharacterId = "survivor_male_blocky";
+        if (m_loadoutCatalog.FindSurvivor("survivor_dwight") != nullptr)
+        {
+            m_selectedSurvivorCharacterId = "survivor_dwight";
+        }
+        else if (m_loadoutCatalog.FindSurvivor("survivor_male_blocky") != nullptr)
+        {
+            m_selectedSurvivorCharacterId = "survivor_male_blocky";
+        }
     }
     if (!survivorIds.empty() && !m_loadoutCatalog.FindSurvivor(m_selectedSurvivorCharacterId))
     {
@@ -9178,11 +10485,85 @@ bool GameplaySystems::SetSelectedSurvivorCharacter(const std::string& characterI
     {
         return false;
     }
+    const std::string previousCharacterId = m_selectedSurvivorCharacterId;
+    const bool changed = previousCharacterId != characterId;
     m_selectedSurvivorCharacterId = characterId;
+    if (changed)
+    {
+        m_animationCharacterId.clear();
+        if (!previousCharacterId.empty())
+        {
+            m_survivorAnimationRigs.erase(previousCharacterId);
+        }
+        m_survivorAnimationRigs.erase(characterId);
+    }
     RefreshSurvivorModelCapsuleOverride();
     ApplyGameplayTuning(m_tuning);
-    (void)EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
+    const bool meshLoaded = EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
+    if (meshLoaded)
+    {
+        std::cout << "[SURVIVOR_MODEL] Selected " << characterId
+                  << " with " << m_animationSystem.ListClips().size() << " loaded clips\n";
+    }
+    else
+    {
+        std::cout << "[SURVIVOR_MODEL] Selection applied but mesh load pending/failed for "
+                  << characterId << "\n";
+    }
     return true;
+}
+
+bool GameplaySystems::ReloadSelectedSurvivorCharacter(bool reloadAnimations)
+{
+    if (m_selectedSurvivorCharacterId.empty())
+    {
+        return false;
+    }
+    m_survivorAnimationRigs.erase(m_selectedSurvivorCharacterId);
+
+    auto cacheIt = m_survivorVisualMeshes.find(m_selectedSurvivorCharacterId);
+    if (cacheIt != m_survivorVisualMeshes.end())
+    {
+        if (m_rendererPtr != nullptr && cacheIt->second.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            m_rendererPtr->FreeGpuMesh(cacheIt->second.gpuMesh);
+        }
+        cacheIt->second = SurvivorVisualMesh{};
+    }
+    else
+    {
+        m_survivorVisualMeshes.emplace(m_selectedSurvivorCharacterId, SurvivorVisualMesh{});
+    }
+
+    if (reloadAnimations)
+    {
+        (void)ReloadSurvivorCharacterAnimations(m_selectedSurvivorCharacterId);
+    }
+    else if (m_animationCharacterId == m_selectedSurvivorCharacterId)
+    {
+        m_animationCharacterId.clear();
+    }
+
+    const bool loaded = EnsureSurvivorCharacterMeshLoaded(m_selectedSurvivorCharacterId);
+    std::cout << "[SURVIVOR_MODEL] Reload "
+              << (loaded ? "succeeded" : "failed")
+              << " for " << m_selectedSurvivorCharacterId
+              << " (clips=" << m_animationSystem.ListClips().size() << ")\n";
+    return loaded;
+}
+
+bool GameplaySystems::ReloadSelectedSurvivorAnimations()
+{
+    if (m_selectedSurvivorCharacterId.empty())
+    {
+        return false;
+    }
+
+    const bool loaded = ReloadSurvivorCharacterAnimations(m_selectedSurvivorCharacterId);
+    std::cout << "[ANIMATION] Reload "
+              << (loaded ? "succeeded" : "failed")
+              << " for selected survivor " << m_selectedSurvivorCharacterId << "\n";
+    return loaded;
 }
 
 bool GameplaySystems::SetSelectedKillerCharacter(const std::string& characterId)
