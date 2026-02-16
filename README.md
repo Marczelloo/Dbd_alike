@@ -947,11 +947,11 @@ The locomotion animation system provides skeletal animation playback for survivo
 - `anim_scale <value>` - Set global animation playback scale (0.5 = half speed, 2.0 = double)
 - `anim_info` - Print current animation state, clip, playback speed
 - `anim_debug on|off` - Toggle verbose animation logging
-- `anim_reload` - Clear animation clips and reinitialize state machine
+- `anim_reload` - Reload animation clips from current survivor model
 
 ### Console Commands (Model Testing)
 - `list_survivor_models` - List all survivor character definitions
-- `set_survivor_model <id>` - Switch survivor character model at runtime
+- `set_survivor_model <id>` - Switch survivor character model at runtime (`male|female|dwight` aliases supported)
 - `reload_survivor_model` - Force reload current survivor model and animations
 
 ### Settings UI

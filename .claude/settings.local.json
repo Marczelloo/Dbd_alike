@@ -12,7 +12,14 @@
       "Bash(cd:*)",
       "mcp__blender-mcp__get_object_info",
       "mcp__zai-mcp-server__analyze_image",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "mcp__blender-mcp__get_polyhaven_status",
+      "Bash(timeout:*)",
+      "Bash(taskkill:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== Run $i ===\")",
+      "Bash(done)",
+      "Bash(git commit:*)"
     ]
   }
 }
