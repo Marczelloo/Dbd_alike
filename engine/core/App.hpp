@@ -235,7 +235,9 @@ private:
     {
         std::vector<NetLobbyPlayer> players;
         std::uint32_t localPlayerNetId = 0;
-        bool matchStarting = false;  // When true, show loading screen
+        bool matchStarting = false;
+        bool countdownActive = false;
+        float countdownTimer = -1.0F;
     };
 
     struct PlayerBinding
@@ -252,6 +254,7 @@ private:
 
     void ResetToMainMenu();
     void StartSoloSession(const std::string& mapName, const std::string& roleName);
+    void StartMatchFromLobbyMultiplayer(const std::string& mapName, const std::string& roleName);
     bool StartHostSession(const std::string& mapName, const std::string& roleName, std::uint16_t port);
     bool StartJoinSession(const std::string& ip, std::uint16_t port, const std::string& preferredRole);
     void InitializeLobbySelections(const std::string& roleName);

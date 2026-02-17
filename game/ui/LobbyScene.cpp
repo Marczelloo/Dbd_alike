@@ -384,7 +384,7 @@ void LobbyScene::HandleInput()
             const int totalOptions = static_cast<int>(m_availablePerkIds.size()) + 1;
             const int visibleCount = std::min(kDropdownPageSize, totalOptions);
             m_perkDropdownStart = std::clamp(m_perkDropdownStart, 0, std::max(0, totalOptions - visibleCount));
-            const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 36.0F * scale;
+        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 12.0F * scale;
             
             if (mousePressed)
             {
@@ -593,14 +593,26 @@ void LobbyScene::SetLocalPlayerPower(const std::string& powerId, const std::stri
 
 void LobbyScene::SetCountdown(float seconds)
 {
+    const bool wasActive = m_state.countdownActive;
     m_state.countdownTimer = seconds;
     m_state.countdownActive = (seconds > 0.0F);
+    
+    if (m_state.countdownActive && !wasActive && m_onCountdownStarted)
+    {
+        m_onCountdownStarted(seconds);
+    }
 }
 
 void LobbyScene::CancelCountdown()
 {
+    const bool wasActive = m_state.countdownActive;
     m_state.countdownActive = false;
     m_state.countdownTimer = -1.0F;
+    
+    if (wasActive && m_onCountdownCancelled)
+    {
+        m_onCountdownCancelled();
+    }
 }
 
 void LobbyScene::UpdateCamera(float deltaSeconds)
@@ -1571,17 +1583,6 @@ void LobbyScene::DrawPerkSlots(float x, float y, bool dropdownOnly)
             }
             m_ui->DrawTextLabel(dropdownX + 10.0F * scale, optY + 4.0F * scale, perkName, theme.colorText, 0.8F * scale);
         }
-
-        const float navY = listY + static_cast<float>(visibleCount) * optionHeight + 4.0F * scale;
-        const float navW = (dropdownWidth - 10.0F * scale) * 0.5F;
-        engine::ui::UiRect prevRect{dropdownX + 3.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        engine::ui::UiRect nextRect{dropdownX + navW + 2.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        m_ui->DrawRect(prevRect, theme.colorButton);
-        m_ui->DrawRect(nextRect, theme.colorButton);
-        m_ui->DrawRectOutline(prevRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawRectOutline(nextRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawTextLabel(dropdownX + 10.0F * scale, navY + 5.0F * scale, "PREV", theme.colorTextMuted, 0.7F * scale);
-        m_ui->DrawTextLabel(dropdownX + navW + 10.0F * scale, navY + 5.0F * scale, "NEXT", theme.colorTextMuted, 0.7F * scale);
     }
 }
 
@@ -1781,7 +1782,7 @@ void LobbyScene::DrawCharacterSelector(float x, float y, bool dropdownOnly)
         const int totalOptions = static_cast<int>(ids.size());
         const int visibleCount = std::min(kDropdownPageSize, totalOptions);
         m_characterDropdownStart = std::clamp(m_characterDropdownStart, 0, std::max(0, totalOptions - visibleCount));
-        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 36.0F * scale;
+        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 12.0F * scale;
         
         engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
         glm::vec4 bgColor = theme.colorPanel;
@@ -1805,17 +1806,6 @@ void LobbyScene::DrawCharacterSelector(float x, float y, bool dropdownOnly)
             if (charName.length() > 16) charName = charName.substr(0, 15) + ".";
             m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, charName, theme.colorText, 0.8F * scale);
         }
-
-        const float navY = listY + static_cast<float>(visibleCount) * optionHeight + 4.0F * scale;
-        const float navW = (btnWidth - 10.0F * scale) * 0.5F;
-        engine::ui::UiRect prevRect{x + 3.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        engine::ui::UiRect nextRect{x + navW + 2.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        m_ui->DrawRect(prevRect, theme.colorButton);
-        m_ui->DrawRect(nextRect, theme.colorButton);
-        m_ui->DrawRectOutline(prevRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawRectOutline(nextRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawTextLabel(x + 10.0F * scale, navY + 5.0F * scale, "PREV", theme.colorTextMuted, 0.7F * scale);
-        m_ui->DrawTextLabel(x + navW + 10.0F * scale, navY + 5.0F * scale, "NEXT", theme.colorTextMuted, 0.7F * scale);
     }
 }
 
@@ -1878,7 +1868,7 @@ void LobbyScene::DrawItemSelector(float x, float y, bool dropdownOnly)
         const int totalOptions = static_cast<int>(m_itemIds.size()) + 1;
         const int visibleCount = std::min(kDropdownPageSize, totalOptions);
         m_itemDropdownStart = std::clamp(m_itemDropdownStart, 0, std::max(0, totalOptions - visibleCount));
-        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 36.0F * scale;
+        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 12.0F * scale;
         
         engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
         glm::vec4 bgColor = theme.colorPanel;
@@ -1904,17 +1894,6 @@ void LobbyScene::DrawItemSelector(float x, float y, bool dropdownOnly)
             if (itemName.length() > 16) itemName = itemName.substr(0, 15) + ".";
             m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, itemName, theme.colorText, 0.8F * scale);
         }
-
-        const float navY = listY + static_cast<float>(visibleCount) * optionHeight + 4.0F * scale;
-        const float navW = (btnWidth - 10.0F * scale) * 0.5F;
-        engine::ui::UiRect prevRect{x + 3.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        engine::ui::UiRect nextRect{x + navW + 2.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        m_ui->DrawRect(prevRect, theme.colorButton);
-        m_ui->DrawRect(nextRect, theme.colorButton);
-        m_ui->DrawRectOutline(prevRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawRectOutline(nextRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawTextLabel(x + 10.0F * scale, navY + 5.0F * scale, "PREV", theme.colorTextMuted, 0.7F * scale);
-        m_ui->DrawTextLabel(x + navW + 10.0F * scale, navY + 5.0F * scale, "NEXT", theme.colorTextMuted, 0.7F * scale);
     }
 }
 
@@ -1975,7 +1954,7 @@ void LobbyScene::DrawPowerSelector(float x, float y, bool dropdownOnly)
         const int totalOptions = static_cast<int>(m_powerIds.size());
         const int visibleCount = std::min(kDropdownPageSize, totalOptions);
         m_powerDropdownStart = std::clamp(m_powerDropdownStart, 0, std::max(0, totalOptions - visibleCount));
-        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 36.0F * scale;
+        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 12.0F * scale;
         
         engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
         glm::vec4 bgColor = theme.colorPanel;
@@ -1999,17 +1978,6 @@ void LobbyScene::DrawPowerSelector(float x, float y, bool dropdownOnly)
             if (powerName.length() > 16) powerName = powerName.substr(0, 15) + ".";
             m_ui->DrawTextLabel(x + 10.0F * scale, optY + 5.0F * scale, powerName, theme.colorText, 0.8F * scale);
         }
-
-        const float navY = listY + static_cast<float>(visibleCount) * optionHeight + 4.0F * scale;
-        const float navW = (btnWidth - 10.0F * scale) * 0.5F;
-        engine::ui::UiRect prevRect{x + 3.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        engine::ui::UiRect nextRect{x + navW + 2.0F * scale, navY, navW - 3.0F * scale, 24.0F * scale};
-        m_ui->DrawRect(prevRect, theme.colorButton);
-        m_ui->DrawRect(nextRect, theme.colorButton);
-        m_ui->DrawRectOutline(prevRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawRectOutline(nextRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawTextLabel(x + 10.0F * scale, navY + 5.0F * scale, "PREV", theme.colorTextMuted, 0.7F * scale);
-        m_ui->DrawTextLabel(x + navW + 10.0F * scale, navY + 5.0F * scale, "NEXT", theme.colorTextMuted, 0.7F * scale);
     }
 }
 
@@ -2077,7 +2045,7 @@ void LobbyScene::DrawAddonSelector(float x, float y, bool isAddonA, bool dropdow
         const int visibleCount = std::min(kDropdownPageSize, totalOptions);
         int& dropdownStart = isAddonA ? m_addonADropdownStart : m_addonBDropdownStart;
         dropdownStart = std::clamp(dropdownStart, 0, std::max(0, totalOptions - visibleCount));
-        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 34.0F * scale;
+        const float dropdownHeight = static_cast<float>(visibleCount) * optionHeight + 10.0F * scale;
         
         engine::ui::UiRect dropdownRect{x, dropdownY, btnWidth, dropdownHeight};
         glm::vec4 bgColor = theme.colorPanel;
@@ -2103,17 +2071,6 @@ void LobbyScene::DrawAddonSelector(float x, float y, bool isAddonA, bool dropdow
             if (addonName.length() > 14) addonName = addonName.substr(0, 13) + ".";
             m_ui->DrawTextLabel(x + 8.0F * scale, optY + 4.0F * scale, addonName, theme.colorText, 0.75F * scale);
         }
-
-        const float navY = listY + static_cast<float>(visibleCount) * optionHeight + 3.0F * scale;
-        const float navW = (btnWidth - 8.0F * scale) * 0.5F;
-        engine::ui::UiRect prevRect{x + 2.0F * scale, navY, navW - 2.0F * scale, 22.0F * scale};
-        engine::ui::UiRect nextRect{x + navW + 1.0F * scale, navY, navW - 2.0F * scale, 22.0F * scale};
-        m_ui->DrawRect(prevRect, theme.colorButton);
-        m_ui->DrawRect(nextRect, theme.colorButton);
-        m_ui->DrawRectOutline(prevRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawRectOutline(nextRect, 1.0F, theme.colorPanelBorder);
-        m_ui->DrawTextLabel(x + 7.0F * scale, navY + 4.0F * scale, "PREV", theme.colorTextMuted, 0.65F * scale);
-        m_ui->DrawTextLabel(x + navW + 7.0F * scale, navY + 4.0F * scale, "NEXT", theme.colorTextMuted, 0.65F * scale);
     }
 }
 

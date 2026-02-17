@@ -526,7 +526,15 @@ bool App::Run()
         }
         
         m_lobbyScene.ExitLobby();
-        StartSoloSession(map, role);
+        
+        if (m_multiplayerMode == MultiplayerMode::Solo)
+        {
+            StartSoloSession(map, role);
+        }
+        else
+        {
+            StartMatchFromLobbyMultiplayer(map, role);
+        }
     });
     m_lobbyScene.SetReadyChangedCallback([this](bool ready) {
         if (m_multiplayerMode == MultiplayerMode::Host)
@@ -639,6 +647,24 @@ bool App::Run()
     });
     m_lobbyScene.SetLeaveLobbyCallback([this]() {
         ResetToMainMenu();
+    });
+    m_lobbyScene.SetCountdownStartedCallback([this](float seconds) {
+        if (m_multiplayerMode == MultiplayerMode::Host)
+        {
+            m_lobbyState.countdownActive = true;
+            m_lobbyState.countdownTimer = seconds;
+            BroadcastLobbyStateToAllClients();
+            AppendNetworkLog("Countdown started: " + std::to_string(seconds) + "s - broadcasting to clients");
+        }
+    });
+    m_lobbyScene.SetCountdownCancelledCallback([this]() {
+        if (m_multiplayerMode == MultiplayerMode::Host)
+        {
+            m_lobbyState.countdownActive = false;
+            m_lobbyState.countdownTimer = -1.0F;
+            BroadcastLobbyStateToAllClients();
+            AppendNetworkLog("Countdown cancelled - broadcasting to clients");
+        }
     });
     m_lobbyScene.SetCharacterChangedCallback([this](const std::string& characterId) {
         // Update character selection in gameplay systems
@@ -1626,6 +1652,74 @@ void App::ResetToMainMenu()
     else
     {
         TransitionNetworkState(NetworkState::Offline, "Main menu");
+    }
+}
+
+
+void App::StartMatchFromLobbyMultiplayer(const std::string& mapName, const std::string& roleName)
+{
+    m_appMode = AppMode::InGame;
+    m_pauseMenuOpen = false;
+    m_settingsMenuOpen = false;
+    m_settingsOpenedFromPause = false;
+    m_audio.StopAll();
+    m_debugAudioLoops.clear();
+    m_sessionAmbienceLoop = m_audio.PlayLoop("ambience_loop", audio::AudioSystem::Bus::Ambience);
+    (void)LoadTerrorRadiusProfile("default_killer");
+
+    std::string normalizedMap = mapName;
+    if (normalizedMap == "main_map")
+    {
+        normalizedMap = "main";
+    }
+
+    if (m_multiplayerMode == MultiplayerMode::Host)
+    {
+        m_serverGameplayValues = false;
+        StartLoading(game::ui::LoadingScenario::HostMatch);
+        m_gameplay.SetNetworkAuthorityMode(true);
+        ApplyGameplaySettings(m_gameplayApplied, false);
+        m_gameplay.LoadMap(normalizedMap);
+        if (normalizedMap == "main")
+        {
+            m_sessionSeed = std::random_device{}();
+            m_gameplay.RegenerateLoops(m_sessionSeed);
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+        }
+        else if (normalizedMap == "collision_test")
+        {
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::CollisionTest;
+        }
+        else
+        {
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::Test;
+        }
+        ApplyMapEnvironment(normalizedMap);
+        InitializePlayerBindings();
+        ApplyRoleMapping(m_sessionRoleName, m_remoteRoleName, "Host role selection", true, true);
+        AppendNetworkLog("Match started as host");
+    }
+    else
+    {
+        m_serverGameplayValues = true;
+        StartLoading(game::ui::LoadingScenario::JoinMatch);
+        m_gameplay.SetNetworkAuthorityMode(false);
+        m_gameplay.LoadMap(normalizedMap);
+        if (normalizedMap == "main")
+        {
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
+        }
+        else if (normalizedMap == "collision_test")
+        {
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::CollisionTest;
+        }
+        else
+        {
+            m_sessionMapType = game::gameplay::GameplaySystems::MapType::Test;
+        }
+        ApplyMapEnvironment(normalizedMap);
+        ApplyRoleMapping(m_sessionRoleName, m_remoteRoleName, "Client role assignment", false, true);
+        AppendNetworkLog("Match started as client");
     }
 }
 
@@ -3107,6 +3201,9 @@ bool App::SerializeLobbyState(const NetLobbyState& state, std::vector<std::uint8
         AppendValue(outBuffer, flags);
     }
 
+    AppendValue(outBuffer, state.countdownActive);
+    AppendValue(outBuffer, state.countdownTimer);
+
     return true;
 }
 
@@ -3176,6 +3273,16 @@ bool App::DeserializeLobbyState(const std::vector<std::uint8_t>& buffer, NetLobb
         player.isConnected = (flags & 0x04) != 0;
 
         outState.players.push_back(player);
+    }
+
+    if (!ReadValue(buffer, offset, outState.countdownActive))
+    {
+        return false;
+    }
+
+    if (!ReadValue(buffer, offset, outState.countdownTimer))
+    {
+        return false;
     }
 
     return true;
@@ -3406,6 +3513,22 @@ void App::ApplyLobbyStateToUi(const NetLobbyState& state)
     {
         m_lobbyScene.CancelCountdown();
         AppendNetworkLog("Countdown cancelled: not all players ready");
+    }
+
+    if (state.countdownActive && !lobbyState.countdownActive)
+    {
+        lobbyState.countdownActive = true;
+        lobbyState.countdownTimer = state.countdownTimer;
+        AppendNetworkLog("Countdown started by host: " + std::to_string(state.countdownTimer) + "s");
+    }
+    else if (state.countdownActive && lobbyState.countdownActive)
+    {
+        lobbyState.countdownTimer = state.countdownTimer;
+    }
+    else if (!state.countdownActive && lobbyState.countdownActive)
+    {
+        m_lobbyScene.CancelCountdown();
+        AppendNetworkLog("Countdown cancelled by host");
     }
 
     AppendNetworkLog("Lobby state updated: " + std::to_string(state.players.size()) + " players");

@@ -82,6 +82,8 @@ public:
     using ItemChangedCallback = std::function<void(const std::string& itemId, const std::string& addonA, const std::string& addonB)>;
     using PowerChangedCallback = std::function<void(const std::string& powerId, const std::string& addonA, const std::string& addonB)>;
     using LeaveLobbyCallback = std::function<void()>;
+    using CountdownStartedCallback = std::function<void(float seconds)>;
+    using CountdownCancelledCallback = std::function<void()>;
 
     LobbyScene();
     ~LobbyScene();
@@ -112,6 +114,8 @@ public:
     void SetItemChangedCallback(ItemChangedCallback callback) { m_onItemChanged = std::move(callback); }
     void SetPowerChangedCallback(PowerChangedCallback callback) { m_onPowerChanged = std::move(callback); }
     void SetLeaveLobbyCallback(LeaveLobbyCallback callback) { m_onLeaveLobby = std::move(callback); }
+    void SetCountdownStartedCallback(CountdownStartedCallback callback) { m_onCountdownStarted = std::move(callback); }
+    void SetCountdownCancelledCallback(CountdownCancelledCallback callback) { m_onCountdownCancelled = std::move(callback); }
     
     void SetAvailablePerks(const std::vector<std::string>& perkIds, const std::vector<std::string>& perkNames) {
         m_availablePerkIds = perkIds;
@@ -264,6 +268,8 @@ private:
     ItemChangedCallback m_onItemChanged;
     PowerChangedCallback m_onPowerChanged;
     LeaveLobbyCallback m_onLeaveLobby;
+    CountdownStartedCallback m_onCountdownStarted;
+    CountdownCancelledCallback m_onCountdownCancelled;
     
     std::vector<std::string> m_availablePerkIds;
     std::vector<std::string> m_availablePerkNames;
