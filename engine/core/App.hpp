@@ -168,6 +168,8 @@ private:
     enum class AppMode
     {
         MainMenu,
+        Connecting,        // New: connecting to host, waiting for lobby state
+        RoleSelection,
         Lobby,
         Editor,
         InGame,
@@ -215,6 +217,29 @@ private:
         std::uint8_t requestedRole = 0;
     };
 
+    // Lobby player info for multiplayer synchronization
+    struct NetLobbyPlayer
+    {
+        std::uint32_t netId = 0;
+        std::string name = "Player";
+        std::string selectedRole = "survivor";
+        std::string characterId;
+        bool isReady = false;
+        bool isHost = false;
+        bool isConnected = false;
+        bool isLoaded = false;  // Set when client reports fully loaded for match start
+    };
+
+    // Full lobby state for broadcasting to all clients
+    struct NetLobbyState
+    {
+        std::vector<NetLobbyPlayer> players;
+        std::uint32_t localPlayerNetId = 0;
+        bool matchStarting = false;
+        bool countdownActive = false;
+        float countdownTimer = -1.0F;
+    };
+
     struct PlayerBinding
     {
         std::uint32_t netId = 0;
@@ -229,6 +254,7 @@ private:
 
     void ResetToMainMenu();
     void StartSoloSession(const std::string& mapName, const std::string& roleName);
+    void StartMatchFromLobbyMultiplayer(const std::string& mapName, const std::string& roleName);
     bool StartHostSession(const std::string& mapName, const std::string& roleName, std::uint16_t port);
     bool StartJoinSession(const std::string& ip, std::uint16_t port, const std::string& preferredRole);
     void InitializeLobbySelections(const std::string& roleName);
@@ -268,12 +294,43 @@ private:
         std::string& outRequestedRole,
         std::string& outMapName,
         int& outProtocolVersion,
-        std::string& outBuildId
+        std::string& outBuildId,
+        std::string& outPlayerName
     ) const;
     bool SerializeReject(const std::string& reason, std::vector<std::uint8_t>& outBuffer) const;
     bool DeserializeReject(const std::vector<std::uint8_t>& buffer, std::string& outReason) const;
     static bool SerializeRoleChangeRequest(const NetRoleChangeRequestPacket& packet, std::vector<std::uint8_t>& outBuffer);
     static bool DeserializeRoleChangeRequest(const std::vector<std::uint8_t>& buffer, NetRoleChangeRequestPacket& outPacket);
+
+    // Lobby network serialization
+    bool SerializeLobbyState(const NetLobbyState& state, std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializeLobbyState(const std::vector<std::uint8_t>& buffer, NetLobbyState& outState) const;
+    bool SerializeLobbyPlayerJoin(const NetLobbyPlayer& player, std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializeLobbyPlayerJoin(const std::vector<std::uint8_t>& buffer, NetLobbyPlayer& outPlayer) const;
+    bool SerializeLobbyPlayerLeave(std::uint32_t netId, std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializeLobbyPlayerLeave(const std::vector<std::uint8_t>& buffer, std::uint32_t& outNetId) const;
+    bool SerializeLobbyPlayerUpdate(const NetLobbyPlayer& player, std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializeLobbyPlayerUpdate(const std::vector<std::uint8_t>& buffer, NetLobbyPlayer& outPlayer) const;
+
+    // Match start synchronization
+    bool SerializePlayerLoaded(std::uint32_t netId, std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializePlayerLoaded(const std::vector<std::uint8_t>& buffer, std::uint32_t& outNetId) const;
+    bool SerializeAllPlayersReady(std::vector<std::uint8_t>& outBuffer) const;
+    bool DeserializeAllPlayersReady(const std::vector<std::uint8_t>& buffer) const;
+
+    void CheckAndBroadcastAllPlayersReady();
+    void SendPlayerLoadedToHost();
+
+    // Lobby management functions
+    void BroadcastLobbyStateToAllClients();
+    void SendLobbyStateToClient();
+    void ApplyLobbyStateToUi(const NetLobbyState& state);
+    void AddLobbyPlayer(const NetLobbyPlayer& player);
+    void RemoveLobbyPlayer(std::uint32_t netId);
+    void UpdateLobbyPlayer(const NetLobbyPlayer& player);
+    bool CanJoinRole(const std::string& role) const;
+    bool IsLobbyFull() const;
+    std::uint32_t GenerateLocalNetId() const;
 
     void TickLanDiscovery(double nowSeconds);
     void TransitionNetworkState(NetworkState state, const std::string& reason, bool isError = false);
@@ -298,6 +355,8 @@ private:
     bool SendRoleChangeRequestToHost(const std::string& requestedRole);
 
     void DrawMainMenuUiCustom(bool* shouldQuit);
+    void DrawConnectingScreen();
+    void DrawRoleSelectionScreen();
     void DrawPauseMenuUiCustom(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit);
     void DrawSettingsUiCustom(bool* closeSettings);
     void DrawInGameHudCustom(const game::gameplay::HudState& hudState, float fps, double nowSeconds);
@@ -422,6 +481,11 @@ private:
     bool m_showConnectingLoading = false;
     double m_connectingLoadingStart = 0.0;
 
+    // Match start synchronization (multiplayer loading screen)
+    bool m_matchWaitingForPlayers = false;      // Showing loading screen, waiting for all players
+    bool m_matchLocallyLoaded = false;          // This client/host has finished loading
+    double m_matchLoadingStart = 0.0;           // When loading started
+
     ControlsSettings m_controlsSettings{};
     GraphicsSettings m_graphicsApplied{};
     GraphicsSettings m_graphicsEditing{};
@@ -479,6 +543,15 @@ private:
     double m_joinStartSeconds = 0.0;
     double m_statusToastUntilSeconds = 0.0;
     std::string m_statusToastMessage;
+    
+    bool m_showLobbyFullPopup = false;
+    std::string m_lobbyFullMessage;
+    
+    // Role selection screen state
+    bool m_roleSelectionIsHost = false;
+    std::string m_roleSelectionPlayerName = "Player";
+    std::string m_roleSelectionKillerName;
+    bool m_roleSelectionKillerTaken = false;
 
     std::string m_sessionRoleName = "survivor";
     std::string m_sessionMapName = "main";
@@ -489,6 +562,11 @@ private:
     std::string m_pendingRemoteRoleRequest = "survivor";
     PlayerBinding m_localPlayer{};
     PlayerBinding m_remotePlayer{};
+
+    // Lobby state for multiplayer synchronization
+    NetLobbyState m_lobbyState{};
+    std::uint32_t m_nextNetId = 1;  // Counter for generating unique net IDs
+
     int m_playersDebugSpawnSelectionLocal = 0;
     int m_playersDebugSpawnSelectionRemote = 0;
 

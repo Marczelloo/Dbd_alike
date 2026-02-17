@@ -7,6 +7,25 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Generate build ID from git hash or timestamp
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE GIT_RESULT
+    )
+endif()
+if(NOT GIT_RESULT EQUAL 0 OR NOT GIT_HASH)
+    string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d")
+    set(GIT_HASH "dev-${BUILD_TIMESTAMP}")
+endif()
+set(BUILD_ID "${GIT_HASH}")
+message(STATUS "Build ID: ${BUILD_ID}")
+
 # Enable GLM experimental extensions
 add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
 
@@ -210,3 +229,5 @@ if(BUILD_IMGUI)
 else()
     target_compile_definitions(asym_horror PRIVATE BUILD_WITH_IMGUI=0)
 endif()
+
+target_compile_definitions(asym_horror PRIVATE BUILD_ID="${BUILD_ID}")

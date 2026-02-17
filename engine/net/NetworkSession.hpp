@@ -53,11 +53,13 @@ public:
     [[nodiscard]] std::optional<PollEvent> PopEvent();
 
     bool SendReliable(const void* data, std::size_t size);
+    bool BroadcastReliable(const void* data, std::size_t size);
     [[nodiscard]] ConnectionStats GetConnectionStats() const;
 
     [[nodiscard]] Mode GetMode() const { return m_mode; }
     [[nodiscard]] bool IsConnected() const { return m_connectedPeer != nullptr && m_connected; }
     [[nodiscard]] bool HasActiveConnection() const { return m_connected; }
+    [[nodiscard]] std::size_t ConnectedPeerCount() const;
 
 private:
     bool EnsureInitialized();

@@ -712,6 +712,7 @@ bool GameplayCatalog::LoadCharacters()
         k.id = root.value("id", std::string{});
         k.displayName = root.value("display_name", k.id);
         k.modelPath = root.value("model_path", std::string{});
+        k.modelYawDegrees = root.value("model_yaw_degrees", 0.0F);
         k.cosmeticId = root.value("cosmetic_id", std::string{});
         k.powerId = root.value("power_id", std::string{});
         if (!k.id.empty())

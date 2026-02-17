@@ -9665,9 +9665,14 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
         }
         return true;
     }
-    if (m_rendererPtr == nullptr || cached.gpuUploadAttempted)
+    if (m_rendererPtr == nullptr)
     {
+        cached.gpuUploadAttempted = false;
         return false;
+    }
+    if (cached.gpuUploadAttempted)
+    {
+        cached.gpuUploadAttempted = false;
     }
     cached.gpuUploadAttempted = true;
 
@@ -9720,6 +9725,104 @@ bool GameplaySystems::EnsureSurvivorCharacterMeshLoaded(const std::string& chara
     }
 
     return true;
+}
+
+GameplaySystems::LobbyCharacterMesh GameplaySystems::GetCharacterMeshForLobby(const std::string& characterId)
+{
+    LobbyCharacterMesh result{};
+    if (characterId.empty()) return result;
+
+    // Try survivor first
+    const auto* survivorDef = m_loadoutCatalog.FindSurvivor(characterId);
+    if (survivorDef != nullptr)
+    {
+        if (EnsureSurvivorCharacterMeshLoaded(characterId))
+        {
+            auto it = m_survivorVisualMeshes.find(characterId);
+            if (it != m_survivorVisualMeshes.end())
+            {
+                result.gpuMesh = it->second.gpuMesh;
+                result.boundsMinY = it->second.boundsMinY;
+                result.boundsMaxY = it->second.boundsMaxY;
+                result.maxAbsXZ = it->second.maxAbsXZ;
+                result.modelYawDegrees = survivorDef->modelYawDegrees;
+            }
+        }
+        return result;
+    }
+
+    // Try killer — reuse same mesh cache mechanism
+    const auto* killerDef = m_loadoutCatalog.FindKiller(characterId);
+    if (killerDef != nullptr && !killerDef->modelPath.empty())
+    {
+        auto cacheIt = m_survivorVisualMeshes.find(characterId);
+        if (cacheIt == m_survivorVisualMeshes.end())
+        {
+            cacheIt = m_survivorVisualMeshes.emplace(characterId, SurvivorVisualMesh{}).first;
+        }
+        auto& cached = cacheIt->second;
+        if (cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            result.gpuMesh = cached.gpuMesh;
+            result.boundsMinY = cached.boundsMinY;
+            result.boundsMaxY = cached.boundsMaxY;
+            result.maxAbsXZ = cached.maxAbsXZ;
+            result.modelYawDegrees = killerDef->modelYawDegrees;
+            return result;
+        }
+        if (m_rendererPtr == nullptr)
+        {
+            cached.gpuUploadAttempted = false;
+            return result;
+        }
+        if (cached.gpuUploadAttempted)
+        {
+            cached.gpuUploadAttempted = false;
+        }
+        cached.gpuUploadAttempted = true;
+        cached.boundsLoadAttempted = true;
+
+        engine::assets::MeshLibrary* meshLibrary = m_meshLibrary;
+        engine::assets::MeshLibrary tempMeshLibrary;
+        if (meshLibrary == nullptr) meshLibrary = &tempMeshLibrary;
+
+        const std::filesystem::path meshPath = ResolveAssetPathFromCwd(killerDef->modelPath);
+        std::string error;
+        const engine::assets::MeshData* meshData = meshLibrary->LoadMesh(meshPath, &error);
+        if (meshData == nullptr || !meshData->loaded)
+        {
+            cached.gpuUploadAttempted = false;
+            return result;
+        }
+        cached.gpuMesh = m_rendererPtr->UploadMesh(meshData->geometry, glm::vec3{1.0F}, engine::render::MaterialParams{});
+        cached.boundsMinY = meshData->boundsMin.y;
+        cached.boundsMaxY = meshData->boundsMax.y;
+        cached.maxAbsXZ = std::max(std::abs(meshData->boundsMin.x), std::abs(meshData->boundsMax.x));
+        cached.maxAbsXZ = std::max(cached.maxAbsXZ, std::max(std::abs(meshData->boundsMin.z), std::abs(meshData->boundsMax.z)));
+        cached.boundsLoaded = true;
+        if (cached.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+        {
+            result.gpuMesh = cached.gpuMesh;
+            result.boundsMinY = cached.boundsMinY;
+            result.boundsMaxY = cached.boundsMaxY;
+            result.maxAbsXZ = cached.maxAbsXZ;
+            result.modelYawDegrees = killerDef->modelYawDegrees;
+            std::cout << "[LOBBY_MODEL] Loaded killer mesh: " << characterId << "\n";
+        }
+    }
+    return result;
+}
+
+void GameplaySystems::PreloadCharacterMeshes()
+{
+    for (const auto& id : ListSurvivorCharacters())
+    {
+        (void)GetCharacterMeshForLobby(id);
+    }
+    for (const auto& id : ListKillerCharacters())
+    {
+        (void)GetCharacterMeshForLobby(id);
+    }
 }
 
 bool GameplaySystems::ReloadSurvivorCharacterAnimations(const std::string& characterId)

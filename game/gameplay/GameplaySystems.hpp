@@ -686,6 +686,18 @@ public:
     [[nodiscard]] std::vector<std::string> ListSurvivorCharacters() const;
     [[nodiscard]] std::vector<std::string> ListKillerCharacters() const;
 
+    // Lobby model access — load and return GPU mesh + bounds for lobby 3D preview
+    struct LobbyCharacterMesh
+    {
+        engine::render::Renderer::GpuMeshId gpuMesh = engine::render::Renderer::kInvalidGpuMesh;
+        float boundsMinY = 0.0F;
+        float boundsMaxY = 1.8F;
+        float maxAbsXZ = 0.3F;
+        float modelYawDegrees = 0.0F;
+    };
+    [[nodiscard]] LobbyCharacterMesh GetCharacterMeshForLobby(const std::string& characterId);
+    void PreloadCharacterMeshes();
+
     void TrapSpawnDebug(int count = 1);
     void TrapClearDebug();
     void SetTrapDebug(bool enabled) { m_trapDebugEnabled = enabled; }

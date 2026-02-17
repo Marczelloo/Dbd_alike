@@ -87,6 +87,7 @@ struct KillerCharacterDefinition
     std::string id;
     std::string displayName;
     std::string modelPath;
+    float modelYawDegrees = 0.0F;
     std::string cosmeticId;
     std::string powerId;
 };

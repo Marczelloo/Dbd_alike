@@ -220,6 +220,25 @@ bool NetworkSession::SendReliable(const void* data, std::size_t size)
     return true;
 }
 
+bool NetworkSession::BroadcastReliable(const void* data, std::size_t size)
+{
+    if (m_host == nullptr || data == nullptr || size == 0)
+    {
+        return false;
+    }
+
+    ENetPacket* packet = enet_packet_create(data, size, ENET_PACKET_FLAG_RELIABLE);
+    if (packet == nullptr)
+    {
+        return false;
+    }
+
+    // Broadcast to all connected peers
+    enet_host_broadcast(m_host, 0, packet);
+    enet_host_flush(m_host);
+    return true;
+}
+
 NetworkSession::ConnectionStats NetworkSession::GetConnectionStats() const
 {
     ConnectionStats stats;
@@ -235,6 +254,15 @@ NetworkSession::ConnectionStats NetworkSession::GetConnectionStats() const
         stats.packetLoss = m_connectedPeer->packetLoss;
     }
     return stats;
+}
+
+std::size_t NetworkSession::ConnectedPeerCount() const
+{
+    if (m_host == nullptr)
+    {
+        return 0;
+    }
+    return m_host->connectedPeers;
 }
 
 bool NetworkSession::EnsureInitialized()
