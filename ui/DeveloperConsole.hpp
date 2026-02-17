@@ -104,6 +104,8 @@ public:
     [[nodiscard]] bool IsOpen() const;
     [[nodiscard]] bool WantsKeyboardCapture() const;
 
+    void Print(const std::string& text);
+
 private:
 #if BUILD_WITH_IMGUI
     struct Impl;

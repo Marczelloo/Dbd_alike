@@ -69,7 +69,10 @@ constexpr std::size_t kMaxLobbyKillers = 1;
 constexpr std::size_t kMaxLobbyPlayers = kMaxLobbySurvivors + kMaxLobbyKillers;
 
 constexpr int kProtocolVersion = 1;
-constexpr const char* kBuildId = "dev-2026-02-09";
+#ifndef BUILD_ID
+#define BUILD_ID "unknown"
+#endif
+constexpr const char* kBuildId = BUILD_ID;
 
 using json = nlohmann::json;
 
@@ -309,6 +312,7 @@ bool DeserializeFxSpawnEvent(const std::vector<std::uint8_t>& buffer, engine::fx
 
 bool App::Run()
 {
+    std::cout << "Asymmetric Horror Prototype - Build: " << kBuildId << "\n";
     OpenNetworkLogFile();
     BuildLocalIpv4List();
 
@@ -540,6 +544,21 @@ bool App::Run()
         }
         else if (m_multiplayerMode == MultiplayerMode::Client)
         {
+            for (auto& player : m_lobbyState.players)
+            {
+                if (player.netId == m_lobbyState.localPlayerNetId)
+                {
+                    player.isReady = ready;
+                    break;
+                }
+            }
+            
+            auto& lobbyState = const_cast<game::ui::LobbySceneState&>(m_lobbyScene.GetState());
+            if (lobbyState.localPlayerIndex >= 0 && lobbyState.localPlayerIndex < static_cast<int>(lobbyState.players.size()))
+            {
+                lobbyState.players[lobbyState.localPlayerIndex].isReady = ready;
+            }
+            
             NetLobbyPlayer updatePlayer;
             updatePlayer.netId = m_lobbyState.localPlayerNetId;
             updatePlayer.isReady = ready;
@@ -639,6 +658,7 @@ bool App::Run()
         CloseNetworkLogFile();
         return false;
     }
+    m_console.Print("Build: " + std::string(kBuildId));
         if (!m_devToolbar.Initialize(m_window))
         {
             m_console.Shutdown();
@@ -1568,6 +1588,11 @@ void App::ResetToMainMenu()
     m_gameplay.SetNetworkAuthorityMode(false);
     m_gameplay.ClearRemoteRoleCommands();
 
+    m_lobbyState.players.clear();
+    m_lobbyState.localPlayerNetId = 0;
+    m_roleSelectionKillerTaken = false;
+    m_roleSelectionKillerName.clear();
+
     m_multiplayerMode = MultiplayerMode::Solo;
     m_appMode = AppMode::MainMenu;
     m_pauseMenuOpen = false;
@@ -1910,7 +1935,8 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         std::string requestedMap;
         int protocolVersion = 0;
         std::string buildId;
-        if (!DeserializeHello(payload, requestedRole, requestedMap, protocolVersion, buildId))
+        std::string playerName;
+        if (!DeserializeHello(payload, requestedRole, requestedMap, protocolVersion, buildId, playerName))
         {
             return;
         }
@@ -1947,7 +1973,7 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         // Add the new player to lobby
         NetLobbyPlayer newPlayer;
         newPlayer.netId = GenerateLocalNetId();
-        newPlayer.name = "Player_" + std::to_string(newPlayer.netId);
+        newPlayer.name = playerName.empty() ? ("Player_" + std::to_string(newPlayer.netId)) : playerName;
         newPlayer.selectedRole = requestedRole;
         newPlayer.isHost = false;
         newPlayer.isConnected = true;
@@ -2900,6 +2926,11 @@ bool App::SerializeHello(const std::string& requestedRole, std::vector<std::uint
     const std::uint16_t mapLen = static_cast<std::uint16_t>(std::min<std::size_t>(m_sessionMapName.size(), 64));
     AppendValue(outBuffer, mapLen);
     outBuffer.insert(outBuffer.end(), m_sessionMapName.begin(), m_sessionMapName.begin() + mapLen);
+
+    const std::uint16_t nameLen = static_cast<std::uint16_t>(std::min<std::size_t>(m_roleSelectionPlayerName.size(), 64));
+    AppendValue(outBuffer, nameLen);
+    outBuffer.insert(outBuffer.end(), m_roleSelectionPlayerName.begin(), m_roleSelectionPlayerName.begin() + nameLen);
+
     return true;
 }
 
@@ -2908,12 +2939,14 @@ bool App::DeserializeHello(
     std::string& outRequestedRole,
     std::string& outMapName,
     int& outProtocolVersion,
-    std::string& outBuildId
+    std::string& outBuildId,
+    std::string& outPlayerName
 ) const
 {
     outRequestedRole.clear();
     outMapName.clear();
     outBuildId.clear();
+    outPlayerName.clear();
     outProtocolVersion = 0;
 
     std::size_t offset = 0;
@@ -2963,6 +2996,20 @@ bool App::DeserializeHello(
         return false;
     }
     outMapName.assign(reinterpret_cast<const char*>(buffer.data() + offset), mapLen);
+    offset += mapLen;
+
+    std::uint16_t nameLen = 0;
+    if (offset + sizeof(nameLen) <= buffer.size())
+    {
+        if (!ReadValue(buffer, offset, nameLen))
+        {
+            return true;
+        }
+        if (offset + nameLen <= buffer.size())
+        {
+            outPlayerName.assign(reinterpret_cast<const char*>(buffer.data() + offset), nameLen);
+        }
+    }
     return true;
 }
 
@@ -3264,8 +3311,11 @@ void App::BroadcastLobbyStateToAllClients()
         return;
     }
 
+    NetLobbyState broadcastState = m_lobbyState;
+    broadcastState.localPlayerNetId = 0;
+
     std::vector<std::uint8_t> data;
-    if (!SerializeLobbyState(m_lobbyState, data))
+    if (!SerializeLobbyState(broadcastState, data))
     {
         return;
     }
@@ -3321,7 +3371,7 @@ void App::ApplyLobbyStateToUi(const NetLobbyState& state)
         uiPlayer.isConnected = netPlayer.isConnected;
         uiPlayers.push_back(uiPlayer);
 
-        if (netPlayer.netId == state.localPlayerNetId)
+        if (netPlayer.netId == m_lobbyState.localPlayerNetId)
         {
             localPlayerIndex = static_cast<int>(i);
         }
@@ -3337,7 +3387,7 @@ void App::ApplyLobbyStateToUi(const NetLobbyState& state)
     {
         if (p.isHost)
         {
-            lobbyState.isHost = (p.netId == state.localPlayerNetId);
+            lobbyState.isHost = (p.netId == m_lobbyState.localPlayerNetId);
             break;
         }
     }

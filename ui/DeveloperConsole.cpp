@@ -1,4 +1,4 @@
-﻿#include "ui/DeveloperConsole.hpp"
+#include "ui/DeveloperConsole.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3393,6 +3393,18 @@ void DeveloperConsole::Shutdown()
         delete m_impl;
         m_impl = nullptr;
     }
+#endif
+}
+
+void DeveloperConsole::Print(const std::string& text)
+{
+#if BUILD_WITH_IMGUI
+    if (m_impl != nullptr)
+    {
+        m_impl->AddLog(text, ConsoleColors::Info);
+    }
+#else
+    (void)text;
 #endif
 }
 

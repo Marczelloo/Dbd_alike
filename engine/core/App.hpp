@@ -291,7 +291,8 @@ private:
         std::string& outRequestedRole,
         std::string& outMapName,
         int& outProtocolVersion,
-        std::string& outBuildId
+        std::string& outBuildId,
+        std::string& outPlayerName
     ) const;
     bool SerializeReject(const std::string& reason, std::vector<std::uint8_t>& outBuffer) const;
     bool DeserializeReject(const std::vector<std::uint8_t>& buffer, std::string& outReason) const;
