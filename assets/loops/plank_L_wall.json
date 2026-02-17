@@ -1,0 +1,14 @@
+{
+  "asset_version": 1,
+  "id": "plank_L_wall",
+  "display_name": "Plank L Wall",
+  "mesh": "assets/meshes/loop_elements/L wall.glb",
+  "footprint": {"width": 2, "height": 2},
+  "bounds": {"min": [-8.0, 0.0, -8.0], "max": [8.0, 3.0, 8.0]},
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {"type": "wall", "name": "wall_a", "position": [-4.0, 1.5, 0.0], "half_extents": [4.0, 1.5, 0.1], "yaw_degrees": -90.0, "pitch_degrees": 0.0, "roll_degrees": 0.0, "marker_tag": "", "transform_locked": false},
+    {"type": "wall", "name": "wall_b", "position": [0.0, 1.5, 4.0], "half_extents": [4.0, 1.5, 0.1], "yaw_degrees": 0.0, "pitch_degrees": 0.0, "roll_degrees": 0.0, "marker_tag": "", "transform_locked": false}
+  ]
+}

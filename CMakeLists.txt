@@ -97,6 +97,7 @@ set(ENGINE_SOURCES
     engine/render/SceneCaptureFBO.cpp
     engine/render/WraithCloakRenderer.cpp
     engine/physics/PhysicsWorld.cpp
+    engine/physics/ColliderGen_WallBoxes.cpp
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
     engine/ui/ProfilerOverlay.cpp

@@ -1,0 +1,32 @@
+{
+  "asset_version": 1,
+  "name": "test_loop_elements",
+  "grid": {
+    "width": 6,
+    "height": 4,
+    "tile_size": 16.0
+  },
+  "placements": [
+    {"loop_id": "plank_L_wall", "tile": [0, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_T_wall", "tile": [1, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall", "tile": [2, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_left_end", "tile": [3, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_right_end", "tile": [4, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_simple_new", "tile": [5, 0], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "window", "tile": [0, 1], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_with_sides", "tile": [1, 1], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_simple", "tile": [2, 1], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_window_frame", "tile": [3, 1], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_single", "tile": [4, 1], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_L_wall", "tile": [0, 2], "rotation_degrees": 90, "transform_locked": false},
+    {"loop_id": "plank_T_wall", "tile": [1, 2], "rotation_degrees": 90, "transform_locked": false},
+    {"loop_id": "plank_wall", "tile": [2, 2], "rotation_degrees": 90, "transform_locked": false},
+    {"loop_id": "window", "tile": [3, 2], "rotation_degrees": 90, "transform_locked": false},
+    {"loop_id": "plank_window_frame", "tile": [4, 2], "rotation_degrees": 90, "transform_locked": false}
+  ],
+  "props": [],
+  "spawns": {
+    "survivor": [-16.0, 1.05, -16.0],
+    "killer": [80.0, 1.05, 48.0]
+  }
+}

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -436,6 +437,10 @@ bool LevelAssetIO::SaveLoop(const LoopAsset& asset, std::string* outError)
     root["asset_version"] = copy.assetVersion;
     root["id"] = copy.id;
     root["display_name"] = copy.displayName;
+    if (!copy.mesh.empty())
+    {
+        root["mesh"] = copy.mesh;  // Save optional mesh path
+    }
     root["bounds"] = {
         {"min", Vec3ToJson(copy.boundsMin)},
         {"max", Vec3ToJson(copy.boundsMax)},
@@ -502,6 +507,8 @@ bool LevelAssetIO::LoadLoop(const std::string& loopId, LoopAsset* outAsset, std:
     result.assetVersion = version;
     result.id = SanitizeName(root.value("id", sanitized));
     result.displayName = root.value("display_name", result.id);
+    result.mesh = root.value("mesh", std::string{});  // Load optional mesh path
+    std::cout << "[LOOP_LOAD] Loaded loop '" << result.id << "' with mesh: '" << result.mesh << "'\n";
     result.manualBounds = root.value("manual_bounds", false);
     result.manualFootprint = root.value("manual_footprint", false);
 
@@ -1454,7 +1461,21 @@ bool LevelAssetIO::BuildGeneratedMapFromAsset(const MapAsset& mapAsset, maps::Ge
                 }
             }
         }
+
+        // Add mesh placement if this loop has a custom mesh
+        if (!loop.mesh.empty())
+        {
+            std::cout << "[LOOP_MESH] Adding mesh placement for loop '" << placement.loopId
+                      << "' mesh: " << loop.mesh << " at (" << pivot.x << ", " << pivot.y << ", " << pivot.z << ")\n";
+            generated.meshPlacements.push_back(maps::GeneratedMap::MeshPlacement{
+                loop.mesh,
+                pivot,
+                static_cast<float>(rotation),
+            });
+        }
     }
+
+    std::cout << "[LOOP_MESH] Total mesh placements: " << generated.meshPlacements.size() << "\n";
 
     for (const PropInstance& prop : mapAsset.props)
     {

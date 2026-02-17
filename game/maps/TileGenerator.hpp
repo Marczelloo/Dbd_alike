@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include <glm/vec3.hpp>
@@ -62,12 +63,21 @@ struct GeneratedMap
         int archetype = 0;
     };
 
+    // Mesh placement for loops with custom meshes
+    struct MeshPlacement
+    {
+        std::string meshPath;       // Path to .glb/.gltf file
+        glm::vec3 position{0.0F};   // World position
+        float rotationDegrees = 0.0F; // Y-axis rotation
+    };
+
     std::vector<BoxSpawn> walls;
     std::vector<WindowSpawn> windows;
     std::vector<PalletSpawn> pallets;
     std::vector<glm::vec3> generatorSpawns; // Positions for generators (always 5)
     std::vector<TileDebug> tiles;
     std::vector<HighPolyMeshSpawn> highPolyMeshes; // GPU stress test meshes
+    std::vector<MeshPlacement> meshPlacements; // Custom mesh placements for loops
     
     // Legacy single spawn points (kept for backward compatibility)
     glm::vec3 survivorSpawn{0.0F};

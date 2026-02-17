@@ -69,6 +69,7 @@ struct LoopAsset
     int assetVersion = kEditorAssetVersion;
     std::string id = "new_loop";
     std::string displayName = "New Loop";
+    std::string mesh;  // Optional mesh path (e.g., "assets/meshes/loop_elements/Wall.glb")
     glm::vec3 boundsMin{-8.0F, 0.0F, -8.0F};
     glm::vec3 boundsMax{8.0F, 2.0F, 8.0F};
     int footprintWidth = 1;

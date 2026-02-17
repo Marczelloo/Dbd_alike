@@ -1,0 +1,29 @@
+{
+  "asset_version": 1,
+  "id": "plank_wall_simple",
+  "display_name": "Plank Wall Simple",
+  "mesh": "assets/meshes/loop_elements/Wall_Simple.glb",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [-1.0, 0.0, -0.1],
+    "max": [1.0, 3.0, 0.1]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "wall",
+      "name": "main_wall",
+      "position": [0.0, 1.5, 0.0],
+      "half_extents": [0.75, 1.5, 0.1],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

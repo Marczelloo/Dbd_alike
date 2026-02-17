@@ -34,6 +34,7 @@
 #include "engine/render/Renderer.hpp"
 #include "engine/assets/MeshLibrary.hpp"
 #include "engine/core/Profiler.hpp"
+#include "engine/physics/ColliderGen_WallBoxes.hpp"
 #include "game/editor/LevelAssets.hpp"
 #include "game/maps/TileGenerator.hpp"
 
@@ -2562,9 +2563,12 @@ void GameplaySystems::Render(engine::render::Renderer& renderer, float aspectRat
     const bool localIsKiller = (m_controlledRole == ControlledRole::Killer);
     RenderScratchMarks(renderer, localIsKiller);
     RenderBloodPools(renderer, localIsKiller);
-    
+
     // High-poly meshes for GPU stress testing (benchmark map)
     RenderHighPolyMeshes(renderer);
+
+    // Custom loop meshes
+    RenderLoopMeshes(renderer);
 
     // Hatchet power debug visualization
     RenderHatchetDebug(renderer);
@@ -3492,19 +3496,94 @@ void GameplaySystems::SpawnPallet()
     m_world.Pallets()[palletEntity] = pallet;
 }
 
-void GameplaySystems::SpawnWindow()
+void GameplaySystems::SpawnWindow(std::optional<float> yawDegrees)
 {
-    glm::vec3 spawnPosition{0.0F, 1.0F, 0.0F};
-    glm::vec3 normal{0.0F, 0.0F, 1.0F};
-    if (m_survivor != 0)
+    constexpr glm::vec3 kWindowHalfExtents{1.2F, 1.35F, 0.2F};
+    constexpr const char* kWindowMeshPath = "assets/meshes/loop_elements/Window.glb";
+
+    glm::vec3 spawnPosition{0.0F, kWindowHalfExtents.y, 0.0F};
+    glm::vec3 placementForward{0.0F, 0.0F, 1.0F};
+
+    engine::scene::Entity sourceEntity = ControlledEntity();
+    if (sourceEntity == 0)
     {
-        const auto transformIt = m_world.Transforms().find(m_survivor);
+        sourceEntity = m_survivor != 0 ? m_survivor : m_killer;
+    }
+
+    if (sourceEntity != 0)
+    {
+        const auto transformIt = m_world.Transforms().find(sourceEntity);
         if (transformIt != m_world.Transforms().end())
         {
-            const glm::vec3 forward = glm::normalize(glm::vec3{transformIt->second.forward.x, 0.0F, transformIt->second.forward.z});
+            glm::vec3 forward{transformIt->second.forward.x, 0.0F, transformIt->second.forward.z};
+            if (glm::length(forward) < 1.0e-4F)
+            {
+                forward = glm::vec3{m_cameraForward.x, 0.0F, m_cameraForward.z};
+            }
+            if (glm::length(forward) < 1.0e-4F)
+            {
+                forward = glm::vec3{0.0F, 0.0F, 1.0F};
+            }
+            forward = glm::normalize(forward);
+
             spawnPosition = transformIt->second.position + forward * 2.4F;
-            spawnPosition.y = 1.0F;
-            normal = forward;
+            placementForward = forward;
+        }
+    }
+    else
+    {
+        glm::vec3 forward{m_cameraForward.x, 0.0F, m_cameraForward.z};
+        if (glm::length(forward) < 1.0e-4F)
+        {
+            forward = glm::vec3{0.0F, 0.0F, 1.0F};
+        }
+        forward = glm::normalize(forward);
+        spawnPosition = m_cameraPosition + forward * 2.4F;
+        placementForward = forward;
+    }
+
+    glm::vec3 normal = placementForward;
+    if (yawDegrees.has_value())
+    {
+        const float yawRad = glm::radians(*yawDegrees);
+        normal = glm::normalize(glm::vec3{std::sin(yawRad), 0.0F, std::cos(yawRad)});
+    }
+    if (glm::length(normal) < 1.0e-4F)
+    {
+        normal = glm::vec3{0.0F, 0.0F, 1.0F};
+    }
+
+    // Try to read mesh bounds so we can place bottom vertices exactly on floor.
+    float meshMinY = -kWindowHalfExtents.y;
+    {
+        static engine::assets::MeshLibrary fallbackMeshLibrary;
+        engine::assets::MeshLibrary* meshLibrary = (m_meshLibrary != nullptr) ? m_meshLibrary : &fallbackMeshLibrary;
+
+        std::error_code ec;
+        std::filesystem::path meshPath = std::filesystem::current_path(ec) / kWindowMeshPath;
+        if (!std::filesystem::exists(meshPath))
+        {
+            meshPath = std::filesystem::current_path(ec) / "assets/meshes/loop_elements/Window.glb";
+        }
+        std::string loadError;
+        if (const engine::assets::MeshData* meshData = meshLibrary->LoadMesh(meshPath, &loadError);
+            meshData != nullptr && meshData->loaded)
+        {
+            meshMinY = meshData->boundsMin.y;
+        }
+    }
+
+    // Snap vertically so bottom of window mesh sits on top of floor.
+    {
+        const glm::vec3 rayStart{spawnPosition.x, spawnPosition.y + 20.0F, spawnPosition.z};
+        const glm::vec3 rayEnd{spawnPosition.x, spawnPosition.y - 60.0F, spawnPosition.z};
+        if (const std::optional<engine::physics::RaycastHit> hit = m_physics.RaycastNearest(rayStart, rayEnd); hit.has_value())
+        {
+            spawnPosition.y = hit->position.y - meshMinY;
+        }
+        else
+        {
+            spawnPosition.y = std::max(spawnPosition.y, std::max(kWindowHalfExtents.y, -meshMinY));
         }
     }
 
@@ -3512,8 +3591,26 @@ void GameplaySystems::SpawnWindow()
     m_world.Transforms()[windowEntity] = engine::scene::Transform{spawnPosition, glm::vec3{0.0F}, glm::vec3{1.0F}, normal};
 
     engine::scene::WindowComponent window;
+    // Inner vault volume matches mesh footprint in XZ. Y stays gameplay-tuned.
+    window.halfExtents = kWindowHalfExtents;
     window.normal = glm::length(normal) > 0.001F ? glm::normalize(normal) : glm::vec3{0.0F, 0.0F, 1.0F};
     m_world.Windows()[windowEntity] = window;
+
+    // Spawn visible window mesh bound to the same pose as the vault trigger.
+    // Keep collision disabled here - gameplay uses WindowComponent + vault trigger.
+    const float windowYawDegrees = glm::degrees(std::atan2(window.normal.x, window.normal.z));
+    m_loopMeshes.push_back(LoopMeshInstance{
+        kWindowMeshPath,
+        engine::render::Renderer::kInvalidGpuMesh,
+        spawnPosition,
+        windowYawDegrees,
+        glm::vec3{window.halfExtents.x, window.halfExtents.y, window.halfExtents.z},
+        true
+    });
+    m_loopMeshesUploaded = false;
+
+    RebuildPhysicsWorld();
+    UpdateInteractionCandidate();
 }
 
 bool GameplaySystems::SpawnRoleHere(const std::string& roleName)
@@ -4909,6 +5006,74 @@ void GameplaySystems::BuildSceneFromGeneratedMap(
     }
     m_staticBatcher.EndBuild();
 
+    // Store loop mesh placements for later loading and rendering
+    m_loopMeshes.clear();
+    m_loopMeshesUploaded = false;
+    std::cout << "[LOOP_MESH] Processing " << generated.meshPlacements.size() << " mesh placements from generated map\n";
+    for (const auto& placement : generated.meshPlacements)
+    {
+        if (placement.meshPath.empty())
+        {
+            continue;
+        }
+        m_loopMeshes.push_back(LoopMeshInstance{
+            placement.meshPath,
+            engine::render::Renderer::kInvalidGpuMesh,  // Will be uploaded in RenderLoopMeshes()
+            placement.position,
+            placement.rotationDegrees,
+            glm::vec3{2.0F, 3.0F, 2.0F},  // Default bounds, will be updated on load
+        });
+    }
+
+    // For the Test map, add loop element meshes directly at fixed positions for testing
+    if (mapType == MapType::Test && m_loopMeshes.empty())
+    {
+        std::cout << "[LOOP_MESH] Adding test loop meshes to Test map (auto-collider generation enabled)\n";
+
+        // List of meshes to spawn - colliders will be auto-generated from mesh geometry
+        const char* testMeshPaths[] = {
+            "assets/meshes/loop_elements/Wall.glb",
+            "assets/meshes/loop_elements/Wall_Simple.glb",
+            "assets/meshes/loop_elements/Window.glb",
+            "assets/meshes/loop_elements/L wall.glb",
+            "assets/meshes/loop_elements/T wall.glb",
+            "assets/meshes/loop_elements/Wall left end.glb",
+            "assets/meshes/loop_elements/Wall right end.glb",
+        };
+
+        int col = 0;
+        int row = 0;
+        for (const char* meshPath : testMeshPaths)
+        {
+            float x = -12.0f + col * 12.0f;
+            float z = -12.0f + row * 12.0f;
+            float y = 1.5f;  // Half of 3m height to sit on ground
+
+            // Add mesh instance - collision will be auto-generated when mesh is loaded
+            m_loopMeshes.push_back(LoopMeshInstance{
+                meshPath,
+                engine::render::Renderer::kInvalidGpuMesh,  // Will be loaded in RenderLoopMeshes
+                glm::vec3{x, y, z},
+                0.0f,
+                glm::vec3{1.0f, 1.5f, 0.5f},  // Placeholder, will be updated from mesh bounds
+                false,  // collisionCreated - will be set when generated
+            });
+
+            col++;
+            if (col >= 4)
+            {
+                col = 0;
+                row++;
+            }
+        }
+        std::cout << "[LOOP_MESH] Added " << m_loopMeshes.size() << " test meshes (colliders will be auto-generated)\n";
+    }
+
+    if (!m_loopMeshes.empty())
+    {
+        std::cout << "[LOOP_MESH] Queued " << m_loopMeshes.size() << " loop mesh placements for loading\n";
+    }
+
     m_spawnPoints.push_back(SpawnPointInfo{
         m_nextSpawnPointId++,
         SpawnPointType::Survivor,
@@ -5168,10 +5333,32 @@ void GameplaySystems::RebuildPhysicsWorld()
             continue;
         }
 
+        glm::vec3 windowNormal{transformIt->second.forward.x, 0.0F, transformIt->second.forward.z};
+        if (glm::length(windowNormal) < 1.0e-5F)
+        {
+            windowNormal = glm::vec3{window.normal.x, 0.0F, window.normal.z};
+        }
+        if (glm::length(windowNormal) < 1.0e-5F)
+        {
+            windowNormal = glm::vec3{0.0F, 0.0F, 1.0F};
+        }
+        windowNormal = glm::normalize(windowNormal);
+        const float windowYawDegrees = glm::degrees(std::atan2(windowNormal.x, windowNormal.z));
+        const glm::vec3 normalAxisWeight = glm::abs(glm::vec3{windowNormal.x, 0.0F, windowNormal.z});
+
+        // Inner zone: same as window footprint (XZ) and original gameplay height (Y).
+        // Outer trigger: expanded to make approach/vault from both sides easier.
+        const glm::vec3 triggerHalfExtents{
+            window.halfExtents.x + 0.55F + normalAxisWeight.x * 1.05F,
+            window.halfExtents.y + 0.35F,
+            window.halfExtents.z + 0.55F + normalAxisWeight.z * 1.05F,
+        };
+
         m_physics.AddTrigger(engine::physics::TriggerVolume{
             .entity = entity,
             .center = transformIt->second.position,
-            .halfExtents = window.halfExtents + glm::vec3{0.8F, 0.35F, 0.8F},
+            .halfExtents = triggerHalfExtents,
+            .yawDegrees = windowYawDegrees,
             .kind = engine::physics::TriggerKind::Vault,
         });
     }
@@ -6653,7 +6840,16 @@ GameplaySystems::InteractionCandidate GameplaySystems::BuildWindowVaultCandidate
         return candidate;
     }
 
-    const glm::vec3 windowNormal = glm::normalize(window.normal);
+    glm::vec3 windowNormal{windowTransformIt->second.forward.x, 0.0F, windowTransformIt->second.forward.z};
+    if (glm::length(windowNormal) < 1.0e-5F)
+    {
+        windowNormal = glm::vec3{window.normal.x, 0.0F, window.normal.z};
+    }
+    if (glm::length(windowNormal) < 1.0e-5F)
+    {
+        windowNormal = glm::vec3{0.0F, 0.0F, 1.0F};
+    }
+    windowNormal = glm::normalize(windowNormal);
     const float side = glm::dot(actorTransform.position - windowTransformIt->second.position, windowNormal) >= 0.0F ? 1.0F : -1.0F;
     const glm::vec3 desiredForward = -windowNormal * side;
 
@@ -7120,7 +7316,16 @@ GameplaySystems::VaultType GameplaySystems::DetermineWindowVaultType(
     const engine::scene::WindowComponent& window
 ) const
 {
-    const glm::vec3 windowNormal = glm::normalize(window.normal);
+    glm::vec3 windowNormal{windowTransform.forward.x, 0.0F, windowTransform.forward.z};
+    if (glm::length(windowNormal) < 1.0e-5F)
+    {
+        windowNormal = glm::vec3{window.normal.x, 0.0F, window.normal.z};
+    }
+    if (glm::length(windowNormal) < 1.0e-5F)
+    {
+        windowNormal = glm::vec3{0.0F, 0.0F, 1.0F};
+    }
+    windowNormal = glm::normalize(windowNormal);
     const float side = glm::dot(actorTransform.position - windowTransform.position, windowNormal) >= 0.0F ? 1.0F : -1.0F;
     const glm::vec3 desiredForward = -windowNormal * side;
 
@@ -7199,7 +7404,16 @@ void GameplaySystems::BeginWindowVault(engine::scene::Entity actorEntity, engine
         return;
     }
 
-    const glm::vec3 normal = glm::length(window.normal) > 1.0e-4F ? glm::normalize(window.normal) : glm::vec3{0.0F, 0.0F, 1.0F};
+    glm::vec3 normal{windowTransformIt->second.forward.x, 0.0F, windowTransformIt->second.forward.z};
+    if (glm::length(normal) < 1.0e-4F)
+    {
+        normal = glm::vec3{window.normal.x, 0.0F, window.normal.z};
+    }
+    if (glm::length(normal) < 1.0e-4F)
+    {
+        normal = glm::vec3{0.0F, 0.0F, 1.0F};
+    }
+    normal = glm::normalize(normal);
     const float sideSign = glm::dot(actorTransform.position - windowTransformIt->second.position, normal) >= 0.0F ? 1.0F : -1.0F;
     const glm::vec3 vaultDirection = -normal * sideSign;
 
@@ -9118,6 +9332,242 @@ void GameplaySystems::RenderHighPolyMeshes(engine::render::Renderer& renderer)
                 engine::render::MaterialParams{0.85F, 0.0F, 0.0F, false}
             );
         }
+    }
+}
+
+void GameplaySystems::RenderLoopMeshes(engine::render::Renderer& renderer)
+{
+    if (m_loopMeshes.empty())
+    {
+        return;
+    }
+
+    static bool loggedOnce = false;
+    if (!loggedOnce)
+    {
+        std::cout << "[LOOP_MESH] RenderLoopMeshes called with " << m_loopMeshes.size() << " instances\n";
+        loggedOnce = true;
+    }
+
+    static engine::assets::MeshLibrary loopMeshLibrary;
+    engine::assets::MeshLibrary& meshLibrary = (m_meshLibrary != nullptr) ? *m_meshLibrary : loopMeshLibrary;
+
+    // Cache of already loaded meshes by path
+    static std::unordered_map<std::string, engine::render::Renderer::GpuMeshId> gpuMeshCache;
+    static std::unordered_map<std::string, glm::vec3> meshBoundsCache;
+    static std::unordered_map<std::string, std::vector<engine::physics::WallBoxCollider>> meshColliderCache;
+
+    // Lazy GPU upload - load and upload meshes once
+    if (!m_loopMeshesUploaded)
+    {
+        std::error_code ec;
+        const std::filesystem::path cwd = std::filesystem::current_path(ec);
+        bool createdAnyCollision = false;
+
+        const auto rotateYaw = [](const glm::vec3& v, float yawRadians) -> glm::vec3 {
+            const float c = std::cos(yawRadians);
+            const float s = std::sin(yawRadians);
+            return glm::vec3{
+                c * v.x + s * v.z,
+                v.y,
+                -s * v.x + c * v.z
+            };
+        };
+
+        const auto toAxisAlignedHalfExtents = [](const glm::vec3& halfExtentsLocal, float yawRadians) -> glm::vec3 {
+            const float c = std::abs(std::cos(yawRadians));
+            const float s = std::abs(std::sin(yawRadians));
+            return glm::vec3{
+                c * halfExtentsLocal.x + s * halfExtentsLocal.z,
+                halfExtentsLocal.y,
+                s * halfExtentsLocal.x + c * halfExtentsLocal.z
+            };
+        };
+
+        const auto createFallbackCollider = [this, &createdAnyCollision, &toAxisAlignedHalfExtents](LoopMeshInstance& instance) {
+            const float yawRad = glm::radians(instance.rotationDegrees);
+            const glm::vec3 fallbackHalfExtents = toAxisAlignedHalfExtents(instance.halfExtents, yawRad);
+
+            const engine::scene::Entity entity = m_world.CreateEntity();
+            m_world.Transforms()[entity] = engine::scene::Transform{
+                instance.position,
+                glm::vec3{0.0F, 0.0F, 0.0F},
+                glm::vec3{1.0F},
+                glm::vec3{0.0F, 0.0F, 1.0F},
+            };
+            m_world.StaticBoxes()[entity] = engine::scene::StaticBoxComponent{fallbackHalfExtents, true};
+            instance.collisionCreated = true;
+            createdAnyCollision = true;
+        };
+
+        const auto createGeneratedColliders = [this, &createdAnyCollision, &rotateYaw, &toAxisAlignedHalfExtents](
+            LoopMeshInstance& instance,
+            const std::vector<engine::physics::WallBoxCollider>& boxes
+        ) {
+            const float yawRad = glm::radians(instance.rotationDegrees);
+            for (const auto& box : boxes)
+            {
+                const glm::vec3 rotatedCenter = rotateYaw(box.center, yawRad);
+                const glm::vec3 worldCenter = instance.position + rotatedCenter;
+                const glm::vec3 worldHalfExtents = toAxisAlignedHalfExtents(box.halfExtents, yawRad);
+
+                const engine::scene::Entity entity = m_world.CreateEntity();
+                m_world.Transforms()[entity] = engine::scene::Transform{
+                    worldCenter,
+                    glm::vec3{0.0F, 0.0F, 0.0F},
+                    glm::vec3{1.0F},
+                    glm::vec3{0.0F, 0.0F, 1.0F},
+                };
+                m_world.StaticBoxes()[entity] = engine::scene::StaticBoxComponent{worldHalfExtents, true};
+            }
+
+            instance.collisionCreated = true;
+            createdAnyCollision = true;
+        };
+
+        for (auto& instance : m_loopMeshes)
+        {
+            if (instance.gpuMesh != engine::render::Renderer::kInvalidGpuMesh)
+            {
+                continue;  // Already loaded
+            }
+
+            // Check cache first
+            auto cacheIt = gpuMeshCache.find(instance.meshPath);
+            if (cacheIt != gpuMeshCache.end() && cacheIt->second != engine::render::Renderer::kInvalidGpuMesh)
+            {
+                instance.gpuMesh = cacheIt->second;
+                instance.halfExtents = meshBoundsCache[instance.meshPath];
+
+                // Reuse cached generated colliders (or fallback if generation failed).
+                if (!instance.collisionCreated)
+                {
+                    const auto colliderIt = meshColliderCache.find(instance.meshPath);
+                    if (colliderIt != meshColliderCache.end() && !colliderIt->second.empty())
+                    {
+                        createGeneratedColliders(instance, colliderIt->second);
+                    }
+                    else
+                    {
+                        createFallbackCollider(instance);
+                        std::cout << "[LOOP_MESH] Created fallback collision for cached mesh: " << instance.meshPath << "\n";
+                    }
+                }
+                continue;
+            }
+
+            // Resolve mesh path
+            std::filesystem::path meshPath = cwd / instance.meshPath;
+            if (!std::filesystem::exists(meshPath))
+            {
+                meshPath = cwd / "assets" / instance.meshPath;
+            }
+
+            std::string error;
+            const engine::assets::MeshData* meshData = meshLibrary.LoadMesh(meshPath, &error);
+            if (meshData == nullptr || !meshData->loaded)
+            {
+                std::cout << "[LOOP_MESH] Failed to load mesh from " << instance.meshPath << ": " << error << "\n";
+                continue;
+            }
+
+            // Upload to GPU
+            const engine::render::MaterialParams material{};
+            instance.gpuMesh = renderer.UploadMesh(meshData->geometry, glm::vec3{1.0F, 1.0F, 1.0F}, material);
+
+            // Calculate half extents from actual mesh bounds for frustum culling
+            instance.halfExtents = (meshData->boundsMax - meshData->boundsMin) * 0.5F;
+
+            // Cache for reuse
+            gpuMeshCache[instance.meshPath] = instance.gpuMesh;
+            meshBoundsCache[instance.meshPath] = instance.halfExtents;
+
+            // Generate mesh collider template once per unique mesh path.
+            if (!meshColliderCache.contains(instance.meshPath))
+            {
+                using namespace engine::physics;
+
+                WallColliderConfig config;
+                config.cellSize = 0.06F;
+                config.maxBoxes = 8;
+                config.padXZ = 0.03F;
+                config.minIslandCells = 1;
+                config.cleanup = true;
+                config.maxVolumeExcess = 2.5F;
+                config.minCoverage = 0.70F;
+
+                auto result = ColliderGen_WallBoxes::Generate(
+                    meshData->geometry.positions,
+                    meshData->geometry.indices,
+                    config
+                );
+
+                if (result.valid && !result.boxes.empty())
+                {
+                    meshColliderCache[instance.meshPath] = result.boxes;
+                    std::cout << "[LOOP_MESH] Generated " << result.boxes.size() << " colliders for "
+                              << instance.meshPath << " (coverage=" << (result.coverage * 100.0f) << "%)\n";
+                }
+                else
+                {
+                    meshColliderCache[instance.meshPath] = {};
+                    std::cout << "[LOOP_MESH] Fallback to single AABB for " << instance.meshPath
+                              << " (reason: " << (result.error.empty() ? "unknown" : result.error) << ")\n";
+                }
+            }
+
+            if (!instance.collisionCreated)
+            {
+                const auto colliderIt = meshColliderCache.find(instance.meshPath);
+                if (colliderIt != meshColliderCache.end() && !colliderIt->second.empty())
+                {
+                    createGeneratedColliders(instance, colliderIt->second);
+                }
+                else
+                {
+                    createFallbackCollider(instance);
+                }
+            }
+        }
+
+        if (createdAnyCollision)
+        {
+            m_physicsDirty = true;
+        }
+        m_loopMeshesUploaded = true;
+    }
+
+    // Frustum culling helper
+    auto isVisible = [this](const glm::vec3& center, const glm::vec3& halfExtents) -> bool {
+        const glm::vec3 mins = center - halfExtents;
+        const glm::vec3 maxs = center + halfExtents;
+        return m_frustum.IntersectsAABB(mins, maxs);
+    };
+
+    // Build model matrix helper
+    auto buildModelMatrix = [](const glm::vec3& position, float rotationDegrees) -> glm::mat4 {
+        glm::mat4 model{1.0F};
+        model = glm::translate(model, position);
+        model = glm::rotate(model, glm::radians(rotationDegrees), glm::vec3{0.0F, 1.0F, 0.0F});
+        return model;
+    };
+
+    // Render visible loop meshes
+    for (const auto& instance : m_loopMeshes)
+    {
+        if (instance.gpuMesh == engine::render::Renderer::kInvalidGpuMesh)
+        {
+            continue;
+        }
+
+        // Frustum culling
+        if (!isVisible(instance.position, instance.halfExtents))
+        {
+            continue;
+        }
+
+        const glm::mat4 modelMatrix = buildModelMatrix(instance.position, instance.rotationDegrees);
+        renderer.DrawGpuMesh(instance.gpuMesh, modelMatrix);
     }
 }
 

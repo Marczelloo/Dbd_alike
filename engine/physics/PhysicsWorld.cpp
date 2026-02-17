@@ -7,6 +7,7 @@
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 #include <glm/vec2.hpp>
 
 namespace engine::physics
@@ -39,6 +40,17 @@ float HorizontalDistance(const glm::vec3& a, const glm::vec3& b)
 int CellCoord(float value, float cellSize)
 {
     return static_cast<int>(std::floor(value / std::max(0.001F, cellSize)));
+}
+
+glm::vec3 RotateAroundY(const glm::vec3& value, float radians)
+{
+    const float c = std::cos(radians);
+    const float s = std::sin(radians);
+    return glm::vec3{
+        c * value.x + s * value.z,
+        value.y,
+        -s * value.x + c * value.z
+    };
 }
 } // namespace
 
@@ -247,11 +259,13 @@ void PhysicsWorld::QueryCapsuleTriggers(
             continue;
         }
 
-        const glm::vec3 minBounds = trigger.center - trigger.halfExtents - glm::vec3{0.0F, capsuleHalfSegment, 0.0F};
-        const glm::vec3 maxBounds = trigger.center + trigger.halfExtents + glm::vec3{0.0F, capsuleHalfSegment, 0.0F};
+        const float yawRad = glm::radians(trigger.yawDegrees);
+        const glm::vec3 localCenter = RotateAroundY(position - trigger.center, -yawRad);
+        const glm::vec3 minBounds = -trigger.halfExtents - glm::vec3{0.0F, capsuleHalfSegment, 0.0F};
+        const glm::vec3 maxBounds = trigger.halfExtents + glm::vec3{0.0F, capsuleHalfSegment, 0.0F};
 
-        const glm::vec3 closestPoint = ClosestPointOnAabb(position, minBounds, maxBounds);
-        const glm::vec3 delta = position - closestPoint;
+        const glm::vec3 closestPoint = ClosestPointOnAabb(localCenter, minBounds, maxBounds);
+        const glm::vec3 delta = localCenter - closestPoint;
         if (glm::dot(delta, delta) <= radius * radius)
         {
             result.push_back(TriggerHit{trigger.entity, trigger.kind});
@@ -281,12 +295,15 @@ void PhysicsWorld::SphereCastTriggers(
 
     for (const TriggerVolume& trigger : m_triggers)
     {
-        const glm::vec3 minBounds = trigger.center - trigger.halfExtents - glm::vec3{radius};
-        const glm::vec3 maxBounds = trigger.center + trigger.halfExtents + glm::vec3{radius};
+        const float yawRad = glm::radians(trigger.yawDegrees);
+        const glm::vec3 localFrom = RotateAroundY(from - trigger.center, -yawRad);
+        const glm::vec3 localTo = RotateAroundY(to - trigger.center, -yawRad);
+        const glm::vec3 minBounds = -trigger.halfExtents - glm::vec3{radius};
+        const glm::vec3 maxBounds = trigger.halfExtents + glm::vec3{radius};
 
         float hitT = 1.0F;
         glm::vec3 hitNormal{0.0F, 1.0F, 0.0F};
-        if (!SegmentIntersectsAabb3D(from, to, minBounds, maxBounds, &hitT, &hitNormal))
+        if (!SegmentIntersectsAabb3D(localFrom, localTo, minBounds, maxBounds, &hitT, &hitNormal))
         {
             continue;
         }
