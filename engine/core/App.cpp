@@ -525,7 +525,45 @@ bool App::Run()
         StartSoloSession(map, role);
     });
     m_lobbyScene.SetReadyChangedCallback([this](bool ready) {
-        (void)ready;
+        if (m_multiplayerMode == MultiplayerMode::Host)
+        {
+            for (auto& player : m_lobbyState.players)
+            {
+                if (player.netId == m_lobbyState.localPlayerNetId)
+                {
+                    player.isReady = ready;
+                    break;
+                }
+            }
+            ApplyLobbyStateToUi(m_lobbyState);
+            BroadcastLobbyStateToAllClients();
+        }
+        else if (m_multiplayerMode == MultiplayerMode::Client)
+        {
+            NetLobbyPlayer updatePlayer;
+            updatePlayer.netId = m_lobbyState.localPlayerNetId;
+            updatePlayer.isReady = ready;
+            for (const auto& p : m_lobbyState.players)
+            {
+                if (p.netId == m_lobbyState.localPlayerNetId)
+                {
+                    updatePlayer.name = p.name;
+                    updatePlayer.selectedRole = p.selectedRole;
+                    updatePlayer.characterId = p.characterId;
+                    updatePlayer.isHost = p.isHost;
+                    updatePlayer.isConnected = p.isConnected;
+                    break;
+                }
+            }
+            
+            std::vector<std::uint8_t> data;
+            if (SerializeLobbyPlayerUpdate(updatePlayer, data))
+            {
+                data[0] = kPacketLobbyPlayerUpdate;
+                m_network.SendReliable(data.data(), data.size());
+                AppendNetworkLog("Sent ready state update to host: " + std::string(ready ? "true" : "false"));
+            }
+        }
     });
     m_lobbyScene.SetRoleChangedCallback([this](const std::string& role) {
         m_sessionRoleName = role;
@@ -579,6 +617,9 @@ bool App::Run()
     });
     m_lobbyScene.SetPowerChangedCallback([this](const std::string& powerId, const std::string& addonA, const std::string& addonB) {
         m_gameplay.SetKillerPowerLoadout(powerId, addonA, addonB);
+    });
+    m_lobbyScene.SetLeaveLobbyCallback([this]() {
+        ResetToMainMenu();
     });
     m_lobbyScene.SetCharacterChangedCallback([this](const std::string& characterId) {
         // Update character selection in gameplay systems
@@ -2096,7 +2137,7 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
     }
 
     // Player update notification (role change, ready state, etc.)
-    if (payload[0] == kPacketLobbyPlayerUpdate && m_multiplayerMode == MultiplayerMode::Client)
+    if (payload[0] == kPacketLobbyPlayerUpdate && m_multiplayerMode == MultiplayerMode::Host)
     {
         NetLobbyPlayer player;
         if (!DeserializeLobbyPlayerUpdate(payload, player))
@@ -2105,6 +2146,8 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         }
         UpdateLobbyPlayer(player);
         ApplyLobbyStateToUi(m_lobbyState);
+        BroadcastLobbyStateToAllClients();
+        AppendNetworkLog("Host received player update from netId=" + std::to_string(player.netId) + " ready=" + (player.isReady ? "true" : "false"));
         return;
     }
 }
@@ -3251,9 +3294,16 @@ void App::SendLobbyStateToClient()
 
 void App::ApplyLobbyStateToUi(const NetLobbyState& state)
 {
+    const std::uint32_t previousLocalNetId = m_lobbyState.localPlayerNetId;
+    const bool hasPreviousLocalNetId = (m_multiplayerMode == MultiplayerMode::Client && previousLocalNetId != 0);
+    
     m_lobbyState = state;
+    
+    if (hasPreviousLocalNetId)
+    {
+        m_lobbyState.localPlayerNetId = previousLocalNetId;
+    }
 
-    // Convert to LobbyPlayer format for UI
     std::vector<game::ui::LobbyPlayer> uiPlayers;
     uiPlayers.reserve(state.players.size());
 

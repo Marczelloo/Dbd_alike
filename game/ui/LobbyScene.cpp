@@ -143,6 +143,22 @@ void LobbyScene::HandleInput()
         }
     }
 
+    // Leave Lobby button (bottom-left corner)
+    const float leaveBtnWidth = 140.0F * scale;
+    const float leaveBtnHeight = 40.0F * scale;
+    const float leaveBtnX = 20.0F * scale;
+    const float leaveBtnY = screenHeight - leaveBtnHeight - 30.0F * scale;
+    
+    if (mousePressed && isMouseOver(leaveBtnX, leaveBtnY, leaveBtnWidth, leaveBtnHeight))
+    {
+        ExitLobby();
+        if (m_onLeaveLobby)
+        {
+            m_onLeaveLobby();
+        }
+        return;
+    }
+
     // Loadout menu toggle (open/close)
     const float menuBtnWidth = 220.0F * scale;
     const float menuBtnHeight = 42.0F * scale;
@@ -729,6 +745,7 @@ void LobbyScene::RenderLobbyUI()
     }
     
     RenderReadyButton();
+    RenderLeaveButton();
     RenderMatchSettings();
     
     if (m_state.countdownActive)
@@ -915,6 +932,28 @@ void LobbyScene::RenderReadyButton()
         m_ui->DrawRectOutline(forceButtonRect, 2.0F, theme.colorPanelBorder);
         m_ui->DrawTextLabel(forceButtonX + 8.0F * scale, buttonY + 15.0F * scale, "FORCE START", theme.colorText, 1.0F * scale);
     }
+}
+
+void LobbyScene::RenderLeaveButton()
+{
+    if (!m_ui) return;
+    
+    const float scale = m_ui->Scale();
+    const auto& theme = m_ui->Theme();
+    const int screenHeight = m_ui->ScreenHeight();
+    
+    const float buttonWidth = 140.0F * scale;
+    const float buttonHeight = 40.0F * scale;
+    const float buttonX = 20.0F * scale;
+    const float buttonY = screenHeight - buttonHeight - 30.0F * scale;
+    
+    engine::ui::UiRect buttonRect{buttonX, buttonY, buttonWidth, buttonHeight};
+    glm::vec4 buttonColor = theme.colorButton;
+    buttonColor.a = 0.9F;
+    m_ui->DrawRect(buttonRect, buttonColor);
+    m_ui->DrawRectOutline(buttonRect, 2.0F, theme.colorPanelBorder);
+    
+    m_ui->DrawTextLabel(buttonX + 12.0F * scale, buttonY + 11.0F * scale, "LEAVE LOBBY", theme.colorText, 0.9F * scale);
 }
 
 void LobbyScene::RenderCountdown()

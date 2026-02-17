@@ -81,6 +81,7 @@ public:
     using PerksChangedCallback = std::function<void(const std::array<std::string, 4>& perks)>;
     using ItemChangedCallback = std::function<void(const std::string& itemId, const std::string& addonA, const std::string& addonB)>;
     using PowerChangedCallback = std::function<void(const std::string& powerId, const std::string& addonA, const std::string& addonB)>;
+    using LeaveLobbyCallback = std::function<void()>;
 
     LobbyScene();
     ~LobbyScene();
@@ -110,6 +111,7 @@ public:
     void SetPerksChangedCallback(PerksChangedCallback callback) { m_onPerksChanged = std::move(callback); }
     void SetItemChangedCallback(ItemChangedCallback callback) { m_onItemChanged = std::move(callback); }
     void SetPowerChangedCallback(PowerChangedCallback callback) { m_onPowerChanged = std::move(callback); }
+    void SetLeaveLobbyCallback(LeaveLobbyCallback callback) { m_onLeaveLobby = std::move(callback); }
     
     void SetAvailablePerks(const std::vector<std::string>& perkIds, const std::vector<std::string>& perkNames) {
         m_availablePerkIds = perkIds;
@@ -137,6 +139,18 @@ public:
     void SetAvailableAddons(const std::vector<std::string>& addonIds, const std::vector<std::string>& addonNames) {
         m_addonIds = addonIds;
         m_addonNames = addonNames;
+        // Reset addon selection indices when list changes
+        if (m_selectedAddonAIndex > static_cast<int>(m_addonIds.size()))
+        {
+            m_selectedAddonAIndex = 0;
+        }
+        if (m_selectedAddonBIndex > static_cast<int>(m_addonIds.size()))
+        {
+            m_selectedAddonBIndex = 0;
+        }
+        // Close dropdowns when list changes
+        m_addonADropdownOpen = false;
+        m_addonBDropdownOpen = false;
     }
     
     void SetLocalPlayerCharacter(const std::string& characterId);
@@ -166,6 +180,7 @@ private:
     void RenderPlayerSlots();
     void RenderPlayerDetails(int playerIndex);
     void RenderReadyButton();
+    void RenderLeaveButton();
     void RenderCountdown();
     void RenderMatchSettings();
     void RenderLobbyFullOverlay();
@@ -248,6 +263,7 @@ private:
     PerksChangedCallback m_onPerksChanged;
     ItemChangedCallback m_onItemChanged;
     PowerChangedCallback m_onPowerChanged;
+    LeaveLobbyCallback m_onLeaveLobby;
     
     std::vector<std::string> m_availablePerkIds;
     std::vector<std::string> m_availablePerkNames;
