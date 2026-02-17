@@ -313,6 +313,13 @@ Placement rules:
 3. Fallback manual join still works (`join <ip> <port>` or Join IP/Port fields).
 4. Incompatible builds are shown as `Incompatible Version` and cannot be joined.
 
+**Lobby Limits (DBD-like):**
+- Max **4 Survivors** per match
+- Max **1 Killer** per match
+- When a role is full, new players cannot join as that role
+- Host assigns roles authoritatively
+- Lobby state synchronizes to all connected clients (player list updates in real-time)
+
 ### Runtime Verification Checklist (short)
 1. Host session -> verify host panel shows LAN IP(s) and port.
 2. Second PC (same LAN) -> host appears in `LAN Games` in ~1-3 seconds.

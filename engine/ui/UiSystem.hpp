@@ -126,6 +126,8 @@ public:
     void DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color);
     void DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
     void DrawFullscreenVignette(const glm::vec4& color);
+    [[nodiscard]] float TextWidth(std::string_view text, float fontScale = 1.0F) const;
+    [[nodiscard]] float LineHeight(float fontScale = 1.0F) const;
 
 private:
     struct QuadVertex
@@ -211,8 +213,6 @@ private:
     [[nodiscard]] bool IsFocusableWidget(const std::string& id) const;
 
     void DrawText(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
-    [[nodiscard]] float TextWidth(std::string_view text, float fontScale = 1.0F) const;
-    [[nodiscard]] float LineHeight(float fontScale = 1.0F) const;
 
     void PushClipRect(const UiRect& rect);
     void PopClipRect();

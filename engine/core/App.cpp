@@ -58,6 +58,15 @@ constexpr std::uint8_t kPacketReject = 5;
 constexpr std::uint8_t kPacketGameplayTuning = 6;
 constexpr std::uint8_t kPacketRoleChangeRequest = 7;
 constexpr std::uint8_t kPacketFxSpawn = 8;
+constexpr std::uint8_t kPacketLobbyState = 9;
+constexpr std::uint8_t kPacketLobbyPlayerJoin = 10;
+constexpr std::uint8_t kPacketLobbyPlayerLeave = 11;
+constexpr std::uint8_t kPacketLobbyPlayerUpdate = 12;
+
+// Maximum players in lobby (DBD-like: 4 survivors + 1 killer)
+constexpr std::size_t kMaxLobbySurvivors = 4;
+constexpr std::size_t kMaxLobbyKillers = 1;
+constexpr std::size_t kMaxLobbyPlayers = kMaxLobbySurvivors + kMaxLobbyKillers;
 
 constexpr int kProtocolVersion = 1;
 constexpr const char* kBuildId = "dev-2026-02-09";
@@ -918,6 +927,10 @@ bool App::Run()
         {
             DrawMainMenuUiCustom(&shouldQuit);
         }
+        else if (m_appMode == AppMode::RoleSelection)
+        {
+            DrawRoleSelectionScreen();
+        }
         else if (m_appMode == AppMode::Loading)
         {
             if (m_loadingTestShowFull)
@@ -1619,7 +1632,8 @@ bool App::StartHostSession(const std::string& mapName, const std::string& roleNa
     TransitionNetworkState(NetworkState::HostStarting, "Starting host");
     m_lanDiscovery.Stop();
     m_network.Disconnect();
-    if (!m_network.StartHost(port, 1))
+    // Allow up to 5 connections for 4 survivors + 1 killer lobby
+    if (!m_network.StartHost(port, kMaxLobbyPlayers))
     {
         m_menuNetStatus = "Failed to host multiplayer session.";
         TransitionNetworkState(NetworkState::Error, m_menuNetStatus, true);
@@ -1741,7 +1755,7 @@ void App::PollNetwork()
             }
             else if (m_multiplayerMode == MultiplayerMode::Client)
             {
-                m_menuNetStatus = "Connected. Waiting for role/map assignment...";
+                m_menuNetStatus = "Connected. Waiting for lobby state...";
                 TransitionNetworkState(NetworkState::ClientHandshaking, "Connected, sending HELLO");
                 m_remotePlayer.connected = true;
                 AppendNetworkLog("Client transport connected. Sending HELLO packet.");
@@ -1875,10 +1889,55 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
             return;
         }
 
+        // Check role limits before accepting
+        if (!CanJoinRole(requestedRole))
+        {
+            std::vector<std::uint8_t> reject;
+            const std::string reason = "Role " + requestedRole + " is full (4 survivors max, 1 killer max)";
+            if (SerializeReject(reason, reject))
+            {
+                m_network.SendReliable(reject.data(), reject.size());
+            }
+            m_lastNetworkError = reason;
+            AppendNetworkLog("Rejected client: " + reason);
+            return;
+        }
+
+        // Add the new player to lobby
+        NetLobbyPlayer newPlayer;
+        newPlayer.netId = GenerateLocalNetId();
+        newPlayer.name = "Player_" + std::to_string(newPlayer.netId);
+        newPlayer.selectedRole = requestedRole;
+        newPlayer.isHost = false;
+        newPlayer.isConnected = true;
+        
+        // Temporarily set localPlayerNetId for the new client in the state we'll send
+        NetLobbyState stateForNewClient = m_lobbyState;
+        stateForNewClient.localPlayerNetId = newPlayer.netId;
+        
+        // Add player to host's lobby state
+        AddLobbyPlayer(newPlayer);
+        
+        // Update host's own UI to show new player
+        ApplyLobbyStateToUi(m_lobbyState);
+
         RequestRoleChange(requestedRole, true);
         SendGameplayTuningToClient();
-        m_menuNetStatus = "Client assigned role: " + m_remoteRoleName + " (map: " + requestedMap + ")";
-        m_lanDiscovery.UpdateHostInfo(m_sessionMapName, 2, 2, PrimaryLocalIp());
+        
+        // Send lobby state to the new client with THEIR localPlayerNetId
+        std::vector<std::uint8_t> dataForNewClient;
+        if (SerializeLobbyState(stateForNewClient, dataForNewClient))
+        {
+            m_network.SendReliable(dataForNewClient.data(), dataForNewClient.size());
+            AppendNetworkLog("Sent lobby state to new client (netId=" + std::to_string(newPlayer.netId) + ")");
+        }
+        
+        // Broadcast updated lobby state to all OTHER clients (with their existing netIds)
+        BroadcastLobbyStateToAllClients();
+
+        m_menuNetStatus = "Client assigned role: " + m_remoteRoleName + " (map: " + requestedMap + ") - " + std::to_string(m_lobbyState.players.size()) + " players";
+        m_lanDiscovery.UpdateHostInfo(m_sessionMapName, static_cast<int>(m_lobbyState.players.size()), 
+                                       static_cast<int>(kMaxLobbyPlayers), PrimaryLocalIp());
         TransitionNetworkState(NetworkState::Connected, "Client handshake complete");
         return;
     }
@@ -1894,6 +1953,15 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         m_menuNetStatus = reason;
         TransitionNetworkState(NetworkState::Error, reason, true);
         m_network.Disconnect();
+        
+        m_showLobbyFullPopup = true;
+        m_lobbyFullMessage = reason;
+        
+        // Return to main menu when rejected from lobby
+        m_appMode = AppMode::MainMenu;
+        m_multiplayerMode = MultiplayerMode::Solo;
+        m_lobbyScene.ExitLobby();
+        AppendNetworkLog("Rejected by host: " + reason + " - returned to main menu");
         return;
     }
 
@@ -1984,6 +2052,60 @@ void App::HandleNetworkPacket(const std::vector<std::uint8_t>& payload)
         ApplyGameplaySettings(tuning, true);
         m_serverGameplayValues = true;
         m_menuNetStatus = "Received authoritative gameplay tuning from host.";
+        return;
+    }
+
+    // Lobby state synchronization (received by clients from host)
+    if (payload[0] == kPacketLobbyState && m_multiplayerMode == MultiplayerMode::Client)
+    {
+        NetLobbyState state;
+        if (!DeserializeLobbyState(payload, state))
+        {
+            AppendNetworkLog("Failed to deserialize lobby state from host.");
+            return;
+        }
+        ApplyLobbyStateToUi(state);
+        AppendNetworkLog("Received lobby state: " + std::to_string(state.players.size()) + " players.");
+        return;
+    }
+
+    // Player join notification (received by all clients from host)
+    if (payload[0] == kPacketLobbyPlayerJoin && m_multiplayerMode == MultiplayerMode::Client)
+    {
+        NetLobbyPlayer player;
+        if (!DeserializeLobbyPlayerJoin(payload, player))
+        {
+            return;
+        }
+        AddLobbyPlayer(player);
+        ApplyLobbyStateToUi(m_lobbyState);
+        return;
+    }
+
+    // Player leave notification (received by all clients from host)
+    if (payload[0] == kPacketLobbyPlayerLeave && m_multiplayerMode == MultiplayerMode::Client)
+    {
+        std::uint32_t netId = 0;
+        if (!DeserializeLobbyPlayerLeave(payload, netId))
+        {
+            return;
+        }
+        RemoveLobbyPlayer(netId);
+        ApplyLobbyStateToUi(m_lobbyState);
+        return;
+    }
+
+    // Player update notification (role change, ready state, etc.)
+    if (payload[0] == kPacketLobbyPlayerUpdate && m_multiplayerMode == MultiplayerMode::Client)
+    {
+        NetLobbyPlayer player;
+        if (!DeserializeLobbyPlayerUpdate(payload, player))
+        {
+            return;
+        }
+        UpdateLobbyPlayer(player);
+        ApplyLobbyStateToUi(m_lobbyState);
+        return;
     }
 }
 
@@ -2850,6 +2972,424 @@ bool App::DeserializeRoleChangeRequest(const std::vector<std::uint8_t>& buffer, 
         return false;
     }
     return ReadValue(buffer, offset, outPacket.requestedRole);
+}
+
+// ============================================================================
+// Lobby Network Serialization
+// ============================================================================
+
+bool App::SerializeLobbyState(const NetLobbyState& state, std::vector<std::uint8_t>& outBuffer) const
+{
+    outBuffer.clear();
+    AppendValue(outBuffer, kPacketLobbyState);
+
+    // Local player net ID
+    AppendValue(outBuffer, state.localPlayerNetId);
+
+    // Player count
+    const std::uint8_t playerCount = static_cast<std::uint8_t>(
+        std::min<std::size_t>(state.players.size(), kMaxLobbyPlayers));
+    AppendValue(outBuffer, playerCount);
+
+    // Each player
+    for (std::size_t i = 0; i < playerCount; ++i)
+    {
+        const auto& player = state.players[i];
+        AppendValue(outBuffer, player.netId);
+
+        const std::uint16_t nameLen = static_cast<std::uint16_t>(
+            std::min<std::size_t>(player.name.size(), 64));
+        AppendValue(outBuffer, nameLen);
+        outBuffer.insert(outBuffer.end(), player.name.begin(), player.name.begin() + nameLen);
+
+        const std::uint8_t roleByte = RoleNameToByte(player.selectedRole);
+        AppendValue(outBuffer, roleByte);
+
+        const std::uint16_t charLen = static_cast<std::uint16_t>(
+            std::min<std::size_t>(player.characterId.size(), 128));
+        AppendValue(outBuffer, charLen);
+        outBuffer.insert(outBuffer.end(), player.characterId.begin(), player.characterId.begin() + charLen);
+
+        std::uint8_t flags = 0;
+        if (player.isReady) flags |= 0x01;
+        if (player.isHost) flags |= 0x02;
+        if (player.isConnected) flags |= 0x04;
+        AppendValue(outBuffer, flags);
+    }
+
+    return true;
+}
+
+bool App::DeserializeLobbyState(const std::vector<std::uint8_t>& buffer, NetLobbyState& outState) const
+{
+    outState.players.clear();
+    std::size_t offset = 0;
+    std::uint8_t type = 0;
+
+    if (!ReadValue(buffer, offset, type) || type != kPacketLobbyState)
+    {
+        return false;
+    }
+
+    if (!ReadValue(buffer, offset, outState.localPlayerNetId))
+    {
+        return false;
+    }
+
+    std::uint8_t playerCount = 0;
+    if (!ReadValue(buffer, offset, playerCount))
+    {
+        return false;
+    }
+
+    playerCount = std::min<std::uint8_t>(playerCount, static_cast<std::uint8_t>(kMaxLobbyPlayers));
+
+    for (std::uint8_t i = 0; i < playerCount; ++i)
+    {
+        NetLobbyPlayer player;
+
+        if (!ReadValue(buffer, offset, player.netId))
+        {
+            return false;
+        }
+
+        std::uint16_t nameLen = 0;
+        if (!ReadValue(buffer, offset, nameLen) || offset + nameLen > buffer.size())
+        {
+            return false;
+        }
+        player.name.assign(reinterpret_cast<const char*>(buffer.data() + offset), nameLen);
+        offset += nameLen;
+
+        std::uint8_t roleByte = 0;
+        if (!ReadValue(buffer, offset, roleByte))
+        {
+            return false;
+        }
+        player.selectedRole = RoleByteToName(roleByte);
+
+        std::uint16_t charLen = 0;
+        if (!ReadValue(buffer, offset, charLen) || offset + charLen > buffer.size())
+        {
+            return false;
+        }
+        player.characterId.assign(reinterpret_cast<const char*>(buffer.data() + offset), charLen);
+        offset += charLen;
+
+        std::uint8_t flags = 0;
+        if (!ReadValue(buffer, offset, flags))
+        {
+            return false;
+        }
+        player.isReady = (flags & 0x01) != 0;
+        player.isHost = (flags & 0x02) != 0;
+        player.isConnected = (flags & 0x04) != 0;
+
+        outState.players.push_back(player);
+    }
+
+    return true;
+}
+
+bool App::SerializeLobbyPlayerJoin(const NetLobbyPlayer& player, std::vector<std::uint8_t>& outBuffer) const
+{
+    outBuffer.clear();
+    AppendValue(outBuffer, kPacketLobbyPlayerJoin);
+    AppendValue(outBuffer, player.netId);
+
+    const std::uint16_t nameLen = static_cast<std::uint16_t>(
+        std::min<std::size_t>(player.name.size(), 64));
+    AppendValue(outBuffer, nameLen);
+    outBuffer.insert(outBuffer.end(), player.name.begin(), player.name.begin() + nameLen);
+
+    const std::uint8_t roleByte = RoleNameToByte(player.selectedRole);
+    AppendValue(outBuffer, roleByte);
+
+    const std::uint16_t charLen = static_cast<std::uint16_t>(
+        std::min<std::size_t>(player.characterId.size(), 128));
+    AppendValue(outBuffer, charLen);
+    outBuffer.insert(outBuffer.end(), player.characterId.begin(), player.characterId.begin() + charLen);
+
+    std::uint8_t flags = 0;
+    if (player.isReady) flags |= 0x01;
+    if (player.isHost) flags |= 0x02;
+    if (player.isConnected) flags |= 0x04;
+    AppendValue(outBuffer, flags);
+
+    return true;
+}
+
+bool App::DeserializeLobbyPlayerJoin(const std::vector<std::uint8_t>& buffer, NetLobbyPlayer& outPlayer) const
+{
+    std::size_t offset = 0;
+    std::uint8_t type = 0;
+
+    if (!ReadValue(buffer, offset, type) || type != kPacketLobbyPlayerJoin)
+    {
+        return false;
+    }
+
+    if (!ReadValue(buffer, offset, outPlayer.netId))
+    {
+        return false;
+    }
+
+    std::uint16_t nameLen = 0;
+    if (!ReadValue(buffer, offset, nameLen) || offset + nameLen > buffer.size())
+    {
+        return false;
+    }
+    outPlayer.name.assign(reinterpret_cast<const char*>(buffer.data() + offset), nameLen);
+    offset += nameLen;
+
+    std::uint8_t roleByte = 0;
+    if (!ReadValue(buffer, offset, roleByte))
+    {
+        return false;
+    }
+    outPlayer.selectedRole = RoleByteToName(roleByte);
+
+    std::uint16_t charLen = 0;
+    if (!ReadValue(buffer, offset, charLen) || offset + charLen > buffer.size())
+    {
+        return false;
+    }
+    outPlayer.characterId.assign(reinterpret_cast<const char*>(buffer.data() + offset), charLen);
+    offset += charLen;
+
+    std::uint8_t flags = 0;
+    if (!ReadValue(buffer, offset, flags))
+    {
+        return false;
+    }
+    outPlayer.isReady = (flags & 0x01) != 0;
+    outPlayer.isHost = (flags & 0x02) != 0;
+    outPlayer.isConnected = (flags & 0x04) != 0;
+
+    return true;
+}
+
+bool App::SerializeLobbyPlayerLeave(std::uint32_t netId, std::vector<std::uint8_t>& outBuffer) const
+{
+    outBuffer.clear();
+    AppendValue(outBuffer, kPacketLobbyPlayerLeave);
+    AppendValue(outBuffer, netId);
+    return true;
+}
+
+bool App::DeserializeLobbyPlayerLeave(const std::vector<std::uint8_t>& buffer, std::uint32_t& outNetId) const
+{
+    std::size_t offset = 0;
+    std::uint8_t type = 0;
+
+    if (!ReadValue(buffer, offset, type) || type != kPacketLobbyPlayerLeave)
+    {
+        return false;
+    }
+
+    return ReadValue(buffer, offset, outNetId);
+}
+
+bool App::SerializeLobbyPlayerUpdate(const NetLobbyPlayer& player, std::vector<std::uint8_t>& outBuffer) const
+{
+    // Same format as PlayerJoin
+    return SerializeLobbyPlayerJoin(player, outBuffer);
+}
+
+bool App::DeserializeLobbyPlayerUpdate(const std::vector<std::uint8_t>& buffer, NetLobbyPlayer& outPlayer) const
+{
+    // Check packet type
+    if (buffer.empty() || buffer[0] != kPacketLobbyPlayerUpdate)
+    {
+        return false;
+    }
+
+    // Same format as PlayerJoin, just different packet type
+    std::vector<std::uint8_t> tempBuffer = buffer;
+    tempBuffer[0] = kPacketLobbyPlayerJoin;
+    return DeserializeLobbyPlayerJoin(tempBuffer, outPlayer);
+}
+
+// ============================================================================
+// Lobby Management Functions
+// ============================================================================
+
+void App::BroadcastLobbyStateToAllClients()
+{
+    if (m_multiplayerMode != MultiplayerMode::Host)
+    {
+        return;
+    }
+
+    std::vector<std::uint8_t> data;
+    if (!SerializeLobbyState(m_lobbyState, data))
+    {
+        return;
+    }
+
+    // Broadcast to ALL connected clients using ENet host broadcast
+    m_network.BroadcastReliable(data.data(), data.size());
+    AppendNetworkLog("Broadcast lobby state to " + std::to_string(m_network.ConnectedPeerCount()) + " peers");
+}
+
+void App::SendLobbyStateToClient()
+{
+    if (m_multiplayerMode != MultiplayerMode::Host)
+    {
+        return;
+    }
+
+    std::vector<std::uint8_t> data;
+    if (!SerializeLobbyState(m_lobbyState, data))
+    {
+        return;
+    }
+
+    // Send to the most recently connected client (uses m_connectedPeer)
+    m_network.SendReliable(data.data(), data.size());
+}
+
+void App::ApplyLobbyStateToUi(const NetLobbyState& state)
+{
+    m_lobbyState = state;
+
+    // Convert to LobbyPlayer format for UI
+    std::vector<game::ui::LobbyPlayer> uiPlayers;
+    uiPlayers.reserve(state.players.size());
+
+    int localPlayerIndex = -1;
+    for (std::size_t i = 0; i < state.players.size(); ++i)
+    {
+        const auto& netPlayer = state.players[i];
+        game::ui::LobbyPlayer uiPlayer;
+        uiPlayer.netId = netPlayer.netId;
+        uiPlayer.name = netPlayer.name;
+        uiPlayer.selectedRole = netPlayer.selectedRole;
+        uiPlayer.characterId = netPlayer.characterId;
+        uiPlayer.isReady = netPlayer.isReady;
+        uiPlayer.isHost = netPlayer.isHost;
+        uiPlayer.isConnected = netPlayer.isConnected;
+        uiPlayers.push_back(uiPlayer);
+
+        if (netPlayer.netId == state.localPlayerNetId)
+        {
+            localPlayerIndex = static_cast<int>(i);
+        }
+    }
+
+    // Update lobby scene state
+    auto& lobbyState = const_cast<game::ui::LobbySceneState&>(m_lobbyScene.GetState());
+    lobbyState.players = uiPlayers;
+    lobbyState.localPlayerIndex = localPlayerIndex >= 0 ? localPlayerIndex : 0;
+
+    // Find host
+    for (const auto& p : state.players)
+    {
+        if (p.isHost)
+        {
+            lobbyState.isHost = (p.netId == state.localPlayerNetId);
+            break;
+        }
+    }
+
+    bool allReady = true;
+    for (const auto& p : state.players)
+    {
+        if (p.isConnected && !p.isReady)
+        {
+            allReady = false;
+            break;
+        }
+    }
+    
+    if (!allReady && lobbyState.countdownActive)
+    {
+        m_lobbyScene.CancelCountdown();
+        AppendNetworkLog("Countdown cancelled: not all players ready");
+    }
+
+    AppendNetworkLog("Lobby state updated: " + std::to_string(state.players.size()) + " players");
+}
+
+void App::AddLobbyPlayer(const NetLobbyPlayer& player)
+{
+    // Check if player already exists
+    for (auto& existing : m_lobbyState.players)
+    {
+        if (existing.netId == player.netId)
+        {
+            existing = player;
+            return;
+        }
+    }
+
+    // Check role limits before adding
+    if (!CanJoinRole(player.selectedRole))
+    {
+        AppendNetworkLog("Rejecting player " + player.name + ": role " + player.selectedRole + " full");
+        return;
+    }
+
+    m_lobbyState.players.push_back(player);
+    AppendNetworkLog("Player joined lobby: " + player.name + " (" + player.selectedRole + ")");
+}
+
+void App::RemoveLobbyPlayer(std::uint32_t netId)
+{
+    auto it = std::remove_if(m_lobbyState.players.begin(), m_lobbyState.players.end(),
+        [netId](const NetLobbyPlayer& p) { return p.netId == netId; });
+
+    if (it != m_lobbyState.players.end())
+    {
+        std::string name = it->name;
+        m_lobbyState.players.erase(it, m_lobbyState.players.end());
+        AppendNetworkLog("Player left lobby: " + name);
+    }
+}
+
+void App::UpdateLobbyPlayer(const NetLobbyPlayer& player)
+{
+    for (auto& existing : m_lobbyState.players)
+    {
+        if (existing.netId == player.netId)
+        {
+            existing = player;
+            AppendNetworkLog("Player updated: " + player.name + " role=" + player.selectedRole);
+            return;
+        }
+    }
+}
+
+bool App::CanJoinRole(const std::string& role) const
+{
+    std::size_t countInRole = 0;
+    for (const auto& player : m_lobbyState.players)
+    {
+        if (player.selectedRole == role && player.isConnected)
+        {
+            ++countInRole;
+        }
+    }
+
+    if (role == "killer")
+    {
+        return countInRole < kMaxLobbyKillers;
+    }
+    else // survivor
+    {
+        return countInRole < kMaxLobbySurvivors;
+    }
+}
+
+std::uint32_t App::GenerateLocalNetId() const
+{
+    // Generate a unique ID based on current state
+    std::uint32_t maxId = 0;
+    for (const auto& player : m_lobbyState.players)
+    {
+        maxId = std::max(maxId, player.netId);
+    }
+    return maxId + 1;
 }
 
 void App::TickLanDiscovery(double nowSeconds)
@@ -5454,14 +5994,20 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     if (m_ui.Button("enter_lobby", "LOBBY (3D)"))
     {
         m_appMode = AppMode::Lobby;
-        game::ui::LobbyPlayer localPlayer;
+        
+        // Initialize lobby state
+        m_lobbyState.players.clear();
+        m_lobbyState.localPlayerNetId = 1;
+        
+        NetLobbyPlayer localPlayer;
         localPlayer.netId = 1;
         localPlayer.name = "Player";
         localPlayer.selectedRole = roleName;
         localPlayer.isHost = true;
         localPlayer.isConnected = true;
+        m_lobbyState.players.push_back(localPlayer);
         
-        m_lobbyScene.SetPlayers({localPlayer});
+        ApplyLobbyStateToUi(m_lobbyState);
         m_lobbyScene.SetLocalPlayerRole(roleName);
         configureLobbyUiSelections(roleName);
         m_lobbyScene.EnterLobby();
@@ -5498,43 +6044,17 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Spacer(8.0F * scale);
     if (m_ui.Button("host_btn", "HOST GAME"))
     {
-        // Host goes to lobby
-        m_appMode = AppMode::Lobby;
-        game::ui::LobbyPlayer localPlayer;
-        localPlayer.netId = 1;
-        localPlayer.name = "Host";
-        localPlayer.selectedRole = roleName;
-        localPlayer.isHost = true;
-        localPlayer.isConnected = true;
-        
-        // Set available perks based on role
-        m_lobbyScene.SetPlayers({localPlayer});
-        m_lobbyScene.SetLocalPlayerRole(roleName);
-        configureLobbyUiSelections(roleName);
-        m_lobbyScene.EnterLobby();
+        m_roleSelectionIsHost = true;
+        m_roleSelectionKillerTaken = false;
+        m_roleSelectionKillerName.clear();
+        m_appMode = AppMode::RoleSelection;
     }
     if (m_ui.Button("join_btn", "JOIN GAME"))
     {
-        // Join goes to lobby (simulated for now)
-        m_appMode = AppMode::Lobby;
-        game::ui::LobbyPlayer hostPlayer;
-        hostPlayer.netId = 1;
-        hostPlayer.name = "Host";
-        hostPlayer.selectedRole = (roleName == "survivor") ? "killer" : "survivor";
-        hostPlayer.isHost = true;
-        hostPlayer.isConnected = true;
-        
-        game::ui::LobbyPlayer localPlayer;
-        localPlayer.netId = 2;
-        localPlayer.name = "Player";
-        localPlayer.selectedRole = roleName;
-        localPlayer.isHost = false;
-        localPlayer.isConnected = true;
-        
-        m_lobbyScene.SetPlayers({hostPlayer, localPlayer});
-        m_lobbyScene.SetLocalPlayerRole(roleName);
-        configureLobbyUiSelections(roleName);
-        m_lobbyScene.EnterLobby();
+        m_roleSelectionIsHost = false;
+        m_roleSelectionKillerTaken = false;
+        m_roleSelectionKillerName.clear();
+        m_appMode = AppMode::RoleSelection;
     }
 
     m_ui.Spacer(20.0F * scale);
@@ -5722,6 +6242,531 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
     m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
     m_ui.Label("F7 Load", m_ui.Theme().colorTextMuted, 0.8F);
     m_ui.EndPanel();
+    
+    // Lobby Full Popup
+    if (m_showLobbyFullPopup)
+    {
+        const auto& popupTheme = m_ui.Theme();
+        const float scaleX = static_cast<float>(m_ui.ScreenWidth()) / static_cast<float>(m_window.WindowWidth());
+        const float scaleY = static_cast<float>(m_ui.ScreenHeight()) / static_cast<float>(m_window.WindowHeight());
+        const float popupW = 400.0F * scale;
+        const float popupH = 180.0F * scale;
+        const engine::ui::UiRect popupRect{
+            (screenW - popupW) * 0.5F,
+            (screenH - popupH) * 0.5F,
+            popupW,
+            popupH
+        };
+        
+        m_ui.FillRect(popupRect, glm::vec4{0.1F, 0.1F, 0.12F, 0.98F});
+        m_ui.DrawRectOutline(popupRect, 3.0F, popupTheme.colorDanger);
+        
+        const std::string title = "LOBBY FULL";
+        m_ui.DrawTextLabel(popupRect.x + (popupRect.w - m_ui.TextWidth(title, 1.4F)) * 0.5F, popupRect.y + 20.0F * scale, title, popupTheme.colorDanger, 1.4F);
+        
+        const std::string& reason = m_lobbyFullMessage.empty() ? "Could not join the lobby." : m_lobbyFullMessage;
+        m_ui.DrawTextLabel(popupRect.x + 20.0F * scale, popupRect.y + 60.0F * scale, reason, popupTheme.colorTextMuted, 0.9F);
+        
+        const engine::ui::UiRect okBtnRect{
+            popupRect.x + (popupRect.w - 120.0F * scale) * 0.5F,
+            popupRect.y + popupH - 50.0F * scale,
+            120.0F * scale,
+            36.0F * scale
+        };
+        
+        const glm::vec2 mousePos = m_input.MousePosition();
+        const bool okHovered = okBtnRect.Contains(mousePos.x * scaleX, mousePos.y * scaleY);
+        glm::vec4 okBtnColor = okHovered ? popupTheme.colorButtonHover : popupTheme.colorAccent;
+        okBtnColor.a = 0.9F;
+        m_ui.FillRect(okBtnRect, okBtnColor);
+        m_ui.DrawRectOutline(okBtnRect, 2.0F, popupTheme.colorPanelBorder);
+        m_ui.DrawTextLabel(okBtnRect.x + (okBtnRect.w - m_ui.TextWidth("OK", 1.0F)) * 0.5F, okBtnRect.y + 8.0F * scale, "OK", popupTheme.colorText, 1.0F);
+        
+        if (okHovered && m_input.IsMousePressed(0))
+        {
+            m_showLobbyFullPopup = false;
+            m_lobbyFullMessage.clear();
+        }
+    }
+}
+
+void App::DrawRoleSelectionScreen()
+{
+    const float scale = m_ui.Scale();
+    const float screenW = static_cast<float>(m_ui.ScreenWidth());
+    const float screenH = static_cast<float>(m_ui.ScreenHeight());
+    const auto& theme = m_ui.Theme();
+    const float scaleX = static_cast<float>(m_ui.ScreenWidth()) / static_cast<float>(m_window.WindowWidth());
+    const float scaleY = static_cast<float>(m_ui.ScreenHeight()) / static_cast<float>(m_window.WindowHeight());
+    
+    // Check lobby state for existing killer
+    m_roleSelectionKillerTaken = false;
+    m_roleSelectionKillerName.clear();
+    for (const auto& player : m_lobbyState.players)
+    {
+        if (player.selectedRole == "killer")
+        {
+            m_roleSelectionKillerTaken = true;
+            m_roleSelectionKillerName = player.name;
+            break;
+        }
+    }
+    
+    // Full screen dark overlay
+    m_ui.FillRect(engine::ui::UiRect{0.0F, 0.0F, screenW, screenH}, glm::vec4{0.02F, 0.02F, 0.02F, 0.95F});
+    
+    // Title
+    const std::string titleText = m_roleSelectionIsHost ? "CHOOSE YOUR ROLE" : "JOIN LOBBY";
+    const float titleW = m_ui.TextWidth(titleText, 1.6F);
+    m_ui.DrawTextLabel((screenW - titleW) * 0.5F, 30.0F * scale, titleText, theme.colorText, 1.6F);
+    
+    // Subtitle for client
+    float subtitleY = 75.0F * scale;
+    if (!m_roleSelectionIsHost)
+    {
+        const std::string subtitleText = "Connecting to " + m_menuJoinIp + ":" + std::to_string(m_menuPort);
+        const float subtitleW = m_ui.TextWidth(subtitleText, 0.9F);
+        m_ui.DrawTextLabel((screenW - subtitleW) * 0.5F, subtitleY, subtitleText, theme.colorTextMuted, 0.9F);
+        subtitleY += 25.0F * scale;
+    }
+    
+    // Nickname input field
+    const float nicknameFieldWidth = 280.0F * scale;
+    const float nicknameFieldHeight = 40.0F * scale;
+    const float nicknameX = (screenW - nicknameFieldWidth) * 0.5F;
+    const float nicknameY = subtitleY + 15.0F * scale;
+    
+    // Label
+    const std::string nicknameLabel = "Your Name:";
+    m_ui.DrawTextLabel(nicknameX, nicknameY - 18.0F * scale, nicknameLabel, theme.colorTextMuted, 0.85F);
+    
+    // Input field background
+    const engine::ui::UiRect nicknameRect{nicknameX, nicknameY, nicknameFieldWidth, nicknameFieldHeight};
+    m_ui.FillRect(nicknameRect, glm::vec4{0.12F, 0.14F, 0.18F, 0.95F});
+    m_ui.DrawRectOutline(nicknameRect, 2.0F, theme.colorPanelBorder);
+    
+    // Display current nickname
+    m_ui.DrawTextLabel(nicknameX + 12.0F * scale, nicknameY + 10.0F * scale, m_roleSelectionPlayerName, theme.colorText, 1.0F);
+    
+    // Handle nickname input (click to focus, type to edit)
+    const glm::vec2 mousePos = m_input.MousePosition();
+    const bool nicknameHovered = nicknameRect.Contains(mousePos.x * scaleX, mousePos.y * scaleY);
+    
+    static bool s_nicknameFocused = false;
+    static std::string s_focusedId;
+    
+    if (nicknameHovered && m_input.IsMousePressed(0))
+    {
+        s_nicknameFocused = true;
+        s_focusedId = "role_nickname";
+    }
+    else if (m_input.IsMousePressed(0) && !nicknameHovered)
+    {
+        s_nicknameFocused = false;
+        s_focusedId.clear();
+    }
+    
+    if (s_nicknameFocused && s_focusedId == "role_nickname")
+    {
+        const bool shiftHeld = m_input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || m_input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
+        
+        // Letter keys (A-Z)
+        for (int key = GLFW_KEY_A; key <= GLFW_KEY_Z; ++key)
+        {
+            if (m_input.IsKeyPressed(key))
+            {
+                char c = static_cast<char>(key - GLFW_KEY_A + (shiftHeld ? 'A' : 'a'));
+                if (m_roleSelectionPlayerName.length() < 16)
+                {
+                    m_roleSelectionPlayerName += c;
+                }
+            }
+        }
+        
+        // Number keys (0-9)
+        for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; ++key)
+        {
+            if (m_input.IsKeyPressed(key))
+            {
+                char c = static_cast<char>('0' + (key - GLFW_KEY_0));
+                if (m_roleSelectionPlayerName.length() < 16)
+                {
+                    m_roleSelectionPlayerName += c;
+                }
+            }
+        }
+        
+        // Space
+        if (m_input.IsKeyPressed(GLFW_KEY_SPACE))
+        {
+            if (m_roleSelectionPlayerName.length() < 16)
+            {
+                m_roleSelectionPlayerName += ' ';
+            }
+        }
+        
+        // Underscore (shift + minus)
+        if (m_input.IsKeyPressed(GLFW_KEY_MINUS) && shiftHeld)
+        {
+            if (m_roleSelectionPlayerName.length() < 16)
+            {
+                m_roleSelectionPlayerName += '_';
+            }
+        }
+        
+        // Handle backspace with repeat
+        static float s_backspaceTimer = 0.0F;
+        static bool s_backspaceWaiting = false;
+        
+        if (m_input.IsKeyDown(GLFW_KEY_BACKSPACE) && !m_roleSelectionPlayerName.empty())
+        {
+            if (m_input.IsKeyPressed(GLFW_KEY_BACKSPACE))
+            {
+                // First press - immediate delete
+                m_roleSelectionPlayerName.pop_back();
+                s_backspaceTimer = 0.0F;
+                s_backspaceWaiting = true;
+            }
+            else if (s_backspaceWaiting)
+            {
+                // Holding - repeat after delay
+                s_backspaceTimer += 0.016F; // Approximate frame time
+                if (s_backspaceTimer > 0.4F) // Initial delay
+                {
+                    s_backspaceTimer -= 0.05F; // Repeat rate
+                    m_roleSelectionPlayerName.pop_back();
+                }
+            }
+        }
+        else
+        {
+            s_backspaceWaiting = false;
+            s_backspaceTimer = 0.0F;
+        }
+        
+        // Cursor blink
+        static float s_cursorBlink = 0.0F;
+        s_cursorBlink += 0.05F;
+        if (static_cast<int>(s_cursorBlink) % 2 == 0)
+        {
+            const float cursorX = nicknameX + 12.0F * scale + m_ui.TextWidth(m_roleSelectionPlayerName, 1.0F) + 2.0F;
+            m_ui.FillRect(engine::ui::UiRect{cursorX, nicknameY + 8.0F * scale, 2.0F * scale, 24.0F * scale}, theme.colorText);
+        }
+    }
+    
+    // Role cards layout (adjusted for nickname field)
+    const float cardWidth = 300.0F * scale;
+    const float cardHeight = 380.0F * scale;
+    const float cardSpacing = 60.0F * scale;
+    const float totalWidth = cardWidth * 2.0F + cardSpacing;
+    const float startX = (screenW - totalWidth) * 0.5F;
+    const float cardY = (screenH - cardHeight) * 0.5F + 40.0F * scale;  // Shift down for nickname field
+    
+    // Survivor card (left)
+    {
+        const float cardX = startX;
+        const engine::ui::UiRect cardRect{cardX, cardY, cardWidth, cardHeight};
+        
+        // Card background
+        glm::vec4 survivorColor = theme.colorAccent;
+        survivorColor.a = 0.15F;
+        m_ui.FillRect(cardRect, survivorColor);
+        m_ui.DrawRectOutline(cardRect, 3.0F, theme.colorAccent);
+        
+        // Icon area (placeholder - would be character icon)
+        const float iconY = cardY + 30.0F * scale;
+        m_ui.DrawTextLabel(cardX + cardWidth * 0.5F - m_ui.TextWidth("S", 4.0F) * 0.5F, iconY, "S", theme.colorAccent, 4.0F);
+        
+        // Role name
+        const std::string roleText = "SURVIVOR";
+        m_ui.DrawTextLabel(cardX + cardWidth * 0.5F - m_ui.TextWidth(roleText, 1.4F) * 0.5F, iconY + 80.0F * scale, roleText, theme.colorText, 1.4F);
+        
+        // Description
+        const std::string descText = "Work together to repair\ngenerators and escape.";
+        m_ui.DrawTextLabel(cardX + 20.0F * scale, iconY + 130.0F * scale, descText, theme.colorTextMuted, 0.85F);
+        
+        // Player info - survivors (no limit shown, just available)
+        m_ui.DrawTextLabel(cardX + 20.0F * scale, cardY + cardHeight - 80.0F * scale, "Available", theme.colorTextMuted, 0.9F);
+        
+        // Select button
+        const engine::ui::UiRect btnRect{cardX + 20.0F * scale, cardY + cardHeight - 50.0F * scale, cardWidth - 40.0F * scale, 40.0F * scale};
+        const glm::vec2 mousePos = m_input.MousePosition();
+        const bool hovered = btnRect.Contains(mousePos.x * scaleX, mousePos.y * scaleY);
+        
+        glm::vec4 btnColor = hovered ? theme.colorButtonHover : theme.colorAccent;
+        btnColor.a = 0.9F;
+        m_ui.FillRect(btnRect, btnColor);
+        m_ui.DrawRectOutline(btnRect, 2.0F, theme.colorPanelBorder);
+        
+        const std::string btnText = "SELECT";
+        m_ui.DrawTextLabel(btnRect.x + (btnRect.w - m_ui.TextWidth(btnText)) * 0.5F, btnRect.y + 10.0F * scale, btnText, theme.colorText, 1.0F);
+        
+        if (hovered && m_input.IsMousePressed(0))
+        {
+            // Select survivor and enter lobby
+            const std::string selectedRole = "survivor";
+            
+            if (m_roleSelectionIsHost)
+            {
+                // Initialize lobby state for host
+                m_lobbyState.players.clear();
+                m_lobbyState.localPlayerNetId = 1;
+                
+                NetLobbyPlayer localPlayer;
+                localPlayer.netId = 1;
+                localPlayer.name = m_roleSelectionPlayerName;
+                localPlayer.selectedRole = selectedRole;
+                localPlayer.isHost = true;
+                localPlayer.isConnected = true;
+                m_lobbyState.players.push_back(localPlayer);
+                
+                m_multiplayerMode = MultiplayerMode::Host;
+                
+                // Start listening for connections
+                if (!m_network.StartHost(m_menuPort, kMaxLobbyPlayers))
+                {
+                    m_menuNetStatus = "Failed to start lobby server.";
+                    TransitionNetworkState(NetworkState::Error, m_menuNetStatus, true);
+                    m_appMode = AppMode::MainMenu;
+                    return;
+                }
+                
+                m_menuNetStatus = "Lobby started. Waiting for players...";
+                TransitionNetworkState(NetworkState::HostListening, "Lobby server started");
+                std::string hostName = "DBD-Host";
+                const char* hostNameEnv = std::getenv("COMPUTERNAME");
+                if (hostNameEnv == nullptr)
+                {
+                    hostNameEnv = std::getenv("HOSTNAME");
+                }
+                if (hostNameEnv != nullptr)
+                {
+                    hostName = hostNameEnv;
+                }
+                m_lanDiscovery.StartHost(
+                    m_lanDiscoveryPort,
+                    m_menuPort,
+                    hostName,
+                    "lobby",
+                    1,
+                    static_cast<int>(kMaxLobbyPlayers),
+                    kProtocolVersion,
+                    kBuildId,
+                    PrimaryLocalIp()
+                );
+            }
+            else
+            {
+                // Client joining
+                m_multiplayerMode = MultiplayerMode::Client;
+                m_lobbyState.players.clear();
+                m_lobbyState.localPlayerNetId = 0;
+                
+                if (!m_network.StartClient(m_menuJoinIp, m_menuPort))
+                {
+                    m_menuNetStatus = "Failed to connect to host.";
+                    TransitionNetworkState(NetworkState::Error, m_menuNetStatus, true);
+                    m_appMode = AppMode::MainMenu;
+                    return;
+                }
+                
+                m_menuNetStatus = "Connecting to " + m_menuJoinIp + ":" + std::to_string(m_menuPort) + "...";
+                TransitionNetworkState(NetworkState::ClientConnecting, m_menuNetStatus);
+            }
+            
+            m_appMode = AppMode::Lobby;
+            ApplyLobbyStateToUi(m_lobbyState);
+            m_lobbyScene.SetLocalPlayerRole(selectedRole);
+            
+            // Configure lobby UI selections
+            const auto survivorCharacters = m_gameplay.ListSurvivorCharacters();
+            const auto killerCharacters = m_gameplay.ListKillerCharacters();
+            const auto survivorItems = m_gameplay.GetLoadoutCatalog().ListItemIds();
+            const auto killerPowers = m_gameplay.GetLoadoutCatalog().ListPowerIds();
+            m_lobbyScene.SetAvailableCharacters(survivorCharacters, survivorCharacters, killerCharacters, killerCharacters);
+            m_lobbyScene.SetAvailableItems(survivorItems, survivorItems);
+            m_lobbyScene.SetAvailablePowers(killerPowers, killerPowers);
+            
+            const auto& perkSystem = m_gameplay.GetPerkSystem();
+            const auto availablePerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Survivor);
+            std::vector<std::string> perkNames;
+            for (const auto& id : availablePerks)
+            {
+                const auto* perk = perkSystem.GetPerk(id);
+                perkNames.push_back(perk ? perk->name : id);
+            }
+            m_lobbyScene.SetAvailablePerks(availablePerks, perkNames);
+            
+            m_lobbyScene.EnterLobby();
+        }
+    }
+    
+    // Killer card (right)
+    {
+        const float cardX = startX + cardWidth + cardSpacing;
+        const engine::ui::UiRect cardRect{cardX, cardY, cardWidth, cardHeight};
+        
+        const bool killerTaken = m_roleSelectionKillerTaken;
+        
+        // Card background
+        glm::vec4 killerColor = killerTaken ? glm::vec4{0.3F, 0.3F, 0.3F, 0.3F} : glm::vec4{theme.colorDanger.r, theme.colorDanger.g, theme.colorDanger.b, 0.15F};
+        m_ui.FillRect(cardRect, killerColor);
+        m_ui.DrawRectOutline(cardRect, 3.0F, killerTaken ? glm::vec4{0.4F, 0.4F, 0.4F, 1.0F} : theme.colorDanger);
+        
+        // Icon area
+        const float iconY = cardY + 30.0F * scale;
+        m_ui.DrawTextLabel(cardX + cardWidth * 0.5F - m_ui.TextWidth("K", 4.0F) * 0.5F, iconY, "K", 
+                          killerTaken ? glm::vec4{0.5F, 0.5F, 0.5F, 1.0F} : theme.colorDanger, 4.0F);
+        
+        // Role name
+        const std::string roleText = "KILLER";
+        m_ui.DrawTextLabel(cardX + cardWidth * 0.5F - m_ui.TextWidth(roleText, 1.4F) * 0.5F, iconY + 80.0F * scale, roleText, 
+                          killerTaken ? glm::vec4{0.5F, 0.5F, 0.5F, 1.0F} : theme.colorText, 1.4F);
+        
+        // Description
+        const std::string descText = "Hunt and sacrifice all\nsurvivors before they escape.";
+        m_ui.DrawTextLabel(cardX + 20.0F * scale, iconY + 130.0F * scale, descText, theme.colorTextMuted, 0.85F);
+        
+        // Player info
+        if (killerTaken && !m_roleSelectionKillerName.empty())
+        {
+            m_ui.DrawTextLabel(cardX + 20.0F * scale, cardY + cardHeight - 100.0F * scale, "Taken by:", glm::vec4{0.6F, 0.6F, 0.6F, 1.0F}, 0.9F);
+            m_ui.DrawTextLabel(cardX + 20.0F * scale, cardY + cardHeight - 75.0F * scale, m_roleSelectionKillerName, glm::vec4{0.7F, 0.4F, 0.4F, 1.0F}, 0.85F);
+        }
+        else
+        {
+            m_ui.DrawTextLabel(cardX + 20.0F * scale, cardY + cardHeight - 100.0F * scale, "Available", theme.colorTextMuted, 0.9F);
+        }
+        
+        // Select button (disabled if taken)
+        const engine::ui::UiRect btnRect{cardX + 20.0F * scale, cardY + cardHeight - 50.0F * scale, cardWidth - 40.0F * scale, 40.0F * scale};
+        const glm::vec2 mousePos = m_input.MousePosition();
+        const bool hovered = !killerTaken && btnRect.Contains(mousePos.x * scaleX, mousePos.y * scaleY);
+        
+        glm::vec4 btnColor = killerTaken ? glm::vec4{0.25F, 0.25F, 0.25F, 0.8F} : (hovered ? theme.colorButtonHover : theme.colorDanger);
+        if (!killerTaken) btnColor.a = 0.9F;
+        m_ui.FillRect(btnRect, btnColor);
+        m_ui.DrawRectOutline(btnRect, 2.0F, killerTaken ? glm::vec4{0.3F, 0.3F, 0.3F, 1.0F} : theme.colorPanelBorder);
+        
+        const std::string btnText = killerTaken ? "TAKEN" : "SELECT";
+        m_ui.DrawTextLabel(btnRect.x + (btnRect.w - m_ui.TextWidth(btnText)) * 0.5F, btnRect.y + 10.0F * scale, btnText, 
+                          killerTaken ? glm::vec4{0.5F, 0.5F, 0.5F, 1.0F} : theme.colorText, 1.0F);
+        
+        if (!killerTaken && hovered && m_input.IsMousePressed(0))
+        {
+            // Select killer and enter lobby
+            const std::string selectedRole = "killer";
+            
+            if (m_roleSelectionIsHost)
+            {
+                // Initialize lobby state for host
+                m_lobbyState.players.clear();
+                m_lobbyState.localPlayerNetId = 1;
+                
+                NetLobbyPlayer localPlayer;
+                localPlayer.netId = 1;
+                localPlayer.name = m_roleSelectionPlayerName;
+                localPlayer.selectedRole = selectedRole;
+                localPlayer.isHost = true;
+                localPlayer.isConnected = true;
+                m_lobbyState.players.push_back(localPlayer);
+                
+                m_multiplayerMode = MultiplayerMode::Host;
+                
+                // Start listening for connections
+                if (!m_network.StartHost(m_menuPort, kMaxLobbyPlayers))
+                {
+                    m_menuNetStatus = "Failed to start lobby server.";
+                    TransitionNetworkState(NetworkState::Error, m_menuNetStatus, true);
+                    m_appMode = AppMode::MainMenu;
+                    return;
+                }
+                
+                m_menuNetStatus = "Lobby started. Waiting for players...";
+                TransitionNetworkState(NetworkState::HostListening, "Lobby server started");
+                std::string hostName = "DBD-Host";
+                const char* hostNameEnv = std::getenv("COMPUTERNAME");
+                if (hostNameEnv == nullptr)
+                {
+                    hostNameEnv = std::getenv("HOSTNAME");
+                }
+                if (hostNameEnv != nullptr)
+                {
+                    hostName = hostNameEnv;
+                }
+                m_lanDiscovery.StartHost(
+                    m_lanDiscoveryPort,
+                    m_menuPort,
+                    hostName,
+                    "lobby",
+                    1,
+                    static_cast<int>(kMaxLobbyPlayers),
+                    kProtocolVersion,
+                    kBuildId,
+                    PrimaryLocalIp()
+                );
+            }
+            else
+            {
+                // Client joining
+                m_multiplayerMode = MultiplayerMode::Client;
+                m_lobbyState.players.clear();
+                m_lobbyState.localPlayerNetId = 0;
+                
+                if (!m_network.StartClient(m_menuJoinIp, m_menuPort))
+                {
+                    m_menuNetStatus = "Failed to connect to host.";
+                    TransitionNetworkState(NetworkState::Error, m_menuNetStatus, true);
+                    m_appMode = AppMode::MainMenu;
+                    return;
+                }
+                
+                m_menuNetStatus = "Connecting to " + m_menuJoinIp + ":" + std::to_string(m_menuPort) + "...";
+                TransitionNetworkState(NetworkState::ClientConnecting, m_menuNetStatus);
+            }
+            
+            m_appMode = AppMode::Lobby;
+            ApplyLobbyStateToUi(m_lobbyState);
+            m_lobbyScene.SetLocalPlayerRole(selectedRole);
+            
+            // Configure lobby UI selections
+            const auto survivorCharacters = m_gameplay.ListSurvivorCharacters();
+            const auto killerCharacters = m_gameplay.ListKillerCharacters();
+            const auto survivorItems = m_gameplay.GetLoadoutCatalog().ListItemIds();
+            const auto killerPowers = m_gameplay.GetLoadoutCatalog().ListPowerIds();
+            m_lobbyScene.SetAvailableCharacters(survivorCharacters, survivorCharacters, killerCharacters, killerCharacters);
+            m_lobbyScene.SetAvailableItems(survivorItems, survivorItems);
+            m_lobbyScene.SetAvailablePowers(killerPowers, killerPowers);
+            
+            const auto& perkSystem = m_gameplay.GetPerkSystem();
+            const auto availablePerks = perkSystem.ListPerks(game::gameplay::perks::PerkRole::Killer);
+            std::vector<std::string> perkNames;
+            for (const auto& id : availablePerks)
+            {
+                const auto* perk = perkSystem.GetPerk(id);
+                perkNames.push_back(perk ? perk->name : id);
+            }
+            m_lobbyScene.SetAvailablePerks(availablePerks, perkNames);
+            
+            m_lobbyScene.EnterLobby();
+        }
+    }
+    
+    // Back button
+    const float backBtnW = 120.0F * scale;
+    const float backBtnH = 40.0F * scale;
+    const engine::ui::UiRect backBtnRect{20.0F * scale, screenH - backBtnH - 20.0F * scale, backBtnW, backBtnH};
+    const bool backHovered = backBtnRect.Contains(mousePos.x * scaleX, mousePos.y * scaleY);
+    
+    glm::vec4 backColor = backHovered ? theme.colorButtonHover : theme.colorButton;
+    m_ui.FillRect(backBtnRect, backColor);
+    m_ui.DrawRectOutline(backBtnRect, 2.0F, theme.colorPanelBorder);
+    m_ui.DrawTextLabel(backBtnRect.x + (backBtnRect.w - m_ui.TextWidth("BACK")) * 0.5F, backBtnRect.y + 10.0F * scale, "BACK", theme.colorText, 0.9F);
+    
+    if (backHovered && m_input.IsMousePressed(0))
+    {
+        m_appMode = AppMode::MainMenu;
+    }
 }
 
 void App::DrawPauseMenuUiCustom(bool* closePauseMenu, bool* backToMenu, bool* shouldQuit)

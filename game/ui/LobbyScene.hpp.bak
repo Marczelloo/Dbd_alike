@@ -5,13 +5,10 @@
 #include <string>
 #include <vector>
 #include <array>
-#include <unordered_map>
 
 #include <glm/vec3.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
-#include "engine/render/Renderer.hpp"
 
 namespace engine::ui
 {
@@ -31,11 +28,6 @@ class Input;
 namespace engine::scene
 {
 class World;
-}
-
-namespace game::gameplay
-{
-class GameplaySystems;
 }
 
 namespace game::ui
@@ -143,13 +135,6 @@ public:
     void SetLocalPlayerItem(const std::string& itemId, const std::string& addonA = "", const std::string& addonB = "");
     void SetLocalPlayerPower(const std::string& powerId, const std::string& addonA = "", const std::string& addonB = "");
 
-    // Connect gameplay systems for mesh loading in lobby
-    void SetGameplaySystems(game::gameplay::GameplaySystems* gp) { m_gameplay = gp; }
-
-    // Show "lobby is full" overlay with reason
-    void ShowLobbyFullMessage(const std::string& reason) { m_lobbyFullMessage = reason; m_showLobbyFull = true; }
-    void ClearLobbyFullMessage() { m_showLobbyFull = false; m_lobbyFullMessage.clear(); }
-
     [[nodiscard]] const LobbySceneState& GetState() const { return m_state; }
     [[nodiscard]] bool IsInLobby() const { return m_isInLobby; }
     
@@ -168,7 +153,6 @@ private:
     void RenderReadyButton();
     void RenderCountdown();
     void RenderMatchSettings();
-    void RenderLobbyFullOverlay();
     
     void DrawFireParticle(const glm::vec3& position, float size, float alpha);
     void DrawGroundPlane();
@@ -177,15 +161,11 @@ private:
     void DrawTrees();
     void DrawRocks();
     void DrawLogs();
-    void DrawFences();
-    void DrawGraves();
-    void DrawFog();
     void DrawPlayerModels();
     void DrawPlayerBody(const LobbyPlayer& player);
-    void DrawPlayerGlbModel(const LobbyPlayer& player);
     
     void DrawUIPanel(float x, float y, float width, float height);
-    void DrawPlayerSlot(float x, float y, float width, float height, int playerIndex, bool isKillerSlot = false);
+    void DrawPlayerSlot(float x, float y, float width, float height, int playerIndex, bool isKillerSlot);
     void DrawRoleSelector(float x, float y, bool dropdownOnly);
     void DrawPerkSlots(float x, float y, bool dropdownOnly);
     void DrawCharacterSelector(float x, float y, bool dropdownOnly);
@@ -197,30 +177,11 @@ private:
     void HandleAddonDropdownClick(float x, float y, bool isAddonA);
     bool isMouseOver(float x, float y, float w, float h) const;
 
-    // Lobby mesh loading for GLB models
-    struct LobbyMeshEntry
-    {
-        engine::render::Renderer::GpuMeshId gpuMesh = engine::render::Renderer::kInvalidGpuMesh;
-        float boundsMinY = 0.0F;
-        float boundsMaxY = 1.8F;
-        float maxAbsXZ = 0.3F;
-        float modelYawDegrees = 0.0F;
-        bool attempted = false;
-    };
-    std::unordered_map<std::string, LobbyMeshEntry> m_lobbyMeshCache;
-    LobbyMeshEntry GetOrLoadLobbyMesh(const std::string& characterId);
-
     engine::ui::UiSystem* m_ui = nullptr;
     engine::render::Renderer* m_renderer = nullptr;
     engine::platform::Input* m_input = nullptr;
-    game::gameplay::GameplaySystems* m_gameplay = nullptr;
     LobbySceneState m_state;
     bool m_isInLobby = false;
-
-    // Lobby full overlay
-    bool m_showLobbyFull = false;
-    std::string m_lobbyFullMessage;
-    bool m_loadoutMenuOpen = false;
     
     float m_cameraAngle = 0.0F;
     float m_cameraHeight = 2.5F;
@@ -260,21 +221,18 @@ private:
     std::vector<std::string> m_killerNames;
     int m_selectedCharacterIndex = 0;
     bool m_characterDropdownOpen = false;
-    int m_characterDropdownStart = 0;
     
     // Item selection
     std::vector<std::string> m_itemIds;
     std::vector<std::string> m_itemNames;
     int m_selectedItemIndex = 0;
     bool m_itemDropdownOpen = false;
-    int m_itemDropdownStart = 0;
     
     // Power selection
     std::vector<std::string> m_powerIds;
     std::vector<std::string> m_powerNames;
     int m_selectedPowerIndex = 0;
     bool m_powerDropdownOpen = false;
-    int m_powerDropdownStart = 0;
     
     // Addon selection
     std::vector<std::string> m_addonIds;
@@ -283,14 +241,10 @@ private:
     int m_selectedAddonBIndex = 0;
     bool m_addonADropdownOpen = false;
     bool m_addonBDropdownOpen = false;
-    int m_addonADropdownStart = 0;
-    int m_addonBDropdownStart = 0;
-    int m_perkDropdownStart = 0;
     
     static constexpr int kMaxKillers = 1;
     static constexpr int kMaxSurvivors = 4;
     static constexpr int kMaxPlayers = kMaxKillers + kMaxSurvivors;
-    static constexpr int kDropdownPageSize = 8;
     static constexpr float kFireRadius = 3.0F;
 };
 
