@@ -592,7 +592,7 @@ public:
     void SpawnSurvivor();
     void SpawnKiller();
     void SpawnPallet();
-    void SpawnWindow();
+    void SpawnWindow(std::optional<float> yawDegrees = std::nullopt);
     bool SpawnRoleHere(const std::string& roleName);
     bool SpawnRoleAt(const std::string& roleName, int spawnId);
     bool RespawnRole(const std::string& roleName);
@@ -1631,6 +1631,19 @@ private:
     bool m_highPolyMeshesGenerated = false;
     bool m_highPolyMeshesUploaded = false;
 
+    // Loop mesh rendering (custom meshes for loop elements)
+    struct LoopMeshInstance
+    {
+        std::string meshPath;  // Path to mesh file
+        engine::render::Renderer::GpuMeshId gpuMesh = engine::render::Renderer::kInvalidGpuMesh;
+        glm::vec3 position{0.0F};
+        float rotationDegrees = 0.0F;
+        glm::vec3 halfExtents{1.0F};  // For frustum culling
+        bool collisionCreated = false;  // Whether collision boxes were created
+    };
+    std::vector<LoopMeshInstance> m_loopMeshes;
+    bool m_loopMeshesUploaded = false;
+    void RenderLoopMeshes(engine::render::Renderer& renderer);
     // Animation system for locomotion (survivor)
     engine::animation::AnimationSystem m_animationSystem;
     bool m_animationDebugEnabled = false;

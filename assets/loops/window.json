@@ -1,0 +1,29 @@
+{
+  "asset_version": 1,
+  "id": "window",
+  "display_name": "Window",
+  "mesh": "assets/meshes/loop_elements/Window.glb",
+  "footprint": {
+    "width": 1,
+    "height": 1
+  },
+  "bounds": {
+    "min": [-1.2, 0.0, -0.2],
+    "max": [1.2, 3.0, 0.2]
+  },
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {
+      "type": "window",
+      "name": "window_opening",
+      "position": [0.0, 1.5, 0.0],
+      "half_extents": [1.2, 1.35, 0.2],
+      "yaw_degrees": 0.0,
+      "pitch_degrees": 0.0,
+      "roll_degrees": 0.0,
+      "marker_tag": "",
+      "transform_locked": false
+    }
+  ]
+}

@@ -39,6 +39,7 @@ struct TriggerVolume
     engine::scene::Entity entity = 0;
     glm::vec3 center{0.0F};
     glm::vec3 halfExtents{0.5F};
+    float yawDegrees = 0.0F;
     TriggerKind kind = TriggerKind::Interaction;
 };
 

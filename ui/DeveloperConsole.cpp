@@ -723,16 +723,38 @@ struct DeveloperConsole::Impl
     int completionCycleIndex = 0;
     std::string lastCompletionInput;
 
+    static std::string SanitizeText(const std::string& text)
+    {
+        std::string sanitized;
+        sanitized.reserve(text.size());
+        for (unsigned char ch : text)
+        {
+            if (ch == '\n' || ch == '\t')
+            {
+                sanitized.push_back(static_cast<char>(ch));
+            }
+            else if (ch >= 32U && ch <= 126U)
+            {
+                sanitized.push_back(static_cast<char>(ch));
+            }
+            else
+            {
+                sanitized.push_back('?');
+            }
+        }
+        return sanitized;
+    }
+
     void AddLog(const std::string& text, const glm::vec4& color = ConsoleColors::Default, bool isCommand = false, int categoryDepth = 0)
     {
-        items.push_back(LogEntry{text, color, isCommand, categoryDepth});
+        items.push_back(LogEntry{SanitizeText(text), color, isCommand, categoryDepth});
         scrollToBottom = true;
     }
 
     void LogCommand(const std::string& text) { AddLog(text, ConsoleColors::Command, true, 0); }
-    void LogSuccess(const std::string& text) { AddLog("âś“ " + text, ConsoleColors::Success, false, 0); }
-    void LogError(const std::string& text) { AddLog("âś— " + text, ConsoleColors::Error, false, 0); }
-    void LogWarning(const std::string& text) { AddLog("âš  " + text, ConsoleColors::Warning, false, 0); }
+    void LogSuccess(const std::string& text) { AddLog("[OK] " + text, ConsoleColors::Success, false, 0); }
+    void LogError(const std::string& text) { AddLog("[ERR] " + text, ConsoleColors::Error, false, 0); }
+    void LogWarning(const std::string& text) { AddLog("[WARN] " + text, ConsoleColors::Warning, false, 0); }
     void LogInfo(const std::string& text) { AddLog(text, ConsoleColors::Info, false, 0); }
     void LogCategory(const std::string& text) { AddLog(text, ConsoleColors::Category, false, 0); }
     void LogValue(const std::string& label, const std::string& value)
@@ -754,10 +776,10 @@ struct DeveloperConsole::Impl
             std::sort(commands.begin(), commands.end(), [](const CommandInfo& a, const CommandInfo& b) {
                 return a.usage < b.usage;
             });
-            AddLog("â–¸ " + category, ConsoleColors::Category);
+            AddLog("> " + category, ConsoleColors::Category);
             for (const CommandInfo& info : commands)
             {
-                AddLog("  - " + info.usage + " â€” " + info.description, ConsoleColors::Info, false, 1);
+                AddLog("  - " + info.usage + " - " + info.description, ConsoleColors::Info, false, 1);
             }
         }
     }
@@ -906,7 +928,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
         });
 
-        // â”€â”€â”€ Profiler commands â”€â”€â”€
+        // --- Profiler commands ---
         RegisterCommand("perf", "Toggle performance profiler overlay", [this](const std::vector<std::string>&, const ConsoleContext& context) {
             if (context.profilerToggle) {
                 context.profilerToggle();
@@ -1048,10 +1070,10 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             LogInfo(context.assetLoaderStats());
         });
 
-        RegisterCommand("spawn survivor|killer|pallet|window", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+        RegisterCommand("spawn survivor|killer|pallet|window [yaw_degrees]", "Spawn gameplay entities", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
             if (context.gameplay == nullptr || tokens.size() < 2)
             {
-                LogError("Usage: spawn survivor|killer|pallet|window");
+                LogError("Usage: spawn survivor|killer|pallet|window [yaw_degrees]");
                 return;
             }
 
@@ -1072,12 +1094,39 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
             }
             else if (tokens[1] == "window")
             {
-                context.gameplay->SpawnWindow();
-                LogSuccess("Spawned window");
+                if (tokens.size() >= 3)
+                {
+                    context.gameplay->SpawnWindow(ParseFloatOr(0.0F, tokens[2]));
+                    LogSuccess("Spawned window (yaw " + tokens[2] + " deg)");
+                }
+                else
+                {
+                    context.gameplay->SpawnWindow();
+                    LogSuccess("Spawned window");
+                }
+                return;
             }
             else
             {
                 LogError("Unknown spawn target");
+            }
+        });
+
+        RegisterCommand("spawn_window_front [yaw_degrees]", "Spawn vaultable window in front of controlled player", [this](const std::vector<std::string>& tokens, const ConsoleContext& context) {
+            if (context.gameplay == nullptr)
+            {
+                LogError("spawn_window_front not available");
+                return;
+            }
+            if (tokens.size() >= 2)
+            {
+                context.gameplay->SpawnWindow(ParseFloatOr(0.0F, tokens[1]));
+                LogSuccess("Spawned window in front of player (yaw " + tokens[1] + " deg)");
+            }
+            else
+            {
+                context.gameplay->SpawnWindow();
+                LogSuccess("Spawned window in front of player");
             }
         });
 
@@ -3081,7 +3130,7 @@ RegisterCommand("clear", "Clear console output", [this](const std::vector<std::s
 
     void ExecuteCommand(const std::string& commandLine, const ConsoleContext& context)
     {
-        LogCommand("Â» " + commandLine);
+        LogCommand("> " + commandLine);
 
         std::vector<std::string> tokens = Tokenize(commandLine);
         if (tokens.empty())
@@ -3827,7 +3876,7 @@ void DeveloperConsole::Render(const ConsoleContext& context, float fps, const ga
 
                         ImGui::SameLine(0.0F, 6.0F);
                         ImGui::PushStyleColor(ImGuiCol_Text, descColor);
-                        ImGui::TextUnformatted(" â€” ");
+                        ImGui::TextUnformatted(" - ");
                         ImGui::SameLine(0.0F, 0.0F);
                         ImGui::TextUnformatted(hint.description.c_str());
                         ImGui::PopStyleColor();

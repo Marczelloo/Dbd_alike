@@ -330,7 +330,47 @@
       ],
       "rotation_degrees": 180,
       "transform_locked": false
-    }
+    },
+    {
+      "loop_id": "plank_wall_with_sides",
+      "tile": [
+        4,
+        3
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "plank_wall_simple",
+      "tile": [
+        5,
+        3
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "plank_window_frame",
+      "tile": [
+        6,
+        3
+      ],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {
+      "loop_id": "plank_single",
+      "tile": [3, 4],
+      "rotation_degrees": 0,
+      "transform_locked": false
+    },
+    {"loop_id": "plank_L_wall", "tile": [5, 4], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_T_wall", "tile": [6, 4], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall", "tile": [7, 4], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_left_end", "tile": [1, 6], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_right_end", "tile": [2, 6], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_wall_simple_new", "tile": [3, 6], "rotation_degrees": 0, "transform_locked": false},
+    {"loop_id": "plank_window_new", "tile": [4, 6], "rotation_degrees": 0, "transform_locked": false}
   ],
   "props": [
     {

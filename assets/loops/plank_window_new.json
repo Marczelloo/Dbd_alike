@@ -1,0 +1,13 @@
+{
+  "asset_version": 1,
+  "id": "plank_window_new",
+  "display_name": "Plank Window (New)",
+  "mesh": "assets/meshes/loop_elements/Window.glb",
+  "footprint": {"width": 1, "height": 1},
+  "bounds": {"min": [-1.0, 0.0, -0.1], "max": [1.0, 3.0, 0.1]},
+  "manual_bounds": true,
+  "manual_footprint": true,
+  "elements": [
+    {"type": "window", "name": "window_opening", "position": [0.0, 1.5, 0.0], "half_extents": [0.6, 1.4, 0.1], "yaw_degrees": 0.0, "pitch_degrees": 0.0, "roll_degrees": 0.0, "marker_tag": "", "transform_locked": false}
+  ]
+}
