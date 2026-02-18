@@ -1,0 +1,31 @@
+{
+  "asset_version": 1,
+  "tokens": {
+    "--bg": "#0F1115",
+    "--surface1": "#1A1D24",
+    "--surface2": "#242830",
+    "--surface3": "#2E333D",
+    "--text": "#EBEFF7",
+    "--text-muted": "#6B7280",
+    "--accent": "#3B82F6",
+    "--accent-hover": "#2563EB",
+    "--danger": "#EF4444",
+    "--success": "#22C55E",
+    "--warning": "#F59E0B",
+    "--border": "#3F4451",
+    "--spacing-xs": 4,
+    "--spacing-sm": 8,
+    "--spacing-md": 16,
+    "--spacing-lg": 24,
+    "--spacing-xl": 32,
+    "--radius-sm": 4,
+    "--radius-md": 8,
+    "--radius-lg": 12,
+    "--radius-xl": 16,
+    "--font-size-sm": 12,
+    "--font-size-md": 16,
+    "--font-size-lg": 20,
+    "--font-size-xl": 28,
+    "--font-size-title": 42
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "asset_version": 1,
+  "id": "main_menu",
+  "root": {
+    "id": "root",
+    "type": "Panel",
+    "layout": {
+      "display": "flex",
+      "flexDirection": "column",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "width": "100%",
+      "height": "100%",
+      "padding": [0, 0, 0, 0]
+    },
+    "style": {
+      "backgroundColor": "#050507"
+    },
+    "children": [
+      {
+        "id": "title_container",
+        "type": "Panel",
+        "layout": {
+          "display": "flex",
+          "flexDirection": "column",
+          "alignItems": "center",
+          "margin": [0, 0, 48, 0]
+        },
+        "style": {
+          "backgroundColor": "transparent"
+        },
+        "children": [
+          {
+            "id": "game_title",
+            "type": "Text",
+            "text": "ASYMMETRIC HORROR",
+            "classes": ["title"],
+            "layout": {
+              "margin": [0, 0, 8, 0]
+            }
+          },
+          {
+            "id": "game_subtitle",
+            "type": "Text",
+            "text": "A multiplayer survival experience",
+            "classes": ["subtitle"]
+          }
+        ]
+      },
+      {
+        "id": "menu_buttons",
+        "type": "Panel",
+        "layout": {
+          "display": "flex",
+          "flexDirection": "column",
+          "gap": 12,
+          "alignItems": "center"
+        },
+        "style": {
+          "backgroundColor": "transparent"
+        },
+        "children": [
+          {
+            "id": "btn_play",
+            "type": "Button",
+            "text": "PLAY",
+            "classes": ["primary"],
+            "layout": {
+              "width": 200,
+              "height": 48
+            }
+          },
+          {
+            "id": "btn_settings",
+            "type": "Button",
+            "text": "SETTINGS",
+            "layout": {
+              "width": 200,
+              "height": 48
+            }
+          },
+          {
+            "id": "btn_quit",
+            "type": "Button",
+            "text": "QUIT",
+            "classes": ["danger"],
+            "layout": {
+              "width": 200,
+              "height": 48
+            }
+          }
+        ]
+      },
+      {
+        "id": "version_text",
+        "type": "Text",
+        "text": "v0.1.0-alpha",
+        "classes": ["subtitle"],
+        "layout": {
+          "position": "absolute",
+          "anchor": [0.5, 0.95],
+          "margin": [0, 0, 0, 0]
+        }
+      }
+    ]
+  }
+}

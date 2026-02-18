@@ -3370,6 +3370,9 @@ bool DeveloperConsole::Initialize(engine::platform::Window& window)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+#ifdef IMGUI_HAS_DOCK
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#endif
 
     ImGui::StyleColorsDark();
 

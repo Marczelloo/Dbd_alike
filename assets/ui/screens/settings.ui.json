@@ -1,0 +1,437 @@
+{
+  "asset_version": 1,
+  "id": "settings",
+  "root": {
+    "id": "root",
+    "type": "Panel",
+    "layout": {
+      "display": "flex",
+      "flexDirection": "row",
+      "width": "100%",
+      "height": "100%",
+      "padding": [0, 0, 0, 0]
+    },
+    "style": {
+      "backgroundColor": "#050507"
+    },
+    "children": [
+      {
+        "id": "sidebar",
+        "type": "Panel",
+        "layout": {
+          "display": "flex",
+          "flexDirection": "column",
+          "width": 240,
+          "height": "100%",
+          "padding": [24, 16, 24, 16],
+          "gap": 8
+        },
+        "style": {
+          "backgroundColor": "#0A0A0D"
+        },
+        "children": [
+          {
+            "id": "sidebar_title",
+            "type": "Text",
+            "text": "SETTINGS",
+            "classes": ["title"],
+            "layout": {
+              "margin": [0, 0, 24, 0]
+            }
+          },
+          {
+            "id": "tab_video",
+            "type": "Button",
+            "text": "Video",
+            "classes": ["menu-item", "settings-tab-button"],
+            "interaction": {
+              "onClickTarget": "tab_content_video",
+              "onClickTabGroupClass": "settings-tab-content",
+              "onClickButtonGroupClass": "settings-tab-button"
+            },
+            "layout": {
+              "width": "100%",
+              "height": 40
+            }
+          },
+          {
+            "id": "tab_audio",
+            "type": "Button",
+            "text": "Audio",
+            "classes": ["menu-item", "settings-tab-button"],
+            "interaction": {
+              "onClickTarget": "tab_content_audio",
+              "onClickTabGroupClass": "settings-tab-content",
+              "onClickButtonGroupClass": "settings-tab-button"
+            },
+            "layout": {
+              "width": "100%",
+              "height": 40
+            }
+          },
+          {
+            "id": "tab_controls",
+            "type": "Button",
+            "text": "Controls",
+            "classes": ["menu-item", "settings-tab-button"],
+            "interaction": {
+              "onClickTarget": "tab_content_controls",
+              "onClickTabGroupClass": "settings-tab-content",
+              "onClickButtonGroupClass": "settings-tab-button"
+            },
+            "layout": {
+              "width": "100%",
+              "height": 40
+            }
+          },
+          {
+            "id": "tab_gameplay",
+            "type": "Button",
+            "text": "Gameplay",
+            "classes": ["menu-item", "settings-tab-button"],
+            "interaction": {
+              "onClickTarget": "tab_content_gameplay",
+              "onClickTabGroupClass": "settings-tab-content",
+              "onClickButtonGroupClass": "settings-tab-button"
+            },
+            "layout": {
+              "width": "100%",
+              "height": 40
+            }
+          }
+        ]
+      },
+      {
+        "id": "content",
+        "type": "Panel",
+        "layout": {
+          "display": "flex",
+          "flexDirection": "column",
+          "flexGrow": 1,
+          "height": "100%",
+          "padding": [32, 32, 32, 32]
+        },
+        "style": {
+          "backgroundColor": "transparent"
+        },
+        "children": [
+          {
+            "id": "tab_content_video",
+            "name": "Video Tab",
+            "type": "Panel",
+            "classes": ["settings-tab-content"],
+            "layout": {
+              "display": "flex",
+              "flexDirection": "column",
+              "gap": 16,
+              "width": "100%",
+              "height": "100%"
+            },
+            "style": {
+              "backgroundColor": "transparent"
+            },
+            "children": [
+              {
+                "id": "video_title",
+                "type": "Text",
+                "text": "Video Settings",
+                "classes": ["title"]
+              },
+              {
+                "id": "video_resolution_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "resolution_label",
+                    "type": "Text",
+                    "text": "Resolution"
+                  },
+                  {
+                    "id": "resolution_dropdown",
+                    "type": "Button",
+                    "text": "1920 x 1080",
+                    "layout": {
+                      "width": 200,
+                      "height": 36
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "video_vsync_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "vsync_label",
+                    "type": "Text",
+                    "text": "V-Sync"
+                  },
+                  {
+                    "id": "vsync_toggle",
+                    "type": "Toggle",
+                    "layout": {
+                      "width": 48,
+                      "height": 24
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "tab_content_audio",
+            "name": "Audio Tab",
+            "type": "Panel",
+            "classes": ["settings-tab-content"],
+            "visibility": "collapsed",
+            "layout": {
+              "display": "flex",
+              "flexDirection": "column",
+              "gap": 16,
+              "width": "100%",
+              "height": "100%"
+            },
+            "style": {
+              "backgroundColor": "transparent"
+            },
+            "children": [
+              {
+                "id": "audio_title",
+                "type": "Text",
+                "text": "Audio Settings",
+                "classes": ["title"]
+              },
+              {
+                "id": "audio_master_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "audio_master_label",
+                    "type": "Text",
+                    "text": "Master Volume"
+                  },
+                  {
+                    "id": "audio_master_slider",
+                    "type": "Slider",
+                    "layout": {
+                      "width": 280,
+                      "height": 24
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "audio_music_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "audio_music_label",
+                    "type": "Text",
+                    "text": "Music Volume"
+                  },
+                  {
+                    "id": "audio_music_slider",
+                    "type": "Slider",
+                    "layout": {
+                      "width": 280,
+                      "height": 24
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "tab_content_controls",
+            "name": "Controls Tab",
+            "type": "Panel",
+            "classes": ["settings-tab-content"],
+            "visibility": "collapsed",
+            "layout": {
+              "display": "flex",
+              "flexDirection": "column",
+              "gap": 16,
+              "width": "100%",
+              "height": "100%"
+            },
+            "style": {
+              "backgroundColor": "transparent"
+            },
+            "children": [
+              {
+                "id": "controls_title",
+                "type": "Text",
+                "text": "Controls Settings",
+                "classes": ["title"]
+              },
+              {
+                "id": "controls_sens_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "controls_sens_label",
+                    "type": "Text",
+                    "text": "Mouse Sensitivity"
+                  },
+                  {
+                    "id": "controls_sens_slider",
+                    "type": "Slider",
+                    "layout": {
+                      "width": 280,
+                      "height": 24
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "tab_content_gameplay",
+            "name": "Gameplay Tab",
+            "type": "Panel",
+            "classes": ["settings-tab-content"],
+            "visibility": "collapsed",
+            "layout": {
+              "display": "flex",
+              "flexDirection": "column",
+              "gap": 16,
+              "width": "100%",
+              "height": "100%"
+            },
+            "style": {
+              "backgroundColor": "transparent"
+            },
+            "children": [
+              {
+                "id": "gameplay_title",
+                "type": "Text",
+                "text": "Gameplay Settings",
+                "classes": ["title"]
+              },
+              {
+                "id": "gameplay_tutorial_row",
+                "type": "Panel",
+                "layout": {
+                  "display": "flex",
+                  "flexDirection": "row",
+                  "justifyContent": "space-between",
+                  "alignItems": "center",
+                  "width": "100%",
+                  "height": 40
+                },
+                "style": {
+                  "backgroundColor": "transparent"
+                },
+                "children": [
+                  {
+                    "id": "gameplay_tutorial_label",
+                    "type": "Text",
+                    "text": "Show Tutorial Tips"
+                  },
+                  {
+                    "id": "gameplay_tutorial_toggle",
+                    "type": "Toggle",
+                    "layout": {
+                      "width": 48,
+                      "height": 24
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "button_row",
+            "type": "Panel",
+            "layout": {
+              "display": "flex",
+              "flexDirection": "row",
+              "justifyContent": "flex-end",
+              "gap": 12,
+              "margin": [24, 0, 0, 0]
+            },
+            "style": {
+              "backgroundColor": "transparent"
+            },
+            "children": [
+              {
+                "id": "btn_cancel",
+                "type": "Button",
+                "text": "Cancel",
+                "layout": {
+                  "width": 120,
+                  "height": 40
+                }
+              },
+              {
+                "id": "btn_apply",
+                "type": "Button",
+                "text": "Apply",
+                "classes": ["primary"],
+                "layout": {
+                  "width": 120,
+                  "height": 40
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

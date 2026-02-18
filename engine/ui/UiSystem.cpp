@@ -7,15 +7,23 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <vector>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <glm/trigonometric.hpp>
 #include <nlohmann/json.hpp>
 
 #include "engine/platform/Input.hpp"
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "external/stb/stb_truetype.h"
+#include <stb_image.h>
+
+#define NANOSVG_IMPLEMENTATION
+#include "external/nanosvg/nanosvg.h"
+#define NANOSVGRAST_IMPLEMENTATION
+#include "external/nanosvg/nanosvgrast.h"
 
 namespace engine::ui
 {
@@ -51,7 +59,8 @@ uniform sampler2D uFontTexture;
 out vec4 FragColor;
 void main() {
     if (vTextured > 0.5) {
-        float alpha = texture(uFontTexture, vUv).r;
+        float coverage = texture(uFontTexture, vUv).r;
+        float alpha = smoothstep(0.08, 0.92, coverage);
         FragColor = vec4(vColor.rgb, vColor.a * alpha);
     } else if (vTextured < -0.5) {
         vec2 center = vec2(0.5, 0.5);
@@ -176,6 +185,7 @@ bool UiSystem::InitializeRenderer()
 
 void UiSystem::ShutdownRenderer()
 {
+    DestroyCachedTextures();
     if (m_fontTexture != 0)
     {
         glDeleteTextures(1, &m_fontTexture);
@@ -229,7 +239,7 @@ bool UiSystem::LoadFontFromPath(const std::string& path)
         return false;
     }
 
-    std::array<unsigned char, 512 * 512> bitmap{};
+    std::vector<unsigned char> bitmap(static_cast<std::size_t>(m_fontAtlasWidth) * static_cast<std::size_t>(m_fontAtlasHeight), 0U);
     std::array<stbtt_bakedchar, 96> baked{};
     const int result = stbtt_BakeFontBitmap(
         m_fontFileData.data(),
@@ -316,6 +326,135 @@ bool UiSystem::InitializeFontAtlas()
         }
     }
     return false;
+}
+
+void UiSystem::DestroyCachedTextures()
+{
+    for (auto& [_, texture] : m_textureCache)
+    {
+        if (texture != 0)
+        {
+            glDeleteTextures(1, &texture);
+        }
+    }
+    m_textureCache.clear();
+}
+
+unsigned int UiSystem::LoadRasterTexture(const std::string& sourcePath)
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    unsigned char* pixels = stbi_load(sourcePath.c_str(), &width, &height, &channels, 4);
+    if (pixels == nullptr || width <= 0 || height <= 0)
+    {
+        if (pixels != nullptr)
+        {
+            stbi_image_free(pixels);
+        }
+        return 0;
+    }
+
+    unsigned int texture = 0;
+    glGenTextures(1, &texture);
+    if (texture == 0)
+    {
+        stbi_image_free(pixels);
+        return 0;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    stbi_image_free(pixels);
+    return texture;
+}
+
+unsigned int UiSystem::LoadSvgTexture(const std::string& sourcePath)
+{
+    NSVGimage* image = nsvgParseFromFile(sourcePath.c_str(), "px", 96.0F);
+    if (image == nullptr)
+    {
+        return 0;
+    }
+
+    const int width = std::max(1, static_cast<int>(std::ceil(image->width)));
+    const int height = std::max(1, static_cast<int>(std::ceil(image->height)));
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U, 0U);
+
+    NSVGrasterizer* rasterizer = nsvgCreateRasterizer();
+    if (rasterizer == nullptr)
+    {
+        nsvgDelete(image);
+        return 0;
+    }
+    nsvgRasterize(rasterizer, image, 0.0F, 0.0F, 1.0F, pixels.data(), width, height, width * 4);
+    nsvgDeleteRasterizer(rasterizer);
+    nsvgDelete(image);
+
+    unsigned int texture = 0;
+    glGenTextures(1, &texture);
+    if (texture == 0)
+    {
+        return 0;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return texture;
+}
+
+unsigned int UiSystem::GetOrCreateTextureForPath(const std::string& sourcePath)
+{
+    if (sourcePath.empty())
+    {
+        return 0;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path resolvedPath(sourcePath);
+    if (resolvedPath.is_relative())
+    {
+        resolvedPath = fs::current_path() / resolvedPath;
+    }
+    resolvedPath = resolvedPath.lexically_normal();
+    const std::string cacheKey = resolvedPath.generic_string();
+
+    auto it = m_textureCache.find(cacheKey);
+    if (it != m_textureCache.end())
+    {
+        return it->second;
+    }
+
+    unsigned int texture = 0;
+    std::string ext = resolvedPath.has_extension() ? resolvedPath.extension().string() : std::string{};
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (ext == ".svg")
+    {
+        texture = LoadSvgTexture(cacheKey);
+    }
+    else
+    {
+        texture = LoadRasterTexture(cacheKey);
+    }
+
+    m_textureCache[cacheKey] = texture;
+    return texture;
 }
 
 bool UiSystem::LoadTheme(const std::string& themePath)
@@ -531,7 +670,6 @@ void UiSystem::EndFrame()
     glUniform2f(m_uniformScreenSize, static_cast<float>(m_screenWidth), static_cast<float>(m_screenHeight));
     glUniform1i(m_uniformFontTexture, 0);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_fontTexture);
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
 
@@ -557,11 +695,18 @@ void UiSystem::EndFrame()
 
         // Draw each batch as a sub-range with its scissor rect.
         GLint vertexOffset = 0;
+        unsigned int currentlyBoundTexture = 0;
         for (const DrawBatch& batch : m_batches)
         {
             if (batch.vertices.empty())
             {
                 continue;
+            }
+            const unsigned int textureToBind = batch.textureId != 0 ? batch.textureId : m_fontTexture;
+            if (currentlyBoundTexture != textureToBind)
+            {
+                glBindTexture(GL_TEXTURE_2D, textureToBind);
+                currentlyBoundTexture = textureToBind;
             }
             const int sx = batch.clip.x;
             const int syTop = batch.clip.y;
@@ -1281,7 +1426,71 @@ void UiSystem::PopIdScope()
 
 void UiSystem::DrawRect(const UiRect& rect, const glm::vec4& color)
 {
-    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
+    EmitQuad(rect, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0);
+}
+
+void UiSystem::DrawRoundedRect(const UiRect& rect, float radius, const glm::vec4& color)
+{
+    const float maxRadius = std::max(0.0F, std::min(rect.w, rect.h) * 0.5F);
+    const float r = std::clamp(radius, 0.0F, maxRadius);
+    if (r <= 0.5F)
+    {
+        DrawRect(rect, color);
+        return;
+    }
+
+    const float centerW = std::max(0.0F, rect.w - 2.0F * r);
+    const float centerH = std::max(0.0F, rect.h - 2.0F * r);
+    if (centerW > 0.001F)
+    {
+        DrawRect(UiRect{rect.x + r, rect.y, centerW, rect.h}, color);
+    }
+    if (centerH > 0.001F)
+    {
+        DrawRect(UiRect{rect.x, rect.y + r, r, centerH}, color);
+        DrawRect(UiRect{rect.x + rect.w - r, rect.y + r, r, centerH}, color);
+    }
+
+    DrawCircle(rect.x + r, rect.y + r, r, color, 24);
+    DrawCircle(rect.x + rect.w - r, rect.y + r, r, color, 24);
+    DrawCircle(rect.x + r, rect.y + rect.h - r, r, color, 24);
+    DrawCircle(rect.x + rect.w - r, rect.y + rect.h - r, r, color, 24);
+}
+
+void UiSystem::DrawRectTransformed(
+    const UiRect& rect,
+    const glm::vec4& color,
+    float rotationDegrees,
+    const glm::vec2& scale,
+    const glm::vec2& translation,
+    const glm::vec2& pivot)
+{
+    const float radians = glm::radians(rotationDegrees);
+    const float c = std::cos(radians);
+    const float s = std::sin(radians);
+
+    const glm::vec2 pivotPoint{
+        rect.x + rect.w * pivot.x + translation.x * m_scale,
+        rect.y + rect.h * pivot.y + translation.y * m_scale
+    };
+
+    auto transformPoint = [&](float x, float y) {
+        glm::vec2 p{x, y};
+        p.x = pivotPoint.x + (p.x - pivotPoint.x) * scale.x;
+        p.y = pivotPoint.y + (p.y - pivotPoint.y) * scale.y;
+        const float dx = p.x - pivotPoint.x;
+        const float dy = p.y - pivotPoint.y;
+        return glm::vec2{
+            pivotPoint.x + dx * c - dy * s,
+            pivotPoint.y + dx * s + dy * c
+        };
+    };
+
+    const glm::vec2 p0 = transformPoint(rect.x, rect.y);
+    const glm::vec2 p1 = transformPoint(rect.x + rect.w, rect.y);
+    const glm::vec2 p2 = transformPoint(rect.x + rect.w, rect.y + rect.h);
+    const glm::vec2 p3 = transformPoint(rect.x, rect.y + rect.h);
+    EmitQuadPoints(p0, p1, p2, p3, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0);
 }
 
 void UiSystem::DrawFullscreenVignette(const glm::vec4& color)
@@ -1304,29 +1513,170 @@ void UiSystem::DrawRectOutline(const UiRect& rect, float thickness, const glm::v
     DrawRect(UiRect{rect.x + rect.w - t, rect.y, t, rect.h}, color);
 }
 
+void UiSystem::DrawRectOutlineTransformed(
+    const UiRect& rect,
+    float thickness,
+    const glm::vec4& color,
+    float rotationDegrees,
+    const glm::vec2& scale,
+    const glm::vec2& translation,
+    const glm::vec2& pivot)
+{
+    const float t = std::max(1.0F, thickness * m_scale);
+    DrawRectTransformed(UiRect{rect.x, rect.y, rect.w, t}, color, rotationDegrees, scale, translation, pivot);
+    DrawRectTransformed(UiRect{rect.x, rect.y + rect.h - t, rect.w, t}, color, rotationDegrees, scale, translation, pivot);
+    DrawRectTransformed(UiRect{rect.x, rect.y, t, rect.h}, color, rotationDegrees, scale, translation, pivot);
+    DrawRectTransformed(UiRect{rect.x + rect.w - t, rect.y, t, rect.h}, color, rotationDegrees, scale, translation, pivot);
+}
+
+void UiSystem::DrawImage(
+    const UiRect& rect,
+    const std::string& sourcePath,
+    const glm::vec4& tint,
+    float rotationDegrees,
+    const glm::vec2& scale,
+    const glm::vec2& translation,
+    const glm::vec2& pivot)
+{
+    const unsigned int texture = GetOrCreateTextureForPath(sourcePath);
+    if (texture == 0)
+    {
+        return;
+    }
+
+    const float radians = glm::radians(rotationDegrees);
+    const float c = std::cos(radians);
+    const float s = std::sin(radians);
+
+    const glm::vec2 pivotPoint{
+        rect.x + rect.w * pivot.x + translation.x * m_scale,
+        rect.y + rect.h * pivot.y + translation.y * m_scale
+    };
+
+    auto transformPoint = [&](float x, float y) {
+        glm::vec2 p{x, y};
+        p.x = pivotPoint.x + (p.x - pivotPoint.x) * scale.x;
+        p.y = pivotPoint.y + (p.y - pivotPoint.y) * scale.y;
+        const float dx = p.x - pivotPoint.x;
+        const float dy = p.y - pivotPoint.y;
+        return glm::vec2{
+            pivotPoint.x + dx * c - dy * s,
+            pivotPoint.y + dx * s + dy * c
+        };
+    };
+
+    const glm::vec2 p0 = transformPoint(rect.x, rect.y);
+    const glm::vec2 p1 = transformPoint(rect.x + rect.w, rect.y);
+    const glm::vec2 p2 = transformPoint(rect.x + rect.w, rect.y + rect.h);
+    const glm::vec2 p3 = transformPoint(rect.x, rect.y + rect.h);
+    EmitQuadPoints(p0, p1, p2, p3, tint, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, texture);
+}
+
+void UiSystem::DrawLine(float x0, float y0, float x1, float y1, float thickness, const glm::vec4& color)
+{
+    const float dx = x1 - x0;
+    const float dy = y1 - y0;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    if (len <= 0.0001F)
+    {
+        return;
+    }
+    const float t = std::max(1.0F, thickness * m_scale) * 0.5F;
+    const float nx = -dy / len;
+    const float ny = dx / len;
+    const glm::vec2 p0{x0 + nx * t, y0 + ny * t};
+    const glm::vec2 p1{x1 + nx * t, y1 + ny * t};
+    const glm::vec2 p2{x1 - nx * t, y1 - ny * t};
+    const glm::vec2 p3{x0 - nx * t, y0 - ny * t};
+    EmitQuadPoints(p0, p1, p2, p3, color, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0);
+}
+
+void UiSystem::DrawCircle(float cx, float cy, float radius, const glm::vec4& color, int segments)
+{
+    const int segCount = std::max(8, segments);
+    const float r = std::max(0.5F, radius);
+    DrawBatch& batch = ActiveBatch(0);
+    auto push = [&](float x, float y) {
+        batch.vertices.push_back(QuadVertex{x, y, 0.0F, 0.0F, color.r, color.g, color.b, color.a, 0.0F});
+    };
+    for (int i = 0; i < segCount; ++i)
+    {
+        const float a0 = (static_cast<float>(i) / static_cast<float>(segCount)) * 6.28318530718F;
+        const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segCount)) * 6.28318530718F;
+        push(cx, cy);
+        push(cx + std::cos(a0) * r, cy + std::sin(a0) * r);
+        push(cx + std::cos(a1) * r, cy + std::sin(a1) * r);
+    }
+}
+
+void UiSystem::DrawCircleOutline(float cx, float cy, float radius, float thickness, const glm::vec4& color, int segments)
+{
+    const int segCount = std::max(8, segments);
+    const float r = std::max(0.5F, radius);
+    for (int i = 0; i < segCount; ++i)
+    {
+        const float a0 = (static_cast<float>(i) / static_cast<float>(segCount)) * 6.28318530718F;
+        const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segCount)) * 6.28318530718F;
+        DrawLine(
+            cx + std::cos(a0) * r,
+            cy + std::sin(a0) * r,
+            cx + std::cos(a1) * r,
+            cy + std::sin(a1) * r,
+            thickness,
+            color);
+    }
+}
+
 float UiSystem::LineHeight(float fontScale) const
 {
     const float s = (m_theme.baseFontSize * m_scale * std::max(0.5F, fontScale)) / m_fontPixelHeight;
     return std::max(1.0F, m_fontLineHeightPx * s);
 }
 
-float UiSystem::TextWidth(std::string_view text, float fontScale) const
+float UiSystem::TextWidth(std::string_view text, float fontScale, float letterSpacing) const
 {
     const float s = (m_theme.baseFontSize * m_scale * fontScale) / m_fontPixelHeight;
-    float width = 0.0F;
+    const float extraSpacing = letterSpacing;
+    float lineWidth = 0.0F;
+    float maxWidth = 0.0F;
+    bool hasGlyphOnLine = false;
     for (char ch : text)
     {
-        if (ch < 32 || ch > 126)
+        if (ch == '\n')
         {
-            width += 6.0F * s;
+            maxWidth = std::max(maxWidth, lineWidth);
+            lineWidth = 0.0F;
+            hasGlyphOnLine = false;
             continue;
         }
-        width += m_glyphs[static_cast<std::size_t>(ch - 32)].xadvance * s;
+        if (ch < 32 || ch > 126)
+        {
+            lineWidth += 6.0F * s;
+            if (hasGlyphOnLine)
+            {
+                lineWidth += extraSpacing;
+            }
+            hasGlyphOnLine = true;
+            continue;
+        }
+        lineWidth += m_glyphs[static_cast<std::size_t>(ch - 32)].xadvance * s;
+        if (hasGlyphOnLine)
+        {
+            lineWidth += extraSpacing;
+        }
+        hasGlyphOnLine = true;
     }
-    return width;
+    return std::max(maxWidth, lineWidth);
 }
 
-void UiSystem::DrawText(float x, float y, std::string_view text, const glm::vec4& color, float fontScale)
+void UiSystem::DrawText(
+    float x,
+    float y,
+    std::string_view text,
+    const glm::vec4& color,
+    float fontScale,
+    float italicSkew,
+    float letterSpacing)
 {
     if (m_glyphs.empty())
     {
@@ -1335,21 +1685,29 @@ void UiSystem::DrawText(float x, float y, std::string_view text, const glm::vec4
     const float s = (m_theme.baseFontSize * m_scale * fontScale) / m_fontPixelHeight;
     float penX = x;
     float penY = y + m_fontBaselinePx * s;
+    const float extraSpacing = letterSpacing;
+    bool hasGlyphOnLine = false;
     for (char ch : text)
     {
         if (ch == '\n')
         {
             penX = x;
             penY += LineHeight(fontScale);
+            hasGlyphOnLine = false;
             continue;
         }
         if (ch < 32 || ch > 126)
         {
             penX += 6.0F * s;
+            if (hasGlyphOnLine)
+            {
+                penX += extraSpacing;
+            }
+            hasGlyphOnLine = true;
             continue;
         }
         const BakedGlyph& g = m_glyphs[static_cast<std::size_t>(ch - 32)];
-        const float gx0 = penX + g.xoff * s;
+        const float gx0 = penX + g.xoff * s + g.yoff * s * italicSkew;
         const float gy0 = penY + g.yoff * s;
         const float gx1 = gx0 + static_cast<float>(g.x1 - g.x0) * s;
         const float gy1 = gy0 + static_cast<float>(g.y1 - g.y0) * s;
@@ -1359,12 +1717,17 @@ void UiSystem::DrawText(float x, float y, std::string_view text, const glm::vec4
         const float v1 = static_cast<float>(g.y1) / static_cast<float>(m_fontAtlasHeight);
         EmitTexturedQuad(gx0, gy0, gx1, gy1, u0, v0, u1, v1, color);
         penX += g.xadvance * s;
+        if (hasGlyphOnLine)
+        {
+            penX += extraSpacing;
+        }
+        hasGlyphOnLine = true;
     }
 }
 
-void UiSystem::DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale)
+void UiSystem::DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale, float italicSkew, float letterSpacing)
 {
-    DrawText(x, y, text, color, fontScale);
+    DrawText(x, y, text, color, fontScale, italicSkew, letterSpacing);
 }
 
 void UiSystem::PushClipRect(const UiRect& rect)
@@ -1411,46 +1774,71 @@ UiSystem::ClipRect UiSystem::CurrentClipRect() const
     return m_clipStack.back();
 }
 
-UiSystem::DrawBatch& UiSystem::ActiveBatch()
+UiSystem::DrawBatch& UiSystem::ActiveBatch(unsigned int textureId)
 {
     const ClipRect clip = CurrentClipRect();
     if (m_batches.empty())
     {
-        m_batches.push_back(DrawBatch{clip, {}});
+        m_batches.push_back(DrawBatch{clip, textureId, {}});
         m_batches.back().vertices.reserve(1024);
         return m_batches.back();
     }
     DrawBatch& last = m_batches.back();
-    if (last.clip.x != clip.x || last.clip.y != clip.y || last.clip.w != clip.w || last.clip.h != clip.h)
+    if (last.textureId != textureId
+        || last.clip.x != clip.x || last.clip.y != clip.y || last.clip.w != clip.w || last.clip.h != clip.h)
     {
-        m_batches.push_back(DrawBatch{clip, {}});
+        m_batches.push_back(DrawBatch{clip, textureId, {}});
         m_batches.back().vertices.reserve(1024);
         return m_batches.back();
     }
     return last;
 }
 
-void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, float mode)
+void UiSystem::EmitQuadPoints(
+    const glm::vec2& p0,
+    const glm::vec2& p1,
+    const glm::vec2& p2,
+    const glm::vec2& p3,
+    const glm::vec4& color,
+    float u0,
+    float v0,
+    float u1,
+    float v1,
+    float mode,
+    unsigned int textureId)
 {
-    DrawBatch& batch = ActiveBatch();
-    auto push = [&](float x, float y, float u, float v) {
-        batch.vertices.push_back(QuadVertex{x, y, u, v, color.r, color.g, color.b, color.a, mode});
+    DrawBatch& batch = ActiveBatch(textureId);
+    auto push = [&](const glm::vec2& p, float u, float v) {
+        batch.vertices.push_back(QuadVertex{p.x, p.y, u, v, color.r, color.g, color.b, color.a, mode});
     };
+    push(p0, u0, v0);
+    push(p1, u1, v0);
+    push(p2, u1, v1);
+    push(p0, u0, v0);
+    push(p2, u1, v1);
+    push(p3, u0, v1);
+}
+
+void UiSystem::EmitQuad(const UiRect& rect, const glm::vec4& color, float u0, float v0, float u1, float v1, float mode, unsigned int textureId)
+{
     const float x0 = rect.x;
     const float y0 = rect.y;
     const float x1 = rect.x + rect.w;
     const float y1 = rect.y + rect.h;
-    push(x0, y0, u0, v0);
-    push(x1, y0, u1, v0);
-    push(x1, y1, u1, v1);
-    push(x0, y0, u0, v0);
-    push(x1, y1, u1, v1);
-    push(x0, y1, u0, v1);
+    EmitQuadPoints(
+        glm::vec2{x0, y0},
+        glm::vec2{x1, y0},
+        glm::vec2{x1, y1},
+        glm::vec2{x0, y1},
+        color,
+        u0, v0, u1, v1,
+        mode,
+        textureId);
 }
 
-void UiSystem::EmitTexturedQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const glm::vec4& color)
+void UiSystem::EmitTexturedQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const glm::vec4& color, unsigned int textureId)
 {
-    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, 1.0F);
+    EmitQuad(UiRect{x0, y0, x1 - x0, y1 - y0}, color, u0, v0, u1, v1, 1.0F, textureId);
 }
 
 std::uint32_t UiSystem::HashString(const std::string& value) const

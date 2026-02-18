@@ -1,0 +1,159 @@
+{
+  "asset_version": 1,
+  "rules": [
+    {
+      "selector": "Panel",
+      "properties": {
+        "backgroundColor": "var(--surface1)",
+        "radius": "var(--radius-md)",
+        "padding": [16, 16, 16, 16]
+      }
+    },
+    {
+      "selector": "Text",
+      "properties": {
+        "textColor": "var(--text)",
+        "opacity": 1.0
+      }
+    },
+    {
+      "selector": "Button",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "textColor": "var(--text)",
+        "radius": "var(--radius-md)",
+        "padding": [12, 24, 12, 24]
+      }
+    },
+    {
+      "selector": "Button:hover",
+      "properties": {
+        "backgroundColor": "var(--surface3)"
+      }
+    },
+    {
+      "selector": "Button:pressed",
+      "properties": {
+        "backgroundColor": "var(--accent)"
+      }
+    },
+    {
+      "selector": "Button:disabled",
+      "properties": {
+        "opacity": 0.5
+      }
+    },
+    {
+      "selector": "Button.primary",
+      "properties": {
+        "backgroundColor": "var(--accent)",
+        "textColor": "#FFFFFF"
+      }
+    },
+    {
+      "selector": "Button.primary:hover",
+      "properties": {
+        "backgroundColor": "var(--accent-hover)"
+      }
+    },
+    {
+      "selector": "Button.danger",
+      "properties": {
+        "backgroundColor": "var(--danger)",
+        "textColor": "#FFFFFF"
+      }
+    },
+    {
+      "selector": "Slider",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "radius": "var(--radius-sm)",
+        "padding": [4, 8, 4, 8]
+      }
+    },
+    {
+      "selector": "Toggle",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "radius": "var(--radius-sm)"
+      }
+    },
+    {
+      "selector": "Toggle:checked",
+      "properties": {
+        "backgroundColor": "var(--accent)"
+      }
+    },
+    {
+      "selector": "TextInput",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "textColor": "var(--text)",
+        "radius": "var(--radius-sm)",
+        "padding": [8, 12, 8, 12],
+        "strokeColor": "var(--border)",
+        "strokeWidth": 1
+      }
+    },
+    {
+      "selector": "TextInput:focus",
+      "properties": {
+        "strokeColor": "var(--accent)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "selector": "ProgressBar",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "radius": "var(--radius-sm)"
+      }
+    },
+    {
+      "selector": "ScrollView",
+      "properties": {
+        "backgroundColor": "var(--surface1)"
+      }
+    },
+    {
+      "selector": ".title",
+      "properties": {
+        "textColor": "var(--text)"
+      }
+    },
+    {
+      "selector": ".subtitle",
+      "properties": {
+        "textColor": "var(--text-muted)"
+      }
+    },
+    {
+      "selector": ".card",
+      "properties": {
+        "backgroundColor": "var(--surface2)",
+        "radius": "var(--radius-lg)",
+        "padding": [16, 16, 16, 16]
+      }
+    },
+    {
+      "selector": ".menu-item",
+      "properties": {
+        "padding": [12, 16, 12, 16],
+        "radius": "var(--radius-sm)"
+      }
+    },
+    {
+      "selector": ".menu-item:hover",
+      "properties": {
+        "backgroundColor": "var(--surface3)"
+      }
+    },
+    {
+      "selector": ".menu-item:selected",
+      "properties": {
+        "backgroundColor": "var(--accent)",
+        "textColor": "#FFFFFF"
+      }
+    }
+  ]
+}

@@ -120,6 +120,11 @@ set(ENGINE_SOURCES
     engine/scene/World.cpp
     engine/ui/UiSystem.cpp
     engine/ui/ProfilerOverlay.cpp
+    engine/ui/UiStyle.cpp
+    engine/ui/UiTree.cpp
+    engine/ui/UiStyleSheet.cpp
+    engine/ui/UiSerialization.cpp
+    engine/ui/UiAnimation.cpp
     game/ui/LoadingScreen.cpp
     game/ui/LoadingManager.cpp
     game/ui/SkillCheckWheel.cpp
@@ -138,6 +143,13 @@ set(ENGINE_SOURCES
     ui/DeveloperConsole.cpp
     ui/DeveloperToolbar.cpp
 )
+
+# Add UI editor files if ImGui is enabled
+if(BUILD_IMGUI)
+    list(APPEND ENGINE_SOURCES
+        ui/editor/UiEditor.cpp
+    )
+endif()
 
 add_executable(asym_horror ${ENGINE_SOURCES})
 

@@ -303,6 +303,60 @@ void DeveloperToolbar::Render(const ToolbarContext& context)
             {
                 ImGui::PopStyleColor(2);
             }
+            ImGui::SameLine();
+        }
+
+        if (context.showUiEditor != nullptr)
+        {
+            const bool uiEditorActive = *context.showUiEditor;
+            if (uiEditorActive)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.12f, 0.6f, 0.6f, 0.8f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.12f, 0.7f, 0.7f, 1.0f));
+            }
+
+            if (ImGui::Button("UI Editor (F10)"))
+            {
+                *context.showUiEditor = !*context.showUiEditor;
+                if (context.showRuntimeUiOverlay != nullptr && *context.showUiEditor)
+                {
+                    *context.showRuntimeUiOverlay = true;
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Toggle in-engine runtime UI editor (F10)");
+            }
+
+            if (uiEditorActive)
+            {
+                ImGui::PopStyleColor(2);
+            }
+            ImGui::SameLine();
+        }
+
+        if (context.showRuntimeUiOverlay != nullptr)
+        {
+            const bool overlayActive = *context.showRuntimeUiOverlay;
+            if (overlayActive)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.15f, 0.5f, 0.5f, 0.8f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.15f, 0.6f, 0.6f, 1.0f));
+            }
+
+            if (ImGui::Button("UI Overlay"))
+            {
+                *context.showRuntimeUiOverlay = !*context.showRuntimeUiOverlay;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Toggle retained runtime UI overlay rendering");
+            }
+
+            if (overlayActive)
+            {
+                ImGui::PopStyleColor(2);
+            }
         }
 
         ImGui::PopStyleColor(3);

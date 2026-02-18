@@ -26,6 +26,8 @@ struct ToolbarContext
     bool* showControlsWindow = nullptr;
     bool* showUiTestPanel = nullptr;
     bool* showLoadingScreenTestPanel = nullptr;
+    bool* showUiEditor = nullptr;
+    bool* showRuntimeUiOverlay = nullptr;
     std::function<void()> profilerToggle;
 
     float fps = 0.0f;

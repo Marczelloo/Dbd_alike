@@ -21,6 +21,8 @@
 #include "engine/render/SceneCaptureFBO.hpp"
 #include "engine/render/WraithCloakRenderer.hpp"
 #include "engine/ui/UiSystem.hpp"
+#include "engine/ui/UiTree.hpp"
+#include "engine/ui/UiStyle.hpp"
 #include "game/editor/LevelEditor.hpp"
 #include "game/gameplay/GameplaySystems.hpp"
 #include "game/ui/LoadingManager.hpp"
@@ -32,6 +34,9 @@
 #include "engine/ui/ProfilerOverlay.hpp"
 #include "ui/DeveloperConsole.hpp"
 #include "ui/DeveloperToolbar.hpp"
+#if BUILD_WITH_IMGUI
+#include "ui/editor/UiEditor.hpp"
+#endif
 
 namespace engine::core
 {
@@ -172,6 +177,7 @@ private:
         RoleSelection,
         Lobby,
         Editor,
+        UiEditor,
         InGame,
         Loading
     };
@@ -366,6 +372,10 @@ private:
     void DrawNetworkStatusUi(double nowSeconds);
     void DrawNetworkOverlayUi(double nowSeconds);
     void DrawPlayersDebugUi(double nowSeconds);
+    bool InitializeRuntimeUiSystem();
+    bool LoadRuntimeUiScreen(const std::string& screenPath);
+    void RenderRuntimeUiOverlay(float deltaSeconds);
+    void RenderRuntimeUiEditorPanel();
     static std::string RoleNameFromIndex(int index);
     static std::string MapNameFromIndex(int index);
     [[nodiscard]] bool LoadControlsConfig();
@@ -455,6 +465,20 @@ private:
     bool m_useLegacyImGuiMenus = false;
     bool m_showUiTestPanel = false;
     bool m_showLoadingScreenTestPanel = false;
+    bool m_showRuntimeUiOverlay = false;
+    int m_runtimeUiScreenIndex = 2; // 0=main menu, 1=settings, 2=in-game HUD
+    std::array<std::string, 3> m_runtimeUiScreens{
+        "assets/ui/screens/main_menu.ui.json",
+        "assets/ui/screens/settings.ui.json",
+        "assets/ui/screens/in_game_hud.ui.json",
+    };
+
+    engine::ui::UiTree m_runtimeUiTree;
+    engine::ui::StyleSheet m_runtimeUiStyleSheet;
+    engine::ui::TokenCollection m_runtimeUiTokens;
+#if BUILD_WITH_IMGUI
+    engine::ui::UiEditor m_runtimeUiEditor;
+#endif
 
     struct HudLayoutSettings
     {

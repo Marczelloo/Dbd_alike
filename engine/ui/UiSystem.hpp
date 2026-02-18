@@ -123,10 +123,44 @@ public:
 
     // Low-level drawing (public for custom HUD panels with drag headers)
     void DrawRect(const UiRect& rect, const glm::vec4& color);
+    void DrawRoundedRect(const UiRect& rect, float radius, const glm::vec4& color);
+    void DrawRectTransformed(
+        const UiRect& rect,
+        const glm::vec4& color,
+        float rotationDegrees,
+        const glm::vec2& scale = glm::vec2(1.0F, 1.0F),
+        const glm::vec2& translation = glm::vec2(0.0F, 0.0F),
+        const glm::vec2& pivot = glm::vec2(0.5F, 0.5F));
     void DrawRectOutline(const UiRect& rect, float thickness, const glm::vec4& color);
-    void DrawTextLabel(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
+    void DrawRectOutlineTransformed(
+        const UiRect& rect,
+        float thickness,
+        const glm::vec4& color,
+        float rotationDegrees,
+        const glm::vec2& scale = glm::vec2(1.0F, 1.0F),
+        const glm::vec2& translation = glm::vec2(0.0F, 0.0F),
+        const glm::vec2& pivot = glm::vec2(0.5F, 0.5F));
+    void DrawImage(
+        const UiRect& rect,
+        const std::string& sourcePath,
+        const glm::vec4& tint = glm::vec4(1.0F, 1.0F, 1.0F, 1.0F),
+        float rotationDegrees = 0.0F,
+        const glm::vec2& scale = glm::vec2(1.0F, 1.0F),
+        const glm::vec2& translation = glm::vec2(0.0F, 0.0F),
+        const glm::vec2& pivot = glm::vec2(0.5F, 0.5F));
+    void DrawLine(float x0, float y0, float x1, float y1, float thickness, const glm::vec4& color);
+    void DrawCircle(float cx, float cy, float radius, const glm::vec4& color, int segments = 32);
+    void DrawCircleOutline(float cx, float cy, float radius, float thickness, const glm::vec4& color, int segments = 32);
+    void DrawTextLabel(
+        float x,
+        float y,
+        std::string_view text,
+        const glm::vec4& color,
+        float fontScale = 1.0F,
+        float italicSkew = 0.0F,
+        float letterSpacing = 0.0F);
     void DrawFullscreenVignette(const glm::vec4& color);
-    [[nodiscard]] float TextWidth(std::string_view text, float fontScale = 1.0F) const;
+    [[nodiscard]] float TextWidth(std::string_view text, float fontScale = 1.0F, float letterSpacing = 0.0F) const;
     [[nodiscard]] float LineHeight(float fontScale = 1.0F) const;
 
 private:
@@ -184,6 +218,7 @@ private:
     struct DrawBatch
     {
         ClipRect clip{};
+        unsigned int textureId = 0;
         std::vector<QuadVertex> vertices;
     };
 
@@ -203,6 +238,10 @@ private:
     void ShutdownRenderer();
     bool InitializeFontAtlas();
     bool LoadFontFromPath(const std::string& path);
+    [[nodiscard]] unsigned int GetOrCreateTextureForPath(const std::string& sourcePath);
+    [[nodiscard]] unsigned int LoadRasterTexture(const std::string& sourcePath);
+    [[nodiscard]] unsigned int LoadSvgTexture(const std::string& sourcePath);
+    void DestroyCachedTextures();
     [[nodiscard]] std::vector<std::string> CandidateFontPaths(const std::string& requested) const;
 
     void ProcessInput();
@@ -212,12 +251,19 @@ private:
     [[nodiscard]] glm::vec2 MousePositionUi() const;
     [[nodiscard]] bool IsFocusableWidget(const std::string& id) const;
 
-    void DrawText(float x, float y, std::string_view text, const glm::vec4& color, float fontScale = 1.0F);
+    void DrawText(
+        float x,
+        float y,
+        std::string_view text,
+        const glm::vec4& color,
+        float fontScale = 1.0F,
+        float italicSkew = 0.0F,
+        float letterSpacing = 0.0F);
 
     void PushClipRect(const UiRect& rect);
     void PopClipRect();
     [[nodiscard]] ClipRect CurrentClipRect() const;
-    DrawBatch& ActiveBatch();
+    DrawBatch& ActiveBatch(unsigned int textureId = 0);
     void EmitQuad(
         const UiRect& rect,
         const glm::vec4& color,
@@ -225,7 +271,21 @@ private:
         float v0,
         float u1,
         float v1,
-        float mode
+        float mode,
+        unsigned int textureId = 0
+    );
+    void EmitQuadPoints(
+        const glm::vec2& p0,
+        const glm::vec2& p1,
+        const glm::vec2& p2,
+        const glm::vec2& p3,
+        const glm::vec4& color,
+        float u0,
+        float v0,
+        float u1,
+        float v1,
+        float mode,
+        unsigned int textureId = 0
     );
     void EmitTexturedQuad(
         float x0,
@@ -236,7 +296,8 @@ private:
         float v0,
         float u1,
         float v1,
-        const glm::vec4& color
+        const glm::vec4& color,
+        unsigned int textureId = 0
     );
 
     [[nodiscard]] std::uint32_t HashString(const std::string& value) const;
@@ -287,10 +348,11 @@ private:
 
     std::vector<unsigned char> m_fontFileData;
     std::vector<BakedGlyph> m_glyphs;
-    int m_fontAtlasWidth = 512;
-    int m_fontAtlasHeight = 512;
-    float m_fontPixelHeight = 42.0F;
+    int m_fontAtlasWidth = 1024;
+    int m_fontAtlasHeight = 1024;
+    float m_fontPixelHeight = 72.0F;
     float m_fontBaselinePx = 0.0F;
     float m_fontLineHeightPx = 42.0F;
+    std::unordered_map<std::string, unsigned int> m_textureCache;
 };
 } // namespace engine::ui

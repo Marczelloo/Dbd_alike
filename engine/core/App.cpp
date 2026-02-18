@@ -30,6 +30,7 @@
 #include <nlohmann/json.hpp>
 
 #include "game/editor/LevelAssets.hpp"
+#include "engine/ui/UiSerialization.hpp"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -309,6 +310,153 @@ bool DeserializeFxSpawnEvent(const std::vector<std::uint8_t>& buffer, engine::fx
     return true;
 }
 } // namespace
+
+bool App::InitializeRuntimeUiSystem()
+{
+    m_runtimeUiTree.SetVirtualResolution(1920, 1080, engine::ui::VirtualResolution::ScaleMode::FitHeight);
+    m_runtimeUiTree.SetScreenSize(m_window.FramebufferWidth(), m_window.FramebufferHeight());
+
+    const std::string stylePath = "assets/ui/styles/base.ui.css.json";
+    const std::string tokensPath = "assets/ui/styles/theme_default.tokens.json";
+
+#if BUILD_WITH_IMGUI
+    m_runtimeUiEditor.Initialize(&m_runtimeUiTree);
+    m_runtimeUiEditor.SetMode(engine::ui::EditorMode::None);
+
+    const bool styleLoaded = m_runtimeUiEditor.LoadStyleSheet(stylePath);
+    const bool tokensLoaded = m_runtimeUiEditor.LoadTokens(tokensPath);
+    const bool screenLoaded = m_runtimeUiEditor.LoadScreen(m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)]);
+
+    if (!styleLoaded)
+    {
+        m_console.Print("[UI] Failed to load style: " + stylePath);
+    }
+    if (!tokensLoaded)
+    {
+        m_console.Print("[UI] Failed to load tokens: " + tokensPath);
+    }
+    if (!screenLoaded)
+    {
+        m_console.Print("[UI] Failed to load screen: " + m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)]);
+    }
+    return styleLoaded && tokensLoaded && screenLoaded;
+#else
+    const bool styleLoaded = engine::ui::LoadStyleSheet(stylePath, m_runtimeUiStyleSheet);
+    const bool tokensLoaded = engine::ui::LoadTokens(tokensPath, m_runtimeUiTokens);
+    if (styleLoaded)
+    {
+        m_runtimeUiTree.SetStyleSheet(&m_runtimeUiStyleSheet);
+    }
+    if (tokensLoaded)
+    {
+        m_runtimeUiTree.SetTokens(&m_runtimeUiTokens);
+    }
+    const bool screenLoaded = LoadRuntimeUiScreen(m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)]);
+    return styleLoaded && tokensLoaded && screenLoaded;
+#endif
+}
+
+bool App::LoadRuntimeUiScreen(const std::string& screenPath)
+{
+#if BUILD_WITH_IMGUI
+    const bool loaded = m_runtimeUiEditor.LoadScreen(screenPath);
+    if (!loaded)
+    {
+        return false;
+    }
+#else
+    auto root = engine::ui::LoadScreen(screenPath);
+    if (!root)
+    {
+        return false;
+    }
+    m_runtimeUiTree.SetRoot(std::move(root));
+#endif
+
+    for (std::size_t i = 0; i < m_runtimeUiScreens.size(); ++i)
+    {
+        if (m_runtimeUiScreens[i] == screenPath)
+        {
+            m_runtimeUiScreenIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    return true;
+}
+
+void App::RenderRuntimeUiOverlay(float deltaSeconds)
+{
+    if (m_appMode != AppMode::UiEditor || !m_showRuntimeUiOverlay)
+    {
+        return;
+    }
+
+    m_runtimeUiTree.SetScreenSize(m_window.FramebufferWidth(), m_window.FramebufferHeight());
+
+    const bool interactiveRuntimeUi = !m_console.IsOpen() && !m_pauseMenuOpen;
+    if (interactiveRuntimeUi)
+    {
+        m_runtimeUiTree.ProcessInput(&m_input, deltaSeconds);
+    }
+    m_runtimeUiTree.ComputeLayout();
+
+    m_runtimeUiTree.RenderToUiSystem(m_ui);
+}
+
+void App::RenderRuntimeUiEditorPanel()
+{
+#if BUILD_WITH_IMGUI
+    if (m_appMode != AppMode::UiEditor)
+    {
+        m_runtimeUiEditor.SetMode(engine::ui::EditorMode::None);
+        return;
+    }
+
+    m_runtimeUiEditor.Render();
+
+    ImGui::SetNextWindowBgAlpha(0.92F);
+    if (ImGui::Begin("UI Runtime Tools", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Dedicated UI Editor Mode");
+        ImGui::Checkbox("Show Runtime Preview Overlay", &m_showRuntimeUiOverlay);
+
+        static const char* kScreenNames[] = {"Main Menu", "Settings", "In-Game HUD"};
+        int selected = m_runtimeUiScreenIndex;
+        if (ImGui::Combo("Screen", &selected, kScreenNames, 3))
+        {
+            if (!LoadRuntimeUiScreen(m_runtimeUiScreens[static_cast<std::size_t>(selected)]))
+            {
+                m_console.Print("[UI] Failed to switch screen");
+            }
+        }
+
+        if (ImGui::Button("Save Screen"))
+        {
+            if (!m_runtimeUiEditor.SaveCurrentScreen())
+            {
+                m_console.Print("[UI] Save failed (no active screen path)");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reload Screen"))
+        {
+            const std::string path = m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)];
+            if (!LoadRuntimeUiScreen(path))
+            {
+                m_console.Print("[UI] Reload failed: " + path);
+            }
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Back To Main Menu"))
+        {
+            ResetToMainMenu();
+        }
+        ImGui::TextUnformatted("Save writes back to /assets/ui/screens/*.json");
+    }
+    ImGui::End();
+#endif
+}
 
 bool App::Run()
 {
@@ -685,12 +833,17 @@ bool App::Run()
         return false;
     }
     m_console.Print("Build: " + std::string(kBuildId));
-        if (!m_devToolbar.Initialize(m_window))
-        {
-            m_console.Shutdown();
-            CloseNetworkLogFile();
-            return false;
-        }
+    if (!m_devToolbar.Initialize(m_window))
+    {
+        m_console.Shutdown();
+        CloseNetworkLogFile();
+        return false;
+    }
+
+    if (!InitializeRuntimeUiSystem())
+    {
+        m_console.Print("[UI] Runtime UI initialized with missing assets. Editor and overlay may be incomplete.");
+    }
     float currentFps = 0.0F;
     double fpsAccumulator = 0.0;
     int fpsFrames = 0;
@@ -720,8 +873,9 @@ bool App::Run()
 
         const bool inGame = m_appMode == AppMode::InGame;
         const bool inEditor = m_appMode == AppMode::Editor;
+        const bool inUiEditor = m_appMode == AppMode::UiEditor;
         const bool inLobby = m_appMode == AppMode::Lobby;
-        if ((inGame || inEditor || inLobby) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
+        if ((inGame || inEditor || inUiEditor || inLobby) && !m_console.IsOpen() && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
         {
             if (inGame)
             {
@@ -739,7 +893,11 @@ bool App::Run()
         }
 
         const bool altHeld = m_input.IsKeyDown(GLFW_KEY_LEFT_ALT) || m_input.IsKeyDown(GLFW_KEY_RIGHT_ALT);
-        const bool controlsEnabled = (inGame || inEditor) && !m_pauseMenuOpen && !m_console.IsOpen() && !m_settingsMenuOpen && !altHeld;
+        const bool controlsEnabled = (inGame || inEditor)
+                                  && !m_pauseMenuOpen
+                                  && !m_console.IsOpen()
+                                  && !m_settingsMenuOpen
+                                  && !altHeld;
         m_window.SetCursorCaptured(inGame && controlsEnabled);
 
         if (m_input.IsKeyPressed(GLFW_KEY_F11))
@@ -794,7 +952,6 @@ bool App::Run()
             m_statusToastMessage = m_wraithCloakEnabled ? "Cloak ON" : "Cloak OFF";
             m_statusToastUntilSeconds = glfwGetTime() + 1.5;
         }
-
         if (inGame && m_multiplayerMode == MultiplayerMode::Solo && controlsEnabled && m_input.IsKeyPressed(GLFW_KEY_TAB))
         {
             m_gameplay.ToggleControlledRole();
@@ -872,6 +1029,10 @@ bool App::Run()
                 m_window.FramebufferHeight()
             );
         }
+        else if (inUiEditor)
+        {
+            m_runtimeUiTree.SetScreenSize(m_window.FramebufferWidth(), m_window.FramebufferHeight());
+        }
         {
             PROFILE_SCOPE("Audio");
             m_audio.Update(static_cast<float>(m_time.DeltaSeconds()));
@@ -901,6 +1062,11 @@ bool App::Run()
             m_levelEditor.Render(m_renderer);
             viewProjection = m_levelEditor.BuildViewProjection(aspect);
             m_renderer.SetCameraWorldPosition(m_levelEditor.CameraPosition());
+        }
+        else if (inUiEditor)
+        {
+            m_renderer.SetLightingEnabled(true);
+            m_renderer.SetCameraWorldPosition(glm::vec3{0.0F, 2.0F, 0.0F});
         }
         else if (inLobby)
         {
@@ -984,6 +1150,9 @@ bool App::Run()
         bool closePauseMenu = false;
         bool backToMenu = false;
 
+#if BUILD_WITH_IMGUI
+        m_runtimeUiEditor.ProcessPendingFontLoads();
+#endif
         m_console.BeginFrame();
 
         if (m_appMode == AppMode::Loading && m_input.IsKeyPressed(GLFW_KEY_ESCAPE))
@@ -1132,6 +1301,8 @@ bool App::Run()
             m_lobbyScene.HandleInput();
         }
 
+        RenderRuntimeUiOverlay(static_cast<float>(m_time.DeltaSeconds()));
+
         if (m_showUiTestPanel)
         {
             DrawUiTestPanel();
@@ -1189,6 +1360,7 @@ bool App::Run()
         }
 
         m_ui.EndFrame();
+        RenderRuntimeUiEditorPanel();
 
         // Build HUD state before rendering toolbar (needed for game stats display)
         game::gameplay::HudState hudState = frameHudState.has_value() ? std::move(*frameHudState) : m_gameplay.BuildHudState();
@@ -1284,6 +1456,18 @@ bool App::Run()
             if (m_appMode == AppMode::Editor)
             {
                 return m_levelEditor.SceneDump();
+            }
+            if (m_appMode == AppMode::UiEditor)
+            {
+                std::ostringstream oss;
+                oss << "UiEditorDump\n";
+                oss << " mode=ui_editor\n";
+                if (m_runtimeUiScreenIndex >= 0
+                    && m_runtimeUiScreenIndex < static_cast<int>(m_runtimeUiScreens.size()))
+                {
+                    oss << " screen=" << m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)] << "\n";
+                }
+                return oss.str();
             }
             std::ostringstream oss;
             oss << "GameplaySceneDump\n";
@@ -1638,6 +1822,7 @@ void App::ResetToMainMenu()
     m_sessionMapName = "main";
     m_sessionMapType = game::gameplay::GameplaySystems::MapType::Main;
     m_sessionSeed = std::random_device{}();
+    m_showRuntimeUiOverlay = false;
     m_connectedEndpoint.clear();
     InitializePlayerBindings();
 
@@ -6308,6 +6493,33 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
         m_menuNetStatus = "Entered Loop Editor";
         TransitionNetworkState(NetworkState::Offline, "Editor mode");
     }
+#if BUILD_WITH_IMGUI
+    if (m_ui.Button("ui_editor_mode", "UI EDITOR"))
+    {
+        m_lanDiscovery.Stop();
+        m_network.Disconnect();
+        m_gameplay.SetNetworkAuthorityMode(false);
+        m_gameplay.ClearRemoteRoleCommands();
+        m_multiplayerMode = MultiplayerMode::Solo;
+        m_pauseMenuOpen = false;
+        m_settingsMenuOpen = false;
+        m_settingsOpenedFromPause = false;
+        m_showRuntimeUiOverlay = true;
+        m_appMode = AppMode::UiEditor;
+        m_runtimeUiEditor.SetMode(engine::ui::EditorMode::Edit);
+
+        const std::string path = m_runtimeUiScreens[static_cast<std::size_t>(m_runtimeUiScreenIndex)];
+        if (!LoadRuntimeUiScreen(path))
+        {
+            m_console.Print("[UI] Failed to load screen for UI Editor mode: " + path);
+        }
+
+        m_menuNetStatus = "Entered UI Editor";
+        TransitionNetworkState(NetworkState::Offline, "UI editor mode");
+    }
+#else
+    m_ui.Label("UI Editor requires ImGui build", m_ui.Theme().colorTextMuted, 0.85F);
+#endif
 
     m_ui.Spacer(20.0F * scale);
     if (m_ui.Button("menu_settings", "SETTINGS"))
@@ -6463,7 +6675,7 @@ void App::DrawMainMenuUiCustom(bool* shouldQuit)
 
     m_ui.Spacer(10.0F * scale);
     m_ui.Label("~ Console | F6 UI", m_ui.Theme().colorTextMuted, 0.8F);
-    m_ui.Label("F7 Load", m_ui.Theme().colorTextMuted, 0.8F);
+    m_ui.Label("F7 Load | UI Editor from Main Menu", m_ui.Theme().colorTextMuted, 0.8F);
     m_ui.EndPanel();
     
     // Lobby Full Popup
